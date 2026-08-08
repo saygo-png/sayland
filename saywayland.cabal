@@ -23,7 +23,8 @@ common common-options
     -Wno-missed-specialisations -Wno-missing-exported-signatures
     -Wno-missing-import-lists -Wno-missing-kind-signatures
     -Wno-missing-local-signatures -Wno-missing-safe-haskell-mode
-    -Wno-safe -Wno-unsafe -Wno-unticked-promoted-constructors -threaded
+    -Wno-safe -Wno-unsafe -Wno-unticked-promoted-constructors
+    -Wno-partial-fields -Wno-incomplete-record-selectors -threaded
 
   default-extensions:
     DuplicateRecordFields

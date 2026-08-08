@@ -4,10 +4,9 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Saywayland.Protocols.XdgShell where
+module Saywayland.Protocols.XdgShell(module Saywayland.Protocols.XdgShell) where
 
 import Control.Lens (makeFieldsId)
-import Data.Binary.Put (runPut)
 import Data.Char (toUpper)
 import Data.Map qualified as Map
 import Protocol
@@ -21,15 +20,15 @@ $(loadProtocolFile False "protocols/xdg-shell.xml")
 -- }}}
 
 -- Interfaces {{{
-data XDG_wm_base = XDG_wm_base {wlid :: Word32}
+newtype XDG_wm_base = XDG_wm_base {wlid :: Word32}
 
-data XDG_positioner = XDG_positioner {wlid :: Word32}
+newtype XDG_positioner = XDG_positioner {wlid :: Word32}
 
 data XDG_surface = XDG_surface {wlid :: Word32, wl_surface :: ObjectID, role :: IORef (Maybe XDGRole)}
 
-data XDG_toplevel = XDG_toplevel {wlid :: Word32}
+newtype XDG_toplevel = XDG_toplevel {wlid :: Word32}
 
-data XDG_popup = XDG_popup {wlid :: Word32}
+newtype XDG_popup = XDG_popup {wlid :: Word32}
 
 data XDGRole = XDGToplevel XDG_toplevel | XDGPopup XDG_popup
 
@@ -121,13 +120,12 @@ instance Interface' XDG_surface Client where
   type Request XDG_surface = Request_xdg_surface
   runRequest xdg_surface request@Request_xdg_surface_destroy = do
     ClientEnv env <- ask
-    role <- readIORef xdg_surface.role
-    case role of
+    readIORef xdg_surface.role >>= \case
       Nothing -> delete
       Just x -> do
         let roleid = case x of
-              XDGToplevel XDG_toplevel{wlid} -> wlid
-              XDGPopup XDG_popup{wlid} -> wlid
+              XDGToplevel (XDG_toplevel b_wlid) -> b_wlid
+              XDGPopup (XDG_popup b_wlid) -> b_wlid
         keys <- Map.keys <$> readIORef env.objects
         unless (roleid `elem` keys) delete
     where
@@ -153,13 +151,12 @@ instance Interface' XDG_surface Server where
   type Request XDG_surface = Request_xdg_surface
   runRequest xdg_surface Request_xdg_surface_destroy = do
     ClientServerEnv _ env <- ask
-    role <- readIORef xdg_surface.role
-    case role of
+    readIORef xdg_surface.role >>= \case
       Nothing -> delete
       Just x -> do
         let roleid = case x of
-                XDGToplevel XDG_toplevel{wlid} -> wlid
-                XDGPopup XDG_popup{wlid} -> wlid
+              XDGToplevel (XDG_toplevel b_wlid) -> b_wlid
+              XDGPopup (XDG_popup b_wlid) -> b_wlid
         keys <- Map.keys <$> readIORef env.objects
         unless (roleid `elem` keys) delete
     where
@@ -180,8 +177,6 @@ instance Interface' XDG_toplevel Client where
   type Event XDG_toplevel = Event_xdg_toplevel
   type Request XDG_toplevel = Request_xdg_toplevel
   runRequest _ _ = pass
-  runEvent _ Event_xdg_toplevel_configure{width, height, states} = do
-    pass
   runEvent _ _ = pass
 
 instance Interface' XDG_toplevel Server where

@@ -138,7 +138,7 @@ qname x = QName x Nothing Nothing
 
 -- TemplateHaskell Utils {{{
 adata :: Name
-adata = mkName "additionalData"
+adata = mkName "_additionalData"
 
 -- | Defines an integer variable with name `name` and value `x`.
 mkIntVariable :: String -> Integer -> [Dec]
@@ -246,9 +246,9 @@ mkShow interfaceName prefix prefix2 events =
       "Event_" -> "        <- "
       _ -> "        ?? "
     mkShowC :: Element -> Clause
-    mkShowC e = Clause [VarP $ mkName "oid", RecP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) $ fmap (\x -> (x, VarP x)) args] (NormalB $ chainShow (reverse args)) []
+    mkShowC e = Clause [VarP $ mkName "oid", RecP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) $ fmap (\x -> (x, VarP $ addBoundPrefix x)) args] (NormalB $ chainShow (reverse args)) []
       where
-        single x = AppE (AppE (VarE '(<>)) $ LitE $ StringL $ " " <> nameBase x <> ": ") $ AppE (VarE 'show) $ VarE x
+        single x = AppE (AppE (VarE '(<>)) $ LitE $ StringL $ " " <> nameBase x <> ": ") $ AppE (VarE 'show) $ VarE $ addBoundPrefix x
         chainShow [] =
           AppE (AppE (VarE '(<>)) $ LitE $ StringL $ mconcat [arrow, interfaceName, "@"])
             $ AppE (AppE (VarE '(<>)) (AppE (VarE 'show) $ VarE (mkName "oid"))) (LitE $ StringL $ mconcat [".", eventName])
@@ -262,6 +262,7 @@ mkShow interfaceName prefix prefix2 events =
         chainShow (x : xs) = InfixE (Just $ chainShow xs) (VarE '(<>)) (Just $ single x)
         args = mkName . fromJust . findAttr (qname "name") <$> findChildren (qname "arg") e
         eventName = fromJust $ findAttr (qname "name") e
+        addBoundPrefix x = mkName $ "bound_" <> nameBase x
 
 mkOpcodeGetter :: String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkOpcodeGetter interfaceName prefix prefix2 events =
@@ -293,11 +294,11 @@ mkPut interfaceName prefix prefix2 events =
     nestPutters (x : xs) = InfixE (Just $ nestPutters xs) (VarE '(>>)) (Just x)
     mkClause :: (Word16, Element) -> Q Clause
     mkClause (_opcode, element) =
-      mapM (\(a, b) -> putForType b <&> (`AppE` (GetFieldE (VarE $ mkName "event") $ fromJust $ findAttr (qname "name") a)) . (`AppE` VarE adata)) (zip args argTypes)
+      mapM (\(a, b) -> putForType b <&> (`AppE` (GetFieldE (VarE $ mkName "_event") $ fromJust $ findAttr (qname "name") a)) . (`AppE` VarE adata)) (zip args argTypes)
         <&> \x ->
           ( Clause
               [ VarP adata
-              , AsP (mkName "event") (RecP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [])
+              , AsP (mkName "_event") (RecP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [])
               ]
               $ NormalB
               $ nestPutters (reverse x)
@@ -325,7 +326,7 @@ mkParser interfaceName prefix prefix2 events =
           [LitP $ IntegerL $ fromIntegral opcode, VarP adata]
           ( NormalB
               $ DoE Nothing
-              $ [BindS (VarP $ mkName $ fromJust $ findAttr (qname "name") a) (AppE getter $ VarE adata) | (a, getter) <- zip args getters]
+              $ [BindS (VarP $ mkBinding a) (AppE getter $ VarE adata) | (a, getter) <- zip args getters]
               <> [NoBindS $ AppE (VarE 'pure) $ nestGetters $ reverse $ ConE (mkName $ prefix2 <> interfaceName <> "_" <> eventName) : fmap mkexpr args]
           )
           []
@@ -334,7 +335,9 @@ mkParser interfaceName prefix prefix2 events =
         argTypes = fmap (argType interfaceName) args
         eventName = fromJust $ findAttr (qname "name") element
 
-        mkexpr x = VarE $ mkName $ fromJust $ findAttr (qname "name") x
+        -- Adding "bound_" prefix to avoid shadowing with names such as "id".
+        mkBinding x = mkName $ "bound_" <> fromJust (findAttr (qname "name") x)
+        mkexpr = VarE . mkBinding
 
     nestGetters [] = undefined
     nestGetters [x] = AppE (VarE 'pure) x
