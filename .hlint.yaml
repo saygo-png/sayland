@@ -1,3 +1,8 @@
+# We take names from Wayland which are not camel case.
+- ignore:
+    name: "Use camelCase"
+
+# Relude hlint
 - arguments:
   - "-XConstraintKinds"
   - "-XDeriveGeneric"
