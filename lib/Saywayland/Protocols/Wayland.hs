@@ -28,68 +28,8 @@ import Relude hiding (get)
 import Saywayland.Types
 import System.Posix (Fd, setFdSize)
 
--- TemplateHaskell Definitions {{{
-$(loadProtocolFile False "protocols/wayland.xml")
 
--- }}}
-
--- Interfaces {{{
-data WL_display = WL_display {wlid :: Word32}
-
-makeFieldsId ''WL_display
-
-data WL_registry = WL_registry {wlid :: Word32}
-
-makeFieldsId ''WL_registry
-
-data WL_callback = WL_callback {wlid :: Word32, done :: MVar ()}
-
-makeFieldsId ''WL_callback
-
-data WL_compositor = WL_compositor {wlid :: Word32}
-
-makeFieldsId ''WL_compositor
-
-data WL_shm_pool = WL_shm_pool {wlid :: Word32, fd :: Fd, size :: IORef Int, ptr :: IORef (Ptr ())}
-
-makeFieldsId ''WL_shm_pool
-
-data WL_shm = WL_shm {wlid :: Word32, formats :: IORef [Enum_wl_shm_format]}
-
-makeFieldsId ''WL_shm
-
-data WL_buffer = WL_buffer
-  { wlid    :: Word32
-  , offset  :: Int
-  , width   :: Int
-  , height  :: Int
-  , stride  :: Int
-  , pool    :: ObjectID
-  , format  :: Enum_wl_shm_format
-  }
-
-makeFieldsId ''WL_buffer
-
-data WL_data_offer = WL_data_offer {wlid :: Word32}
-makeFieldsId ''WL_data_offer
-
-data WL_data_source = WL_data_source {wlid :: Word32}
-makeFieldsId ''WL_data_source
-
-data WL_data_device = WL_data_device {wlid :: Word32}
-makeFieldsId ''WL_data_device
-
-data WL_data_device_manager = WL_data_device_manager {wlid :: Word32}
-makeFieldsId ''WL_data_device_manager
-
-data WL_shell = WL_shell {wlid :: Word32}
-makeFieldsId ''WL_shell
-
-data WL_shell_surface = WL_shell_surface {wlid :: Word32}
-makeFieldsId ''WL_shell_surface
-
-data WL_region = WL_region {wlid :: Word32}
-makeFieldsId ''WL_region
+$(loadProtocolFileEnums False "protocols/wayland.xml")
 
 --  Nothing or empty least means no change. In order to "reset" values, set them to the defaults - ObjectID `0`, normal transform, etc.
 data ContentUpdate = ContentUpdate
@@ -122,41 +62,99 @@ emptyContentUpdate = ContentUpdate
   , bufferRelease   = Nothing
   }
 
+-- Interfaces {{{
+newtype WL_display = WL_display {wlid :: Word32}
+
+newtype WL_registry = WL_registry {wlid :: Word32}
+
+data WL_callback = WL_callback {wlid :: Word32, done :: MVar ()}
+
+newtype WL_compositor = WL_compositor {wlid :: Word32}
+
+data WL_shm_pool = WL_shm_pool {wlid :: Word32, fd :: Fd, size :: IORef Int, ptr :: IORef (Ptr ())}
+
+data WL_shm = WL_shm {wlid :: Word32, formats :: IORef [Enum_wl_shm_format]}
+
+data WL_buffer = WL_buffer
+  { wlid    :: Word32
+  , offset  :: Int
+  , width   :: Int
+  , height  :: Int
+  , stride  :: Int
+  , pool    :: ObjectID
+  , format  :: Enum_wl_shm_format
+  }
+
+newtype WL_data_offer = WL_data_offer {wlid :: Word32}
+
+newtype WL_data_source = WL_data_source {wlid :: Word32}
+
+newtype WL_data_device = WL_data_device {wlid :: Word32}
+
+newtype WL_data_device_manager = WL_data_device_manager {wlid :: Word32}
+
+newtype WL_shell = WL_shell {wlid :: Word32}
+
+newtype WL_shell_surface = WL_shell_surface {wlid :: Word32}
+
+newtype WL_region = WL_region {wlid :: Word32}
+
 data WL_surface = WL_surface
   { wlid          :: Word32
   , pendingState  :: IORef ContentUpdate
   , cuQueue       :: IORef (Seq.Seq ContentUpdate)
   , role          :: IORef SurfaceRole
   }
+
+newtype WL_seat = WL_seat {wlid :: Word32}
+
+newtype WL_pointer = WL_pointer {wlid :: Word32}
+
+newtype WL_keyboard = WL_keyboard {wlid :: Word32}
+
+newtype WL_touch = WL_touch {wlid :: Word32}
+
+newtype WL_output = WL_output {wlid :: Word32}
+
+newtype WL_subcompositor = WL_subcompositor {wlid :: Word32}
+
+
+newtype WL_subsurface = WL_subsurface {wlid :: Word32}
+
+
+newtype WL_fixes = WL_fixes {wlid :: Word32}
+
+
+
+-- TemplateHaskell Definitions {{{
+$(loadProtocolFile (\(x1 : x2 : xs) -> toUpper x1 : toUpper x2 : xs) False "protocols/wayland.xml")
+-- }}}
+
+makeFieldsId ''WL_display
+makeFieldsId ''WL_registry
+makeFieldsId ''WL_callback
+makeFieldsId ''WL_compositor
+makeFieldsId ''WL_shm
+makeFieldsId ''WL_shm_pool
+makeFieldsId ''WL_buffer
+makeFieldsId ''WL_data_offer
+makeFieldsId ''WL_data_source
+makeFieldsId ''WL_data_device
+makeFieldsId ''WL_data_device_manager
+makeFieldsId ''WL_shell
+makeFieldsId ''WL_shell_surface
+makeFieldsId ''WL_region
 makeFieldsId ''WL_surface
-
-data WL_seat = WL_seat {wlid :: Word32}
 makeFieldsId ''WL_seat
-
-data WL_pointer = WL_pointer {wlid :: Word32}
 makeFieldsId ''WL_pointer
-
-data WL_keyboard = WL_keyboard {wlid :: Word32}
 makeFieldsId ''WL_keyboard
-
-data WL_touch = WL_touch {wlid :: Word32}
 makeFieldsId ''WL_touch
-
-data WL_output = WL_output {wlid :: Word32}
 makeFieldsId ''WL_output
-
-data WL_subcompositor = WL_subcompositor {wlid :: Word32}
-
 makeFieldsId ''WL_subcompositor
-
-data WL_subsurface = WL_subsurface {wlid :: Word32}
-
 makeFieldsId ''WL_subsurface
-
-data WL_fixes = WL_fixes {wlid :: Word32}
-
 makeFieldsId ''WL_fixes
 
+-- DefaultIO instances {{{
 instance DefaultIO WL_display where
   defM = pure WL_display{wlid = wlDisplayID}
 
@@ -233,7 +231,7 @@ instance DefaultIO WL_subsurface where
 
 instance DefaultIO WL_fixes where
   defM = pure WL_fixes{wlid = 0}
-
+-- }}}
 -- }}}
 
 -- Tables {{{
@@ -247,17 +245,17 @@ $(generateTables False (\(x1 : x2 : xs) -> toUpper x1 : toUpper x2 : xs) "protoc
 instance Interface' WL_display Client where
   type Event WL_display = Event_wl_display
   type Request WL_display = Request_wl_display
-  runEvent _display Event_wl_display_delete_id{id = did} = do
+  runEvent _display (Event_wl_display_delete_id' Event_wl_display_delete_id{id = did}) = do
     ClientEnv env <- ask
     liftIO $ modifyIORef env.objects (Map.delete did)
   runEvent _display Event_wl_display_error{object_id, code, message} = do
     liftIO $ print $ "Unhandled error from `" <> show object_id <> "`: [" <> show code <> "] " <> message
-  runRequest display request@Request_wl_display_sync{callback} = do
+  runRequest display request@(Request_wl_display_sync' Request_wl_display_sync{callback}) = do
     mvar <- newEmptyMVar
     callbackObject <- newObject callback WL_callback{wlid = callback, done = mvar}
     swapMVar callbackObject.done ()
     sendMessage' request display.wlid
-  runRequest display request@Request_wl_display_get_registry{registry} = do
+  runRequest display request@(Request_wl_display_get_registry' Request_wl_display_get_registry{registry}) = do
     ClientEnv env <- ask
     modifyIORef env.objects (Map.insert registry $ Interface $ WL_registry{wlid = registry})
     sendMessage' request display.wlid
@@ -271,7 +269,7 @@ instance Interface' WL_display Server where
     sendMessage' event display.wlid
   runEvent display event@Event_wl_display_error{object_id, code, message} = do
     sendMessage' event display.wlid
-  runRequest _display Request_wl_display_sync{callback} = do
+  runRequest _display (Request_wl_display_sync' Request_wl_display_sync{callback}) = do
     ClientServerEnv _ env <- ask
     mvar <- newEmptyMVar
     callbackObject <- newObject callback WL_callback{wlid = callback, done = mvar}
@@ -279,7 +277,7 @@ instance Interface' WL_display Server where
     putMVar mvar ()
     let event = Event_wl_callback_done{callback_data = 0}
     runEvent callbackObject event
-  runRequest _display Request_wl_display_get_registry{registry} = do
+  runRequest _display (Request_wl_display_get_registry' Request_wl_display_get_registry{registry}) = do
     registryObject <- newObject registry WL_registry{wlid = registry}
     ClientServerEnv _ env <- ask
     versions <- zip [0 ..] . Map.toList <$> readIORef env.versionTable

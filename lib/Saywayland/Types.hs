@@ -41,7 +41,11 @@ wlDisplayID = 1
 -- }}}
 
 -- Types {{{
+
 type ObjectID = Word32
+
+type role TObjectID phantom
+newtype TObjectID a = TObjectID ObjectID deriving newtype (Show, Eq, Ord)
 
 type NewID = (BS.ByteString, Word32, ObjectID)
 
