@@ -45,13 +45,19 @@ type ObjectID = Word32
 
 type NewID = (BS.ByteString, Word32, ObjectID)
 
+-- a rectangle, described in pixels
+data Rectangle = Rectangle
+  { position  :: (Int, Int)
+  , size      :: (Int, Int)
+  }
+
 -- | HasWlid, a lens defined globally due to ID being a part of every wayland interface.
 class HasWlid s a | s -> a where
   wlid :: Lens' s a
 
 -- | A Default-like structure, but using IO
 class DefaultIO a where
-  defM :: IO a
+  defM :: MonadIO m => m a
 
 -- | Perspective of the current Wayland Environment
 data Perspective = Client | Server
@@ -177,26 +183,26 @@ sendMessage objectID opcode messageBody =
 {- | Convenience function for formatting events, before sending them.
 Events are colored in magenta following the wayland.app colorscheme.
 -}
-sendMessage' :: (WaylandEvent e) => e -> Word32 -> Word16 -> Wayland p ()
-sendMessage' e o op = do
+sendMessage' :: (WaylandEvent e) => e -> Word32 -> Wayland p ()
+sendMessage' e o = do
   colorize <- liftIO getColorize
   liftIO (traceIO $ colorize Vivid Magenta $ showEvent o e)
   q <- ask <&> \case
     ClientEnv env -> env.fdQueue
     ClientServerEnv _ env -> env.fdQueue
   let dat = AdditionalParserData q
-  sendMessage o op $ runPut $ putEvent dat e
+  sendMessage o (getOpcode e) $ runPut $ putEvent dat e
 
 -- | sendMessageWithFds, but with sendMessage' aspect.
-sendMessageWithFds' :: (WaylandEvent e) => e -> [Fd] -> Word32 -> Word16 -> Wayland p ()
-sendMessageWithFds' e fd o op = do
+sendMessageWithFds' :: (WaylandEvent e) => e -> [Fd] -> Word32 -> Wayland p ()
+sendMessageWithFds' e fd o = do
   colorize <- liftIO getColorize
   liftIO (traceIO $ colorize Vivid Magenta $ showEvent o e)
   q <- ask <&> \case
     ClientEnv env -> env.fdQueue
     ClientServerEnv _ env -> env.fdQueue
   let dat = AdditionalParserData q
-  sendMessageWithFds fd o op $ runPut $ putEvent dat e
+  sendMessageWithFds fd o (getOpcode e) $ runPut $ putEvent dat e
 
 {- | Convenience function for formatting a Wayland message.
 It takes an objectID, operation code and a message body.

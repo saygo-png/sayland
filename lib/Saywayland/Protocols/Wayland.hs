@@ -1,5 +1,6 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -18,6 +19,7 @@ import Data.ByteString.Char8 qualified as BS8
 import Data.Char (toUpper)
 import Data.Map qualified as Map
 import Data.Maybe (fromJust)
+import Data.Sequence qualified as Seq
 import Debug.Trace (traceIO)
 import Foreign (Ptr, nullPtr, withForeignPtr)
 import MMAP (mapShared, mkMmapFlags, mmap, munmap, protRead, protWrite)
@@ -69,69 +71,79 @@ data WL_buffer = WL_buffer
 makeFieldsId ''WL_buffer
 
 data WL_data_offer = WL_data_offer {wlid :: Word32}
-
 makeFieldsId ''WL_data_offer
 
 data WL_data_source = WL_data_source {wlid :: Word32}
-
 makeFieldsId ''WL_data_source
 
 data WL_data_device = WL_data_device {wlid :: Word32}
-
 makeFieldsId ''WL_data_device
 
 data WL_data_device_manager = WL_data_device_manager {wlid :: Word32}
-
 makeFieldsId ''WL_data_device_manager
 
 data WL_shell = WL_shell {wlid :: Word32}
-
 makeFieldsId ''WL_shell
 
 data WL_shell_surface = WL_shell_surface {wlid :: Word32}
-
 makeFieldsId ''WL_shell_surface
 
+data WL_region = WL_region {wlid :: Word32}
+makeFieldsId ''WL_region
+
+--  Nothing or empty least means no change. In order to "reset" values, set them to the defaults - ObjectID `0`, normal transform, etc.
 data ContentUpdate = ContentUpdate
-  { state :: SurfaceState
+  { buffer          :: Maybe ObjectID
+  , offset          :: Maybe (Int, Int)
+  , damage          :: [Rectangle]
+  , damageBuffer    :: [Rectangle]
+  , frameCallbacks  :: [WL_callback]
+  , opaqueRegion    :: Maybe ObjectID
+  , inputRegion     :: Maybe ObjectID
+  , bufferScale     :: Maybe Int
+  , bufferTransform :: Maybe Enum_wl_output_transform
+  , bufferRelease   :: Maybe WL_callback
   }
 
-data SurfaceState = SurfaceState
-  { buffer :: Maybe ObjectID
-  , offset :: (Int, Int)
-  , damage :: [(Int, Int, Int, Int)]
-  , frameCbs :: [ObjectID]
+data SurfaceRole where SurfaceRole :: a -> SurfaceRole
+
+-- used both as a template for content updates, and to indicate no change.
+emptyContentUpdate :: ContentUpdate
+emptyContentUpdate = ContentUpdate
+  { buffer        = Nothing
+  , offset        = Just (0,0)
+  , damage        = []
+  , damageBuffer  = []
+  , frameCallbacks= []
+  , opaqueRegion  = Nothing
+  , inputRegion   = Nothing
+  , bufferScale   = Nothing
+  , bufferTransform = Nothing
+  , bufferRelease   = Nothing
   }
 
-emptySurfaceState = SurfaceState Nothing (0, 0) [] []
-
-data WL_surface = WL_surface {wlid :: Word32, pendingState :: IORef SurfaceState, activeState :: IORef SurfaceState, cuQueue :: IORef [ContentUpdate]}
-
+data WL_surface = WL_surface
+  { wlid          :: Word32
+  , pendingState  :: IORef ContentUpdate
+  , cuQueue       :: IORef (Seq.Seq ContentUpdate)
+  , role          :: IORef SurfaceRole
+  }
 makeFieldsId ''WL_surface
 
 data WL_seat = WL_seat {wlid :: Word32}
-
 makeFieldsId ''WL_seat
 
 data WL_pointer = WL_pointer {wlid :: Word32}
-
 makeFieldsId ''WL_pointer
 
 data WL_keyboard = WL_keyboard {wlid :: Word32}
-
 makeFieldsId ''WL_keyboard
 
 data WL_touch = WL_touch {wlid :: Word32}
-
 makeFieldsId ''WL_touch
 
 data WL_output = WL_output {wlid :: Word32}
-
 makeFieldsId ''WL_output
-
-data WL_region = WL_region {wlid :: Word32}
-
-makeFieldsId ''WL_region
 
 data WL_subcompositor = WL_subcompositor {wlid :: Word32}
 
@@ -173,7 +185,12 @@ instance DefaultIO WL_shm where
   defM = newIORef [] <&> WL_shm 0
 
 instance DefaultIO WL_surface where
-  defM = pure WL_surface{wlid = 0}
+  defM = do
+    let wlid = 0
+    role <- newIORef $ SurfaceRole ()
+    pendingState <- newIORef emptyContentUpdate
+    cuQueue <- newIORef Seq.Empty
+    pure WL_surface{..}
 
 instance DefaultIO WL_data_offer where
   defM = pure WL_data_offer{wlid = 0}
@@ -239,11 +256,11 @@ instance Interface' WL_display Client where
     mvar <- newEmptyMVar
     callbackObject <- newObject callback WL_callback{wlid = callback, done = mvar}
     swapMVar callbackObject.done ()
-    sendMessage' request display.wlid (getOpcode request)
+    sendMessage' request display.wlid
   runRequest display request@Request_wl_display_get_registry{registry} = do
     ClientEnv env <- ask
     modifyIORef env.objects (Map.insert registry $ Interface $ WL_registry{wlid = registry})
-    sendMessage' request display.wlid (getOpcode request)
+    sendMessage' request display.wlid
 
 instance Interface' WL_display Server where
   type Event WL_display = Event_wl_display
@@ -251,9 +268,9 @@ instance Interface' WL_display Server where
   runEvent display event@Event_wl_display_delete_id{id = did} = do
     ClientServerEnv _ env <- ask
     liftIO $ modifyIORef env.objects (Map.delete did)
-    sendMessage' event display.wlid (getOpcode event)
+    sendMessage' event display.wlid
   runEvent display event@Event_wl_display_error{object_id, code, message} = do
-    sendMessage' event display.wlid (getOpcode event)
+    sendMessage' event display.wlid
   runRequest _display Request_wl_display_sync{callback} = do
     ClientServerEnv _ env <- ask
     mvar <- newEmptyMVar
@@ -269,7 +286,7 @@ instance Interface' WL_display Server where
     forM_ versions $ \(name, (interface', version)) -> do
       let interface = encodeUtf8 interface'
           event = Event_wl_registry_global{name, interface, version}
-      sendMessage' event registry (getOpcode event)
+      sendMessage' event registry
       modifyIORef env.globals $ BM.insert interface name
 
 -- }}}
@@ -291,7 +308,7 @@ instance Interface' WL_callback Server where
   runEvent callback event@Event_wl_callback_done{callback_data} = do
     putMVar callback.done ()
     dropObject callback.wlid
-    sendMessage' event callback.wlid (getOpcode event)
+    sendMessage' event callback.wlid
   runRequest _ _ = pass
 
 -- }}}
@@ -324,7 +341,7 @@ instance Interface' WL_registry Client where
         Interface y <- liftIO y'
         modifyIORef env.objects . Map.insert newId $ Interface $ y & wlid .~ newId
       Nothing -> error $ "interface with name `" <> show name <> "` not found."
-    sendMessage' request registry.wlid (getOpcode request)
+    sendMessage' request registry.wlid
 
 instance Interface' WL_registry Server where
   type Event WL_registry = Event_wl_registry
@@ -332,11 +349,11 @@ instance Interface' WL_registry Server where
   runEvent registry event@Event_wl_registry_global{name, interface, version} = do
     ClientServerEnv _ env <- ask
     modifyIORef env.globals $ BM.insert interface name
-    sendMessage' event registry.wlid (getOpcode event)
+    sendMessage' event registry.wlid
   runEvent registry event@Event_wl_registry_global_remove{name} = do
     ClientServerEnv _ env <- ask
     modifyIORef env.globals $ BM.deleteR name
-    sendMessage' event registry.wlid (getOpcode event)
+    sendMessage' event registry.wlid
   runRequest _registry Request_wl_registry_bind{name, id = (interface, version, newId)} = do
     ClientServerEnv _ env <- ask
     interfaceFromName name >>= \case
@@ -354,18 +371,14 @@ instance Interface' WL_compositor Client where
   type Event WL_compositor = Event_wl_compositor
   type Request WL_compositor = Request_wl_compositor
   runRequest compositor request@Request_wl_compositor_create_surface{id = surfaceId} = do
-    ClientEnv env <- ask
-    pending <- newIORef emptySurfaceState
-    active <- newIORef emptySurfaceState
-    queue <- newIORef []
-    _ <- newObject surfaceId WL_surface{wlid = surfaceId, pendingState = pending, activeState = active, cuQueue = queue}
-    sendMessage' request compositor.wlid (getOpcode request)
+    _ <- newObject surfaceId =<< (defM :: Wayland Client WL_surface)
+    sendMessage' request compositor.wlid
   runRequest compositor request@Request_wl_compositor_create_region{id = regionId} = do
     ClientEnv env <- ask
     modifyIORef env.objects $ Map.insert regionId $ Interface $ WL_region{wlid = regionId}
-    sendMessage' request compositor.wlid (getOpcode request)
+    sendMessage' request compositor.wlid
   runRequest compositor request@Request_wl_compositor_release = do
-    sendMessage' request compositor.wlid (getOpcode request)
+    sendMessage' request compositor.wlid
   runEvent _ _ = pass
 
 instance Interface' WL_compositor Server where
@@ -373,10 +386,7 @@ instance Interface' WL_compositor Server where
   type Request WL_compositor = Request_wl_compositor
   runEvent _ _ = pass
   runRequest _compositor Request_wl_compositor_create_surface{id = surfaceId} = do
-    pending <- newIORef emptySurfaceState
-    active <- newIORef emptySurfaceState
-    queue <- newIORef []
-    _ <- newObject surfaceId WL_surface{wlid = surfaceId, pendingState = pending, activeState = active, cuQueue = queue}
+    _ <- newObject surfaceId =<< (defM :: Wayland Server WL_surface)
     pass
   runRequest _compositor Request_wl_compositor_create_region{id = regionId} = void $ newObject regionId WL_region{wlid = regionId}
   runRequest compositor Request_wl_compositor_release = dropObject compositor.wlid
@@ -392,14 +402,14 @@ instance Interface' WL_shm_pool Client where
     ClientEnv env <- ask
     let buffer = WL_buffer{wlid = bufId, offset = offset', width = width', height = height', stride = stride', format = format', pool = shm_pool.wlid}
     modifyIORef env.objects $ Map.insert bufId $ Interface buffer
-    sendMessage' request shm_pool.wlid (getOpcode request)
+    sendMessage' request shm_pool.wlid
   runRequest shm_pool request@Request_wl_shm_pool_destroy = do
     ClientEnv env <- ask
     dropObject shm_pool.wlid
-    sendMessage' request shm_pool.wlid (getOpcode request)
+    sendMessage' request shm_pool.wlid
   runRequest shm_pool request@Request_wl_shm_pool_resize{size = size'} = do
     writeIORef shm_pool.size size'
-    sendMessage' request shm_pool.wlid (getOpcode request)
+    sendMessage' request shm_pool.wlid
 
   runEvent _ _ = pass
 
@@ -411,9 +421,9 @@ instance Interface' WL_shm_pool Server where
     ClientServerEnv _ env <- ask
     let buffer = WL_buffer{wlid = bufId, offset = offset', width = width', height = height', stride = stride', format = format', pool = shm_pool.wlid}
     modifyIORef env.objects $ Map.insert bufId $ Interface buffer
-  runRequest shm_pool Request_wl_shm_pool_destroy = do
-    ClientServerEnv _ env <- ask
+  runRequest shm_pool request@Request_wl_shm_pool_destroy = do
     dropObject shm_pool.wlid
+    sendMessage' request shm_pool.wlid
   runRequest shm_pool Request_wl_shm_pool_resize{size = size'} = do
     liftIO . setFdSize shm_pool.fd $ fromIntegral size'
     oldsize <- readIORef shm_pool.size
@@ -447,11 +457,11 @@ instance Interface' WL_shm Client where
     sizeRef <- newIORef size'
     ptrRef <- newIORef nullPtr {-IIRC client doesn't need exposed -}
     modifyIORef env.objects $ Map.insert poolId $ Interface $ WL_shm_pool{wlid = poolId, fd = fd', size = sizeRef, ptr = ptrRef}
-    sendMessageWithFds' request [fd'] shm.wlid (getOpcode request)
+    sendMessageWithFds' request [fd'] shm.wlid
   runRequest shm request@Request_wl_shm_release{} = do
     ClientEnv env <- ask
     dropObject shm.wlid
-    sendMessage' request shm.wlid (getOpcode request)
+    sendMessage' request shm.wlid
 
   runEvent shm Event_wl_shm_format{format} = modifyIORef shm.formats (format :)
 
@@ -480,7 +490,7 @@ instance Interface' WL_shm Server where
     ClientServerEnv _ env <- ask
     dropObject shm.wlid
   runEvent shm event@Event_wl_shm_format{format} = do
-    sendMessage' event shm.wlid (getOpcode event)
+    sendMessage' event shm.wlid
 
 -- }}}
 
@@ -490,7 +500,7 @@ instance Interface' WL_buffer Client where
   type Request WL_buffer = Request_wl_buffer
   runRequest buffer request@Request_wl_buffer_destroy = do
     dropObject buffer.wlid
-    sendMessage' request buffer.wlid (getOpcode request)
+    sendMessage' request buffer.wlid
   runEvent buffer Event_wl_buffer_release = pass
 
 instance Interface' WL_buffer Server where
@@ -498,7 +508,7 @@ instance Interface' WL_buffer Server where
   type Request WL_buffer = Request_wl_buffer
   runRequest buffer Request_wl_buffer_destroy = dropObject buffer.wlid
   runEvent buffer event@Event_wl_buffer_release = do
-    sendMessage' event buffer.wlid (getOpcode event)
+    sendMessage' event buffer.wlid
 
 -- }}}
 
@@ -508,7 +518,9 @@ instance Interface' WL_data_offer Client where
   type Request WL_data_offer = Request_wl_data_offer
   runRequest _ Request_wl_data_offer_accept{} = pass
   runRequest _ Request_wl_data_offer_receive{} = pass
-  runRequest _ Request_wl_data_offer_destroy{} = pass
+  runRequest data_offer request@Request_wl_data_offer_destroy{} = do
+    dropObject data_offer.wlid
+    sendMessage' request data_offer.wlid
   runRequest _ Request_wl_data_offer_finish{} = pass
   runRequest _ Request_wl_data_offer_set_actions{} = pass
   runEvent _ Event_wl_data_offer_offer{} = pass
@@ -524,7 +536,9 @@ instance Interface' WL_data_source Client where
   type Event WL_data_source = Event_wl_data_source
   type Request WL_data_source = Request_wl_data_source
   runRequest _ Request_wl_data_source_offer{} = pass
-  runRequest _ Request_wl_data_source_destroy{} = pass
+  runRequest data_source request@Request_wl_data_source_destroy{} = do
+    dropObject data_source.wlid
+    sendMessage' request data_source.wlid
   runRequest _ Request_wl_data_source_set_actions{} = pass
   runEvent _ Event_wl_data_source_target{} = pass
   runEvent _ Event_wl_data_source_send{} = pass
@@ -603,19 +617,21 @@ instance Interface' WL_shell_surface Server
 instance Interface' WL_surface Client where
   type Event WL_surface = Event_wl_surface
   type Request WL_surface = Request_wl_surface
-  runRequest _ Request_wl_surface_destroy{} = pass
+  runRequest surface request@Request_wl_surface_destroy{} = do
+    dropObject surface.wlid
+    sendMessage' request surface.wlid
   runRequest surface request@Request_wl_surface_attach{buffer = bufferId, x, y} = do
-    sendMessage' request surface.wlid (getOpcode request)
+    sendMessage' request surface.wlid
   runRequest _ Request_wl_surface_damage{} = pass
   runRequest _ Request_wl_surface_frame{} = pass
   runRequest _ Request_wl_surface_set_opaque_region{} = pass
   runRequest _ Request_wl_surface_set_input_region{} = pass
   runRequest surface request@Request_wl_surface_commit = do
-    sendMessage' request surface.wlid (getOpcode request)
+    sendMessage' request surface.wlid
   runRequest _ Request_wl_surface_set_buffer_transform{} = pass
   runRequest _ Request_wl_surface_set_buffer_scale{} = pass
   runRequest surface request@Request_wl_surface_damage_buffer{} = do
-    sendMessage' request surface.wlid (getOpcode request)
+    sendMessage' request surface.wlid
   runRequest _ Request_wl_surface_offset{} = pass
   runRequest _ Request_wl_surface_get_release{} = pass
   runEvent _ Event_wl_surface_enter{} = pass
@@ -630,21 +646,29 @@ instance Interface' WL_surface Server where
     modifyIORef surface.pendingState $ \ss ->
       ss
         { buffer = Just bufferId
-        , offset = (x, y)
+        , offset = Just (x, y)
         , damage = []
-        , frameCbs = []
+        , frameCallbacks = []
         }
   runRequest surface Request_wl_surface_commit = do
     ClientServerEnv _ env <- ask
     pending <- readIORef surface.pendingState
-    let cu =
-          ContentUpdate
-            { state = pending
-            }
     liftIO $ do
-      modifyIORef' surface.cuQueue $ \q -> q <> [cu]
-      writeIORef surface.activeState pending
-      writeIORef surface.pendingState emptySurfaceState
+      modifyIORef' surface.cuQueue (pending Seq.<|)
+      writeIORef surface.pendingState emptyContentUpdate
+
+  runRequest surface Request_wl_surface_destroy = dropObject surface.wlid
+  runRequest _surface Request_wl_surface_damage{} = pass
+  runRequest _surface Request_wl_surface_damage_buffer{} = pass
+  runRequest _surface Request_wl_surface_frame{} = pass
+  runRequest _surface Request_wl_surface_set_opaque_region{} = pass
+  runRequest _surface Request_wl_surface_set_input_region{} = pass
+  runRequest _surface Request_wl_surface_set_buffer_scale{} = pass
+  runRequest _surface Request_wl_surface_set_buffer_transform{} = pass
+  runRequest _surface Request_wl_surface_offset{} = pass
+  runRequest _surface Request_wl_surface_get_release{} = pass
+  runEvent _surface Event_wl_surface_enter{} = pass
+  runEvent _surface Event_wl_surface_leave{} = pass
 
 -- }}}
 

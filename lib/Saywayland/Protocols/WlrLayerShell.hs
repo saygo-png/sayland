@@ -38,7 +38,7 @@ instance Interface' Zwlr_layer_shell_v1 Client where
   runEvent shell _ = pass
   runRequest shell request@Request_zwlr_layer_shell_v1_get_layer_surface{id = layerSurfaceId, surface = surfaceId, output = outputId, layer, namespace} = do
     ClientEnv env <- ask
-    sendMessage' request shell.wlid (getOpcode request)
+    sendMessage' request shell.wlid
     modifyIORef env.objects $ Map.insert layerSurfaceId $ Interface Zwlr_layer_surface_v1{wlid = layerSurfaceId}
   runRequest shell Request_zwlr_layer_shell_v1_destroy = pass
 
@@ -52,13 +52,13 @@ instance Interface' Zwlr_layer_surface_v1 Client where
   runEvent ls Event_zwlr_layer_surface_v1_closed = pass
   runEvent ls Event_zwlr_layer_surface_v1_configure{} = pass
   runRequest ls request@Request_zwlr_layer_surface_v1_ack_configure{serial} = do
-    sendMessage' request ls.wlid (getOpcode request)
+    sendMessage' request ls.wlid
   runRequest ls request@Request_zwlr_layer_surface_v1_set_anchor{anchor} = do
-    sendMessage' request ls.wlid (getOpcode request)
+    sendMessage' request ls.wlid
   runRequest ls request@Request_zwlr_layer_surface_v1_set_exclusive_zone{zone} = do
-    sendMessage' request ls.wlid (getOpcode request)
+    sendMessage' request ls.wlid
   runRequest ls request@Request_zwlr_layer_surface_v1_set_size{width, height} = do
-    sendMessage' request ls.wlid (getOpcode request)
+    sendMessage' request ls.wlid
   runRequest ls Request_zwlr_layer_surface_v1_destroy{} = pass
   runRequest ls Request_zwlr_layer_surface_v1_get_popup{} = pass
   runRequest ls Request_zwlr_layer_surface_v1_set_keyboard_interactivity{} = pass
