@@ -144,7 +144,8 @@ instance Interface' XDG_surface Client where
   runRequest xdg_surface request@Request_xdg_surface_ack_configure{} = do
     sendMessage' request xdg_surface.wlid (getOpcode request)
   runRequest _ _ = pass
-  runEvent _ _ = pass
+  runEvent xdg_surface Event_xdg_surface_configure{serial} = do
+    runRequest xdg_surface Request_xdg_surface_ack_configure{serial}
 
 instance Interface' XDG_surface Server where
   type Event XDG_surface = Event_xdg_surface

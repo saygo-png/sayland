@@ -12,7 +12,9 @@ import Relude hiding (hFlush)
 import Saywayland
 import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import GHC.IO.Handle
-import Control.Concurrent.STM (newTQueue)
+import Control.Concurrent.STM (newTQueue, writeTMVar)
+
+import System.Random (randomIO)
 
 interfaceTable :: InterfaceClientTable
 interfaceTable = waylandInterfaceClientTable <> xdg_shellInterfaceClientTable
@@ -80,11 +82,19 @@ program = do
   xdgToplevelId <- newObjectId
   runRequest xdg_surface $ Request_xdg_surface_get_toplevel xdgToplevelId
 
+  configured <- liftIO newEmptyTMVarIO
+  modifyIORef env.eventHandlers $ (:) $ EventHandler $ \_oid -> \case
+    (Event_xdg_surface_configure  _) -> do
+      atomically $ writeTMVar configured ()
+    _ -> pass
+  runRequest surface Request_wl_surface_commit
+  liftIO . atomically $ takeTMVar configured
   bufferWidth <- liftIO $ newIORef 512
   bufferHeight <- liftIO $ newIORef 512
+  shm_pool_rand :: Int <- randomIO
   let colorChannels = 4
   let
-    makeSharedMemoryObject = shmOpen "wl_shm_pool" (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
+    makeSharedMemoryObject = shmOpen ("basic-window" <> show shm_pool_rand) (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
     useSharedMemoryObject fileDescriptor =
       usingReaderT (ClientEnv env) $ do
         bw <- liftIO $ readIORef bufferWidth
@@ -114,7 +124,7 @@ program = do
         -- Wait for exit
         takeMVar running
 
-  liftIO . void $ bracket makeSharedMemoryObject (const $ shmUnlink "wl_shm_pool") useSharedMemoryObject
+  liftIO . void $ bracket makeSharedMemoryObject (const $ shmUnlink $ "basic-window" <> show shm_pool_rand) useSharedMemoryObject
 
 -- | Rainbow image :D
 image :: Int -> Int -> ByteString
