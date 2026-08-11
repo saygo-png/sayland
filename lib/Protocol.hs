@@ -161,7 +161,7 @@ enumName' A = 1 ...
 -}
 mkEnum :: String -> String -> [(String, Int)] -> [Dec]
 mkEnum interfaceName enumName enumKV =
-  [ DataD [] (mkName enumName') [] Nothing constructors [DerivClause (Just StockStrategy) [ConT ''Eq]]
+  [ DataD [] (mkName enumName') [] Nothing constructors [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord]]
   , InstanceD
       Nothing
       []
