@@ -7,195 +7,181 @@
 module Saywayland.Protocols.XdgShell(module Saywayland.Protocols.XdgShell) where
 
 import Control.Lens (makeFieldsId)
-import Data.Char (toUpper)
 import Data.Map qualified as Map
 import Protocol
 import Relude
-import Saywayland.Protocols.Wayland (WL_surface)
+import Saywayland.Protocols.Wayland
 import Saywayland.Types
 
--- TemplateHaskell Definitions {{{
-$(loadProtocolFile False "protocols/xdg-shell.xml")
-
--- }}}
-
 -- Interfaces {{{
-newtype XDG_wm_base = XDG_wm_base {wlid :: Word32}
+$(loadProtocolFileEnums False "protocols/xdg-shell.xml")
 
-newtype XDG_positioner = XDG_positioner {wlid :: Word32}
+newtype Xdg_wm_base = Xdg_wm_base {wlid :: TObjectID Xdg_wm_base}
 
--- todo: xdgRole might be unnecessary, instead WL_surface.role should be used.
-data XDG_surface = XDG_surface {wlid :: Word32, wl_surface :: ObjectID, xdgRole :: IORef (Maybe XDGRole)}
+newtype Xdg_positioner = Xdg_positioner {wlid :: TObjectID Xdg_positioner}
 
-newtype XDG_toplevel = XDG_toplevel {wlid :: Word32}
+-- todo: xdgRole might be unnecessary, instead Wl_surface.role should be used.
+data Xdg_surface = Xdg_surface {wlid :: TObjectID Xdg_surface, wl_surface :: TObjectID Wl_surface, xdgRole :: IORef (Maybe XDGRole)}
 
-data XDG_popup = XDG_popup {wlid :: Word32, parent :: ObjectID, positioner :: ObjectID}
+newtype Xdg_toplevel = Xdg_toplevel {wlid :: TObjectID Xdg_toplevel}
 
-data XDGRole = XDGToplevel XDG_toplevel | XDGPopup XDG_popup
+data Xdg_popup = Xdg_popup {wlid :: TObjectID Xdg_popup, parent :: TObjectID Xdg_surface, positioner :: TObjectID Xdg_positioner}
 
-instance DefaultIO XDG_wm_base where defM = pure $ XDG_wm_base 0
+data XDGRole = XDGToplevel Xdg_toplevel | XDGPopup Xdg_popup
 
-instance DefaultIO XDG_positioner where defM = pure $ XDG_positioner 0
+instance DefaultIO Xdg_wm_base where defM = pure $ Xdg_wm_base 0
 
-instance DefaultIO XDG_surface where defM = newIORef Nothing <&> XDG_surface 0 0
+instance DefaultIO Xdg_positioner where defM = pure $ Xdg_positioner 0
 
-instance DefaultIO XDG_toplevel where defM = pure $ XDG_toplevel 0
+instance DefaultIO Xdg_surface where defM = newIORef Nothing <&> Xdg_surface 0 0
 
-instance DefaultIO XDG_popup where defM = pure $ XDG_popup {wlid=0, parent=0, positioner=0}
+instance DefaultIO Xdg_toplevel where defM = pure $ Xdg_toplevel 0
 
-makeFieldsId ''XDG_wm_base
-makeFieldsId ''XDG_positioner
-makeFieldsId ''XDG_surface
-makeFieldsId ''XDG_toplevel
-makeFieldsId ''XDG_popup
+instance DefaultIO Xdg_popup where defM = pure $ Xdg_popup {wlid=0, parent=0, positioner=0}
 
+$(concat <$> mapM makeFieldsId [''Xdg_wm_base, ''Xdg_positioner, ''Xdg_surface, ''Xdg_toplevel, ''Xdg_popup])
+
+$(loadProtocolFile wlFormatter False "protocols/xdg-shell.xml")
 -- }}}
 
 -- Tables {{{
-$(generateTables False (\(x1 : x2 : x3 : xs) -> toUpper x1 : toUpper x2 : toUpper x3 : xs) "protocols/xdg-shell.xml")
+$(generateTables False wlFormatter "protocols/xdg-shell.xml")
 
 -- }}}
 
 -- Implementations {{{
-instance Interface' XDG_wm_base Client where
-  type Event XDG_wm_base = Event_xdg_wm_base
-  type Request XDG_wm_base = Request_xdg_wm_base
-  runRequest wm_base request@Request_xdg_wm_base_destroy = do
-    ClientEnv env <- ask
-    modifyIORef env.objects $ Map.delete wm_base.wlid
+instance Interface' Xdg_wm_base Client where
+  type Event Xdg_wm_base = Event_xdg_wm_base
+  type Request Xdg_wm_base = Request_xdg_wm_base
+  runRequest wm_base request@(Request_xdg_wm_base_destroy' Request_xdg_wm_base_destroy) = do
+    dropObject wm_base.wlid
     sendMessage' request wm_base.wlid
-  runRequest wm_base request@Request_xdg_wm_base_create_positioner{id=positionerId} = do
-    _positionerObject <- newObject positionerId XDG_positioner{wlid=positionerId}
+  runRequest wm_base request@(Request_xdg_wm_base_create_positioner' Request_xdg_wm_base_create_positioner{id=positionerId}) = do
+    _positionerObject <- newObject positionerId Xdg_positioner{wlid=positionerId}
     sendMessage' request wm_base.wlid
-  runRequest wm_base request@Request_xdg_wm_base_get_xdg_surface{id=xdgSurfaceId, surface=surfaceId} = do
-    getInterface' @WL_surface surfaceId >>= \case
+  runRequest wm_base request@(Request_xdg_wm_base_get_xdg_surface' Request_xdg_wm_base_get_xdg_surface{id=xdgSurfaceId, surface=surfaceId}) = do
+    getInterface surfaceId >>= \case
       Just _ -> do
         -- TODO there are 3 checks to be made beforehand.
         ref <- newIORef Nothing
-        _surfaceObject <- newObject xdgSurfaceId XDG_surface{wlid=xdgSurfaceId, wl_surface=surfaceId, xdgRole = ref}
+        _surfaceObject <- newObject xdgSurfaceId Xdg_surface{wlid=xdgSurfaceId, wl_surface=surfaceId, xdgRole = ref}
         sendMessage' request wm_base.wlid
       Nothing -> do
         error "get_xdg_surface called on a non-surface object."
-  runRequest wm_base request@Request_xdg_wm_base_pong{} = do
+  runRequest wm_base request@(Request_xdg_wm_base_pong' Request_xdg_wm_base_pong{}) = do
     sendMessage' request wm_base.wlid
-  runEvent wm_base Event_xdg_wm_base_ping{serial} = runRequest wm_base Request_xdg_wm_base_pong{serial}
+  runEvent wm_base (Event_xdg_wm_base_ping' Event_xdg_wm_base_ping{serial}) = runRequest wm_base $ Request_xdg_wm_base_pong' Request_xdg_wm_base_pong{serial}
 
-instance Interface' XDG_wm_base Server where
-  type Event XDG_wm_base = Event_xdg_wm_base
-  type Request XDG_wm_base = Request_xdg_wm_base
+instance Interface' Xdg_wm_base Server where
+  type Event Xdg_wm_base = Event_xdg_wm_base
+  type Request Xdg_wm_base = Request_xdg_wm_base
 
-  runRequest _ Request_xdg_wm_base_create_positioner{id=positionerId} = void $ newObject positionerId XDG_positioner{wlid=positionerId}
-  runRequest wm_base Request_xdg_wm_base_destroy = do
-    ClientServerEnv _senv env <- ask
-    modifyIORef env.objects $ Map.delete wm_base.wlid
-  runRequest _ Request_xdg_wm_base_get_xdg_surface{id=xdgSurfaceId, surface=surfaceId} = do
-    getInterface' @WL_surface surfaceId >>= \case
+  runRequest _ (Request_xdg_wm_base_create_positioner' Request_xdg_wm_base_create_positioner{id=positionerId}) = void $ newObject positionerId Xdg_positioner{wlid=positionerId}
+  runRequest wm_base (Request_xdg_wm_base_destroy' Request_xdg_wm_base_destroy) = dropObject wm_base.wlid
+  runRequest _ (Request_xdg_wm_base_get_xdg_surface' Request_xdg_wm_base_get_xdg_surface{id=xdgSurfaceId, surface=surfaceId}) = do
+    getInterface surfaceId >>= \case
       Just _ -> do
         ref <- newIORef Nothing
-        void $ newObject xdgSurfaceId XDG_surface{wlid=xdgSurfaceId, xdgRole = ref,wl_surface=surfaceId}
+        void $ newObject xdgSurfaceId Xdg_surface{wlid=xdgSurfaceId, xdgRole = ref,wl_surface=surfaceId}
       Nothing -> error "get_xdg_surface called on a non-surface object."
-  runRequest _ Request_xdg_wm_base_pong{} = pass
-  runEvent wm_base event@Event_xdg_wm_base_ping{} = sendMessage' event wm_base.wlid
+  runRequest _ (Request_xdg_wm_base_pong' Request_xdg_wm_base_pong{}) = pass
+  runEvent wm_base event@(Event_xdg_wm_base_ping' Event_xdg_wm_base_ping{}) = sendMessage' event wm_base.wlid
 
 
-instance Interface' XDG_positioner Client where
-  type Event XDG_positioner = Event_xdg_positioner
-  type Request XDG_positioner = Request_xdg_positioner
+instance Interface' Xdg_positioner Client where
+  type Event Xdg_positioner = Event_xdg_positioner
+  type Request Xdg_positioner = Request_xdg_positioner
 
-  runRequest positioner request@Request_xdg_positioner_destroy = do
-    ClientEnv env <- ask
-    modifyIORef env.objects $ Map.delete positioner.wlid
+  runRequest positioner request@(Request_xdg_positioner_destroy' Request_xdg_positioner_destroy) = do
+    dropObject positioner.wlid
     sendMessage' request positioner.wlid
 
   runRequest _ _ = pass
   runEvent _ _ = pass
 
-instance Interface' XDG_positioner Server where
-  type Event XDG_positioner = Event_xdg_positioner
-  type Request XDG_positioner = Request_xdg_positioner
+instance Interface' Xdg_positioner Server where
+  type Event Xdg_positioner = Event_xdg_positioner
+  type Request Xdg_positioner = Request_xdg_positioner
   runRequest _ _ = pass
   runEvent _ _ = pass
 
-instance Interface' XDG_surface Client where
-  type Event XDG_surface = Event_xdg_surface
-  type Request XDG_surface = Request_xdg_surface
-  runRequest xdg_surface request@Request_xdg_surface_destroy = do
+instance Interface' Xdg_surface Client where
+  type Event Xdg_surface = Event_xdg_surface
+  type Request Xdg_surface = Request_xdg_surface
+  runRequest xdg_surface request@(Request_xdg_surface_destroy' Request_xdg_surface_destroy) = do
     ClientEnv env <- ask
     readIORef xdg_surface.xdgRole >>= \case
       Nothing -> delete
       Just x -> do
         let roleid = case x of
-              XDGToplevel (XDG_toplevel{wlid=b_wlid}) -> b_wlid
-              XDGPopup (XDG_popup{wlid=b_wlid}) -> b_wlid
+              XDGToplevel (Xdg_toplevel{wlid=TObjectID b_wlid}) -> b_wlid
+              XDGPopup (Xdg_popup{wlid=TObjectID b_wlid}) -> b_wlid
         keys <- Map.keys <$> readIORef env.objects
         unless (roleid `elem` keys) delete
     where
       delete = do
-        ClientEnv env <- ask
-        modifyIORef env.objects $ Map.delete xdg_surface.wlid
+        dropObject xdg_surface.wlid
         sendMessage' request xdg_surface.wlid
-  runRequest xdg_surface request@Request_xdg_surface_get_toplevel{id=toplevelId} = do
-    toplevelObject <- newObject toplevelId XDG_toplevel{wlid=toplevelId}
+  runRequest xdg_surface request@(Request_xdg_surface_get_toplevel' Request_xdg_surface_get_toplevel{id=toplevelId}) = do
+    toplevelObject <- newObject toplevelId Xdg_toplevel{wlid=toplevelId}
     writeIORef xdg_surface.xdgRole $ Just $ XDGToplevel toplevelObject
     sendMessage' request xdg_surface.wlid
-  runRequest xdg_surface request@Request_xdg_surface_get_popup{id=popupId,parent,positioner} = do
-    popupObject <- newObject popupId XDG_popup{wlid=popupId,parent,positioner}
+  runRequest xdg_surface request@(Request_xdg_surface_get_popup' Request_xdg_surface_get_popup{id=popupId,parent,positioner}) = do
+    popupObject <- newObject popupId Xdg_popup{wlid=popupId,parent,positioner}
     writeIORef xdg_surface.xdgRole $ Just $ XDGPopup popupObject
     sendMessage' request xdg_surface.wlid
-  runRequest xdg_surface request@Request_xdg_surface_ack_configure{} = do
+  runRequest xdg_surface request@(Request_xdg_surface_ack_configure' Request_xdg_surface_ack_configure{}) = do
     sendMessage' request xdg_surface.wlid
   runRequest _ _ = pass
-  runEvent xdg_surface Event_xdg_surface_configure{serial} = do
-    runRequest xdg_surface Request_xdg_surface_ack_configure{serial}
+  runEvent xdg_surface (Event_xdg_surface_configure' Event_xdg_surface_configure{serial}) = do
+    runRequest xdg_surface (Request_xdg_surface_ack_configure' Request_xdg_surface_ack_configure{serial})
 
-instance Interface' XDG_surface Server where
-  type Event XDG_surface = Event_xdg_surface
-  type Request XDG_surface = Request_xdg_surface
-  runRequest xdg_surface Request_xdg_surface_destroy = do
+instance Interface' Xdg_surface Server where
+  type Event Xdg_surface = Event_xdg_surface
+  type Request Xdg_surface = Request_xdg_surface
+  runRequest xdg_surface (Request_xdg_surface_destroy' Request_xdg_surface_destroy) = do
     ClientServerEnv _ env <- ask
     readIORef xdg_surface.xdgRole >>= \case
       Nothing -> delete
       Just x -> do
         let roleid = case x of
-              XDGToplevel (XDG_toplevel{wlid=b_wlid}) -> b_wlid
-              XDGPopup (XDG_popup{wlid=b_wlid}) -> b_wlid
+              XDGToplevel (Xdg_toplevel{wlid=TObjectID b_wlid}) -> b_wlid
+              XDGPopup (Xdg_popup{wlid=TObjectID b_wlid}) -> b_wlid
         keys <- Map.keys <$> readIORef env.objects
         unless (roleid `elem` keys) delete
     where
-      delete = do
-        ClientServerEnv _ env <- ask
-        modifyIORef env.objects $ Map.delete xdg_surface.wlid
-  runRequest xdg_surface Request_xdg_surface_get_toplevel{id=toplevelId} = do
-    toplevelObject <- newObject toplevelId XDG_toplevel{wlid=toplevelId}
+      delete = dropObject xdg_surface.wlid
+  runRequest xdg_surface (Request_xdg_surface_get_toplevel' Request_xdg_surface_get_toplevel{id=toplevelId}) = do
+    toplevelObject <- newObject toplevelId Xdg_toplevel{wlid=toplevelId}
     writeIORef xdg_surface.xdgRole $ Just $ XDGToplevel toplevelObject
-  runRequest xdg_surface Request_xdg_surface_get_popup{id=popupId,parent,positioner} = do
-    popupObject <- newObject popupId XDG_popup{wlid=popupId,parent,positioner}
+  runRequest xdg_surface (Request_xdg_surface_get_popup' Request_xdg_surface_get_popup{id=popupId,parent,positioner}) = do
+    popupObject <- newObject popupId Xdg_popup{wlid=popupId,parent,positioner}
     writeIORef xdg_surface.xdgRole $ Just $ XDGPopup popupObject
-  runRequest _ Request_xdg_surface_ack_configure{} = pass
+  runRequest _ (Request_xdg_surface_ack_configure' Request_xdg_surface_ack_configure{}) = pass
   runRequest _ _ = pass
   runEvent _ _ = pass
 
-instance Interface' XDG_toplevel Client where
-  type Event XDG_toplevel = Event_xdg_toplevel
-  type Request XDG_toplevel = Request_xdg_toplevel
+instance Interface' Xdg_toplevel Client where
+  type Event Xdg_toplevel = Event_xdg_toplevel
+  type Request Xdg_toplevel = Request_xdg_toplevel
   runRequest _ _ = pass
   runEvent _ _ = pass
 
-instance Interface' XDG_toplevel Server where
-  type Event XDG_toplevel = Event_xdg_toplevel
-  type Request XDG_toplevel = Request_xdg_toplevel
+instance Interface' Xdg_toplevel Server where
+  type Event Xdg_toplevel = Event_xdg_toplevel
+  type Request Xdg_toplevel = Request_xdg_toplevel
   runRequest _ _ = pass
   runEvent _ _ = pass
 
-instance Interface' XDG_popup Client where
-  type Event XDG_popup = Event_xdg_popup
-  type Request XDG_popup = Request_xdg_popup
+instance Interface' Xdg_popup Client where
+  type Event Xdg_popup = Event_xdg_popup
+  type Request Xdg_popup = Request_xdg_popup
   runRequest _ _ = pass
   runEvent _ _ = pass
 
-instance Interface' XDG_popup Server where
-  type Event XDG_popup = Event_xdg_popup
-  type Request XDG_popup = Request_xdg_popup
+instance Interface' Xdg_popup Server where
+  type Event Xdg_popup = Event_xdg_popup
+  type Request Xdg_popup = Request_xdg_popup
   runRequest _ _ = pass
   runEvent _ _ = pass
 

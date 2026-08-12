@@ -36,7 +36,7 @@ listenForClients env = do
 handleIncomingClient :: MonadIO m => ServerEnvironment -> Socket -> m ()
 handleIncomingClient env socket' = do
   counter <- liftIO $ newIORef 0
-  objects <- liftIO $ newIORef $ one (1, Interface WL_display{wlid = 1})
+  objects <- liftIO $ newIORef $ one (1, Interface Wl_display{wlid = 1})
   globals <- liftIO $ newIORef BM.empty
   fdQueue <- liftIO $ atomically newTQueue
   let clientenv = ClientEnvironment

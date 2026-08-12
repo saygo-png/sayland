@@ -19,6 +19,7 @@ import Relude hiding (ByteString, get, put)
 import System.Console.ANSI (Color (..), ColorIntensity (..), ConsoleLayer (..), SGR (..), hNowSupportsANSI, setSGRCode)
 import System.Posix (Fd)
 import Control.Concurrent.STM (TQueue)
+import Data.Char (toUpper)
 
 -- Constants {{{
 
@@ -38,6 +39,10 @@ wlDisplayID = 1
 --nodata :: IO AdditionalParserData
 --nodata = newIORef [] <&> AdditionalParserData
 
+wlFormatter :: String -> String
+wlFormatter [] = []
+wlFormatter (x:xs) = toUpper x:xs
+
 -- }}}
 
 -- Types {{{
@@ -45,7 +50,7 @@ wlDisplayID = 1
 type ObjectID = Word32
 
 type role TObjectID phantom
-newtype TObjectID a = TObjectID ObjectID deriving newtype (Show, Eq, Ord)
+newtype TObjectID a = TObjectID ObjectID deriving newtype (Show, Eq, Ord, Num)
 
 type NewID = (BS.ByteString, Word32, ObjectID)
 
@@ -112,7 +117,7 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
 class
   ( WaylandEvent (Event a)
   , WaylandEvent (Request a)
-  , HasWlid a ObjectID
+  , HasWlid a (TObjectID a)
   , Typeable a
   ) =>
   Interface' a (p :: Perspective)
@@ -153,14 +158,15 @@ newObjectId = do
   liftIO $ readIORef env.counter
 
 -- | function that inserts the given interface to the objects map with provided id as key.
-newObject :: (Interface' i p) => Word32 -> i -> Wayland p i
-newObject intId int =
+newObject :: (Interface' i p) => TObjectID i -> i -> Wayland p i
+newObject (TObjectID intId) int =
   ask >>= \case
     ClientEnv env -> liftIO (modifyIORef env.objects (Map.insert intId $ Interface int)) $> int
     ClientServerEnv _ env -> liftIO (modifyIORef env.objects (Map.insert intId $ Interface int)) $> int
 
-dropObject :: Word32 -> Wayland p ()
-dropObject i =
+-- | function that removes interface behind the provided id from the object map.
+dropObject :: TObjectID a -> Wayland p ()
+dropObject (TObjectID i) =
   ask >>= \case
     ClientEnv env -> modifyIORef env.objects $ Map.delete i
     ClientServerEnv _ env -> modifyIORef env.objects $ Map.delete i
@@ -187,8 +193,8 @@ sendMessage objectID opcode messageBody =
 {- | Convenience function for formatting events, before sending them.
 Events are colored in magenta following the wayland.app colorscheme.
 -}
-sendMessage' :: (WaylandEvent e) => e -> Word32 -> Wayland p ()
-sendMessage' e o = do
+sendMessage' :: (WaylandEvent e) => e -> TObjectID i -> Wayland p ()
+sendMessage' e (TObjectID o) = do
   colorize <- liftIO getColorize
   liftIO (traceIO $ colorize Vivid Magenta $ showEvent o e)
   q <- ask <&> \case
@@ -198,8 +204,8 @@ sendMessage' e o = do
   sendMessage o (getOpcode e) $ runPut $ putEvent dat e
 
 -- | sendMessageWithFds, but with sendMessage' aspect.
-sendMessageWithFds' :: (WaylandEvent e) => e -> [Fd] -> Word32 -> Wayland p ()
-sendMessageWithFds' e fd o = do
+sendMessageWithFds' :: (WaylandEvent e) => e -> [Fd] -> TObjectID i -> Wayland p ()
+sendMessageWithFds' e fd (TObjectID o) = do
   colorize <- liftIO getColorize
   liftIO (traceIO $ colorize Vivid Magenta $ showEvent o e)
   q <- ask <&> \case
@@ -228,6 +234,7 @@ getColorize = do
       then \ci c t -> fromString (setSGRCode [SetColor Foreground ci c]) <> t <> fromString (setSGRCode [Reset])
       else const $ const id
 
+-- | Get the ClientEnvironment behind the Wayland monad.
 getClientEnv :: Wayland p (ClientEnvironment p)
 getClientEnv = ask <&> \case
   ClientEnv env -> env
@@ -239,13 +246,13 @@ interfaceFromName n = do
   glob <- readIORef env.globals
   pure $ BM.lookupR n glob
 
--- | get an Interface from objects table using its Id.
-getInterface :: Word32 -> Wayland p (Maybe (Interface p))
-getInterface objectID = do
+-- | get an Interface using its id.
+getInterface :: Typeable i => TObjectID i -> Wayland p (Maybe i)
+getInterface (TObjectID objectID) = do
   env <- getClientEnv
-  Map.lookup objectID <$> readIORef env.objects
+  (proxyInterface <=< Map.lookup objectID) <$> readIORef env.objects
 
--- | getInterface chained with proxyInterface.
+-- | get an interface by @TypeApplication
 getInterface' :: forall i p. (Typeable i) => Word32 -> Wayland p (Maybe i)
 getInterface' objectID = do
   env <- getClientEnv

@@ -264,7 +264,9 @@ mkShow interfaceName prefix prefix2 events =
       [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''ObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
       , FunD (mkName prefix) m
       ]
-      []
+      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''ObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
+      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]
+      ]
       (null m)
   where
     arrow = case prefix2 of
@@ -297,7 +299,8 @@ mkOpcodeGetter interfaceName prefix prefix2 events =
       [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''Word16)
       , FunD (mkName prefix) m
       ]
-      []
+      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''Word16)
+      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]]
       (null m)
   where
     mkClause :: (Word16, Element) -> Q Clause
@@ -312,7 +315,8 @@ mkPut formatter interfaceName prefix prefix2 events =
       [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''AdditionalParserData) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''Put)
       , FunD (mkName prefix) m
       ]
-      []
+      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''AdditionalParserData) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''Put)
+      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]]
       (null m)
   where
     nestPutters [] = AppE (VarE 'pure) $ ConE '()
@@ -342,7 +346,8 @@ mkParser formatter interfaceName prefix prefix2 events =
       [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''Word16) $ AppT (AppT ArrowT $ ConT ''AdditionalParserData) (AppT (ConT ''IO) $ AppT (ConT ''Get) $ ConT $ mkName $ prefix2 <> interfaceName))
       , FunD (mkName prefix) m
       ]
-      []
+      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''Word16) $ AppT (AppT ArrowT $ ConT ''AdditionalParserData) (AppT (ConT ''IO) $ AppT (ConT ''Get) $ ConT $ mkName $ prefix2 <> interfaceName))
+      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]]
       (null m)
   where
     mkClause :: (Word16, Element) -> Q Clause
@@ -434,7 +439,7 @@ argType formatter intName x = case findAttr (qname "enum") x of
   Nothing -> case findAttr (qname "type") x of
     Nothing -> error $ "arg without a type discovered" <> show x
     Just "new_id" -> case findAttr (qname "interface") x of
-      Just _ -> ConT ''ObjectID
+      Just x -> AppT (ConT ''TObjectID) . ConT . mkName $ formatter x
       Nothing -> ConT ''NewID
     Just "int" -> ConT ''Int
     Just "uint" -> ConT ''Word32
