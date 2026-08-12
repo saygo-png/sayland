@@ -27,7 +27,7 @@ main = do
   runReaderT program =<< waylandSetup
   where
     waylandSetup = do
-      let display :: Interface Client = Interface $ WL_display wlDisplayID
+      let display :: Interface Client = Interface $ Wl_display $ TObjectID wlDisplayID
       getSocketPath openSocket >>= \case
         Just path -> do
           putStrLn $ "using socket path: " <> show path
@@ -49,10 +49,10 @@ program = do
   serial :: TMVar Word32 <- newEmptyTMVarIO
   running :: MVar () <- newEmptyMVar
 
-  display <- fromJust <$> getInterface' @WL_display 1
-  registryId <- newObjectId
-  runRequest display $ Request_wl_display_get_registry registryId
-  registry <- fromJust <$> getInterface' @WL_registry registryId
+  display <- fromJust <$> getInterface' @Wl_display 1
+  registryId :: TObjectID Wl_registry <- TObjectID <$> newObjectId
+  runRequest display $ Request_wl_display_get_registry' $ Request_wl_display_get_registry registryId
+  registry <- fromJust <$> getInterface registryId
 
   liftIO
     . void
@@ -62,32 +62,32 @@ program = do
       (close env.socket >> putMVar running ())
 
   putStrLn "Binding to required interfaces..."
-  wlShmId <- fromJust <$> bindToInterface registry "wl_shm"
-  wl_shm <- fromJust <$> getInterface' @WL_shm wlShmId
+  wlShmId :: TObjectID Wl_shm <- TObjectID . fromJust <$> bindToInterface registry "wl_shm"
+  wl_shm <- fromJust <$> getInterface wlShmId
 
-  wlCompositorId <- fromJust <$> bindToInterface registry "wl_compositor"
-  wl_compositor <- fromJust <$> getInterface' @WL_compositor wlCompositorId
+  wlCompositorId :: TObjectID Wl_compositor <- TObjectID . fromJust <$> bindToInterface registry "wl_compositor"
+  wl_compositor <- fromJust <$> getInterface wlCompositorId
 
-  wlSurfaceId <- newObjectId
-  runRequest wl_compositor $ Request_wl_compositor_create_surface wlSurfaceId
-  surface <- fromJust <$> getInterface' @WL_surface wlSurfaceId
+  wlSurfaceId :: TObjectID Wl_surface <- TObjectID <$> newObjectId
+  runRequest wl_compositor $ Request_wl_compositor_create_surface' $ Request_wl_compositor_create_surface wlSurfaceId
+  surface <- fromJust <$> getInterface wlSurfaceId
 
-  xdgWmBaseId <- fromJust <$> bindToInterface registry "xdg_wm_base"
-  xdg_wm_base <- fromJust <$> getInterface' @XDG_wm_base xdgWmBaseId
+  xdgWmBaseId :: TObjectID Xdg_wm_base <- TObjectID . fromJust <$> bindToInterface registry "xdg_wm_base"
+  xdg_wm_base <- fromJust <$> getInterface xdgWmBaseId
 
-  xdgSurfaceId <- newObjectId
-  runRequest xdg_wm_base $ Request_xdg_wm_base_get_xdg_surface xdgSurfaceId wlSurfaceId
-  xdg_surface <- fromJust <$> getInterface' @XDG_surface xdgSurfaceId
+  xdgSurfaceId :: TObjectID Xdg_surface <- TObjectID <$> newObjectId
+  runRequest xdg_wm_base $ Request_xdg_wm_base_get_xdg_surface' $ Request_xdg_wm_base_get_xdg_surface xdgSurfaceId wlSurfaceId
+  xdg_surface <- fromJust <$> getInterface xdgSurfaceId
 
-  xdgToplevelId <- newObjectId
-  runRequest xdg_surface $ Request_xdg_surface_get_toplevel xdgToplevelId
+  xdgToplevelId :: TObjectID Xdg_toplevel <- TObjectID <$> newObjectId
+  runRequest xdg_surface $ Request_xdg_surface_get_toplevel' $ Request_xdg_surface_get_toplevel xdgToplevelId
 
   configured <- liftIO newEmptyTMVarIO
   modifyIORef env.eventHandlers $ (:) $ EventHandler $ \_oid -> \case
-    (Event_xdg_surface_configure  _) -> do
+    (Event_xdg_surface_configure' _) -> do
       atomically $ writeTMVar configured ()
     _ -> pass
-  runRequest surface Request_wl_surface_commit
+  runRequest surface $ Request_wl_surface_commit' Request_wl_surface_commit
   liftIO . atomically $ takeTMVar configured
   bufferWidth <- liftIO $ newIORef 512
   bufferHeight <- liftIO $ newIORef 512
@@ -101,12 +101,12 @@ program = do
         bh <- liftIO $ readIORef bufferHeight
         let frameSize = bw * bh * colorChannels
         liftIO . setFdSize fileDescriptor $ fromIntegral frameSize
-        wlShmPoolId <- newObjectId
-        runRequest wl_shm $ Request_wl_shm_create_pool{id = wlShmPoolId, fd = fileDescriptor, size = frameSize}
-        wl_shm_pool <- fromJust <$> getInterface' @WL_shm_pool wlShmPoolId
-        wlBufferId <- newObjectId
+        wlShmPoolId :: TObjectID Wl_shm_pool <- TObjectID <$> newObjectId
+        runRequest wl_shm $ Request_wl_shm_create_pool' Request_wl_shm_create_pool{id = wlShmPoolId, fd = fileDescriptor, size = frameSize}
+        wl_shm_pool <- fromJust <$> getInterface wlShmPoolId
+        wlBufferId :: TObjectID Wl_buffer <- TObjectID <$> newObjectId
         runRequest wl_shm_pool
-          $ Request_wl_shm_pool_create_buffer
+          $ Request_wl_shm_pool_create_buffer' Request_wl_shm_pool_create_buffer
             { id = wlBufferId
             , offset = 0
             , width = bw
@@ -114,13 +114,13 @@ program = do
             , stride = bw * colorChannels
             , format = Enum_wl_shm_format_argb8888
             }
-        buffer <- fromJust <$> getInterface' @WL_buffer wlBufferId
+        buffer <- fromJust <$> getInterface wlBufferId
         fileHandle <- liftIO $ fdToHandle fileDescriptor
 
         liftIO $ hPut fileHandle $ image bw bh
         liftIO $ hFlush fileHandle
-        runRequest surface Request_wl_surface_attach{buffer = wlBufferId, x = 0, y = 0}
-        runRequest surface Request_wl_surface_commit
+        runRequest surface $ Request_wl_surface_attach' Request_wl_surface_attach{buffer = wlBufferId, x = 0, y = 0}
+        runRequest surface $ Request_wl_surface_commit' Request_wl_surface_commit
         -- Wait for exit
         takeMVar running
 
