@@ -241,7 +241,7 @@ generateTables isIO formatter path = do
   pure
     $ concatMap (`generateInterfaceTable` formatter) protocols
     <> concatMap generateVersionTable protocols
-
+{-
 mkEvents :: (String -> String) -> String -> String -> [Element] -> [Dec]
 mkEvents formatter interfaceName prefix events = DataD [] (mkName prefix') [] Nothing constructors []:datatypes
   where
@@ -256,6 +256,14 @@ mkEvents formatter interfaceName prefix events = DataD [] (mkName prefix') [] No
       where
         name = prefix' <> "_" <> fromJust (findAttr (qname "name") x)
     constructors = fmap buildCon events
+-}
+mkEvents :: (String -> String) -> String -> String -> [Element] -> [Dec]
+mkEvents formatter interfaceName prefix events = [DataD [] (mkName prefix') [] Nothing constructors []]
+  where
+    prefix' = prefix <> "_" <> interfaceName
+    buildBang x = (Bang NoSourceUnpackedness NoSourceStrictness, argType formatter interfaceName x)
+    buildRecord x = NormalC (mkName $ prefix' <> "_" <> fromJust (findAttr (qname "name") x)) $ buildBang <$> findChildren (qname "arg") x
+    constructors = fmap buildRecord events
 
 mkShow :: String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkShow interfaceName prefix prefix2 events =
@@ -274,7 +282,7 @@ mkShow interfaceName prefix prefix2 events =
       "Event_" -> "        <- "
       _ -> "        ?? "
     mkShowC :: Element -> Clause
-    mkShowC e = Clause [VarP $ mkName "oid", ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName <> "'") [] [RecP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) $ fmap (\x -> (x, VarP $ addBoundPrefix x)) args]] (NormalB $ chainShow (reverse args)) []
+    mkShowC e = Clause [VarP $ mkName "oid", ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [] $ fmap (VarP . addBoundPrefix) args] (NormalB $ chainShow (reverse args)) []
       where
         single x = AppE (AppE (VarE '(<>)) $ LitE $ StringL $ " " <> nameBase x <> ": ") $ AppE (VarE 'show) $ VarE $ addBoundPrefix x
         chainShow [] =
@@ -304,9 +312,10 @@ mkOpcodeGetter interfaceName prefix prefix2 events =
       (null m)
   where
     mkClause :: (Word16, Element) -> Q Clause
-    mkClause (opcode, element) = pure $ Clause [ConP (mkName $  prefix2 <> interfaceName <> "_" <> eventName <> "'") [] [RecP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) []]] (NormalB $ LitE $ IntegerL $ fromIntegral opcode) []
+    mkClause (opcode, element) = pure $ Clause [ConP (mkName $  prefix2 <> interfaceName <> "_" <> eventName) [] [WildP | _<- args]] (NormalB $ LitE $ IntegerL $ fromIntegral opcode) []
       where
         eventName = fromJust $ findAttr (qname "name") element
+        args = findChildren (qname "arg") element
 
 mkPut :: (String -> String) -> String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkPut formatter interfaceName prefix prefix2 events =
@@ -324,11 +333,11 @@ mkPut formatter interfaceName prefix prefix2 events =
     nestPutters (x : xs) = InfixE (Just $ nestPutters xs) (VarE '(>>)) (Just x)
     mkClause :: (Word16, Element) -> Q Clause
     mkClause (_opcode, element) =
-      mapM (\(a, b) -> putForType b <&> (`AppE` (GetFieldE (VarE $ mkName "_event") $ fromJust $ findAttr (qname "name") a)) . (`AppE` VarE adata)) (zip args argTypes)
+      mapM (\(a, b) -> putForType b <&> (`AppE` (VarE $ mkName $ fromJust $ findAttr (qname "name") a)) . (`AppE` VarE adata)) (zip args argTypes)
         <&> \x ->
           ( Clause
               [ VarP adata
-              , ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName <> "'") [] [AsP (mkName "_event") $ RecP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) []]
+              , ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [] $ fmap VarP argNames
               ]
               $ NormalB
               $ nestPutters (reverse x)
@@ -337,6 +346,7 @@ mkPut formatter interfaceName prefix prefix2 events =
       where
         args = findChildren (qname "arg") element
         argTypes = fmap (argType formatter interfaceName) args
+        argNames = mkName . fromJust . findAttr (qname "name") <$> args
         eventName = fromJust $ findAttr (qname "name") element
 
 mkParser :: (String -> String) -> String -> String -> String -> [(Word16, Element)] -> Q [Dec]
@@ -358,7 +368,7 @@ mkParser formatter interfaceName prefix prefix2 events =
           ( NormalB
               $ DoE Nothing
               $ [BindS (VarP $ mkBinding a) (AppE getter $ VarE adata) | (a, getter) <- zip args getters]
-              <> [NoBindS $ AppE (VarE 'pure) $ AppE (AppE (VarE '(<$>)) $ ConE $ mkName $ prefix2 <> interfaceName <> "_" <> eventName <> "'") $ nestGetters $ reverse $ ConE (mkName $ prefix2 <> interfaceName <> "_" <> eventName) : fmap mkexpr args]
+              <> [NoBindS $ AppE (VarE 'pure) $ nestGetters $ reverse $ ConE (mkName $ prefix2 <> interfaceName <> "_" <> eventName) : fmap mkexpr args]
           )
           []
       where

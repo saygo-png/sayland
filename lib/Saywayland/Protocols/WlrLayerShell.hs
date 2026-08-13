@@ -36,10 +36,10 @@ instance Interface' Zwlr_layer_shell_v1 Client where
   type Event Zwlr_layer_shell_v1 = Event_zwlr_layer_shell_v1
   type Request Zwlr_layer_shell_v1 = Request_zwlr_layer_shell_v1
   runEvent shell _ = pass
-  runRequest shell request@(Request_zwlr_layer_shell_v1_get_layer_surface' Request_zwlr_layer_shell_v1_get_layer_surface{id = layerSurfaceId, surface = surfaceId, output = outputId, layer, namespace}) = do
+  runRequest shell request@(Request_zwlr_layer_shell_v1_get_layer_surface layerSurfaceId surfaceId outputId layer namespace) = do
     sendMessage' request shell.wlid
     void $ newObject layerSurfaceId $ Zwlr_layer_surface_v1{wlid = layerSurfaceId}
-  runRequest _shell (Request_zwlr_layer_shell_v1_destroy' _) = pass
+  runRequest _shell Request_zwlr_layer_shell_v1_destroy = pass
 
 instance Interface' Zwlr_layer_shell_v1 Server
 
@@ -48,21 +48,21 @@ instance Interface' Zwlr_layer_shell_v1 Server
 instance Interface' Zwlr_layer_surface_v1 Client where
   type Event Zwlr_layer_surface_v1 = Event_zwlr_layer_surface_v1
   type Request Zwlr_layer_surface_v1 = Request_zwlr_layer_surface_v1
-  runEvent _ls (Event_zwlr_layer_surface_v1_closed' Event_zwlr_layer_surface_v1_closed) = pass
-  runEvent _ls (Event_zwlr_layer_surface_v1_configure' Event_zwlr_layer_surface_v1_configure{}) = pass
-  runRequest ls request@(Request_zwlr_layer_surface_v1_ack_configure' Request_zwlr_layer_surface_v1_ack_configure{serial}) = do
+  runEvent _ls Event_zwlr_layer_surface_v1_closed = pass
+  runEvent _ls (Event_zwlr_layer_surface_v1_configure _ _ _) = pass
+  runRequest ls request@(Request_zwlr_layer_surface_v1_ack_configure serial) = do
     sendMessage' request ls.wlid
-  runRequest ls request@(Request_zwlr_layer_surface_v1_set_anchor' Request_zwlr_layer_surface_v1_set_anchor{anchor}) = do
+  runRequest ls request@(Request_zwlr_layer_surface_v1_set_anchor anchor) = do
     sendMessage' request ls.wlid
-  runRequest ls request@(Request_zwlr_layer_surface_v1_set_exclusive_zone' Request_zwlr_layer_surface_v1_set_exclusive_zone{zone}) = do
+  runRequest ls request@(Request_zwlr_layer_surface_v1_set_exclusive_zone zone) = do
     sendMessage' request ls.wlid
-  runRequest ls request@(Request_zwlr_layer_surface_v1_set_size' Request_zwlr_layer_surface_v1_set_size{width, height}) = do
+  runRequest ls request@(Request_zwlr_layer_surface_v1_set_size width height) = do
     sendMessage' request ls.wlid
-  runRequest _ls (Request_zwlr_layer_surface_v1_destroy' Request_zwlr_layer_surface_v1_destroy{}) = pass
-  runRequest _ls (Request_zwlr_layer_surface_v1_get_popup' Request_zwlr_layer_surface_v1_get_popup{}) = pass
-  runRequest _ls (Request_zwlr_layer_surface_v1_set_keyboard_interactivity' Request_zwlr_layer_surface_v1_set_keyboard_interactivity{}) = pass
-  runRequest _ls (Request_zwlr_layer_surface_v1_set_layer' Request_zwlr_layer_surface_v1_set_layer{}) = pass
-  runRequest _ls (Request_zwlr_layer_surface_v1_set_margin' Request_zwlr_layer_surface_v1_set_margin{}) = pass
+  runRequest _ls (Request_zwlr_layer_surface_v1_destroy) = pass
+  runRequest _ls (Request_zwlr_layer_surface_v1_get_popup _) = pass
+  runRequest _ls (Request_zwlr_layer_surface_v1_set_keyboard_interactivity _) = pass
+  runRequest _ls (Request_zwlr_layer_surface_v1_set_layer _) = pass
+  runRequest _ls (Request_zwlr_layer_surface_v1_set_margin _ _ _ _) = pass
 
 instance Interface' Zwlr_layer_surface_v1 Server
 

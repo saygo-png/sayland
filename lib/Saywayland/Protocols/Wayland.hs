@@ -220,44 +220,44 @@ $(generateTables False wlFormatter "protocols/wayland.xml")
 instance Interface' Wl_display Client where
   type Event Wl_display = Event_wl_display
   type Request Wl_display = Request_wl_display
-  runEvent _display (Event_wl_display_delete_id' Event_wl_display_delete_id{id = did}) = do
+  runEvent _display (Event_wl_display_delete_id did) = do
     ClientEnv env <- ask
     liftIO $ modifyIORef env.objects (Map.delete did)
-  runEvent _display (Event_wl_display_error' Event_wl_display_error{object_id, code, message}) = do
+  runEvent _display (Event_wl_display_error object_id code message) = do
     liftIO $ print $ "Unhandled error from `" <> show object_id <> "`: [" <> show code <> "] " <> message
-  runRequest display request@(Request_wl_display_sync' Request_wl_display_sync{callback}) = do
+  runRequest display request@(Request_wl_display_sync callback) = do
     mvar <- newEmptyMVar
     callbackObject <- newObject callback Wl_callback{wlid = callback, done = mvar}
     swapMVar callbackObject.done ()
     sendMessage' request display.wlid
-  runRequest display request@(Request_wl_display_get_registry' Request_wl_display_get_registry{registry}) = do
+  runRequest display request@(Request_wl_display_get_registry registry) = do
     _registry <- newObject registry Wl_registry{wlid = registry}
     sendMessage' request display.wlid
 
 instance Interface' Wl_display Server where
   type Event Wl_display = Event_wl_display
   type Request Wl_display = Request_wl_display
-  runEvent display event@(Event_wl_display_delete_id' Event_wl_display_delete_id{id = did}) = do
+  runEvent display event@(Event_wl_display_delete_id did) = do
     ClientServerEnv _ env <- ask
     liftIO $ modifyIORef env.objects (Map.delete did)
     sendMessage' event display.wlid
-  runEvent display event@(Event_wl_display_error' Event_wl_display_error{object_id, code, message}) = do
+  runEvent display event@(Event_wl_display_error object_id code message) = do
     sendMessage' event display.wlid
-  runRequest _display (Request_wl_display_sync' Request_wl_display_sync{callback}) = do
+  runRequest _display (Request_wl_display_sync callback) = do
     ClientServerEnv _ env <- ask
     mvar <- newEmptyMVar
     callbackObject <- newObject callback Wl_callback{wlid = callback, done = mvar}
     -- TODO: synchronize there... somehow
     putMVar mvar ()
-    let event = Event_wl_callback_done' Event_wl_callback_done{callback_data = 0}
+    let event = Event_wl_callback_done 0
     runEvent callbackObject event
-  runRequest _display (Request_wl_display_get_registry' Request_wl_display_get_registry{registry}) = do
+  runRequest _display (Request_wl_display_get_registry registry) = do
     registryObject <- newObject registry Wl_registry{wlid = registry}
     ClientServerEnv _ env <- ask
     versions <- zip [0 ..] . Map.toList <$> readIORef env.versionTable
     forM_ versions $ \(name, (interface', version)) -> do
       let interface = encodeUtf8 interface'
-          event = Event_wl_registry_global' Event_wl_registry_global{name, interface, version}
+          event = Event_wl_registry_global name interface version
       sendMessage' event registry
       modifyIORef env.globals $ BM.insert interface name
 
@@ -267,7 +267,7 @@ instance Interface' Wl_display Server where
 instance Interface' Wl_callback Client where
   type Event Wl_callback = Event_wl_callback
   type Request Wl_callback = Request_wl_callback
-  runEvent callback (Event_wl_callback_done' Event_wl_callback_done{callback_data}) = do
+  runEvent callback (Event_wl_callback_done callback_data) = do
     ClientEnv env <- ask
     putMVar callback.done ()
     dropObject callback.wlid
@@ -277,7 +277,7 @@ instance Interface' Wl_callback Client where
 instance Interface' Wl_callback Server where
   type Event Wl_callback = Event_wl_callback
   type Request Wl_callback = Request_wl_callback
-  runEvent callback event@(Event_wl_callback_done' Event_wl_callback_done{callback_data}) = do
+  runEvent callback event@(Event_wl_callback_done callback_data) = do
     putMVar callback.done ()
     dropObject callback.wlid
     sendMessage' event callback.wlid
@@ -288,7 +288,7 @@ instance Interface' Wl_callback Server where
 instance Interface' Wl_registry Client where
   type Event Wl_registry = Event_wl_registry
   type Request Wl_registry = Request_wl_registry
-  runEvent registry (Event_wl_registry_global' Event_wl_registry_global{name, interface, version}) = do
+  runEvent registry (Event_wl_registry_global name interface version) = do
     ClientEnv env <- ask
     let interface' = BS.init interface
     modifyIORef env.globals $ BM.insert interface' name
@@ -299,11 +299,11 @@ instance Interface' Wl_registry Client where
           $ modifyIORef env.versionTable
           $ Map.insert (BS8.unpack interface') version
       Nothing -> pass
-  runEvent registry (Event_wl_registry_global_remove' Event_wl_registry_global_remove{name}) = do
+  runEvent registry (Event_wl_registry_global_remove name) = do
     ClientEnv env <- ask
     modifyIORef env.globals $ BM.deleteR name
 
-  runRequest registry request@(Request_wl_registry_bind' Request_wl_registry_bind{name, id = (interfaceName, interfaceVersion, newId)}) = do
+  runRequest registry request@(Request_wl_registry_bind name (interfaceName, interfaceVersion, newId)) = do
     ClientEnv env <- ask
     interfaceFromName name >>= \case
       Just x -> do
@@ -316,15 +316,15 @@ instance Interface' Wl_registry Client where
 instance Interface' Wl_registry Server where
   type Event Wl_registry = Event_wl_registry
   type Request Wl_registry = Request_wl_registry
-  runEvent registry event@(Event_wl_registry_global' Event_wl_registry_global{name, interface, version}) = do
+  runEvent registry event@(Event_wl_registry_global name interface version) = do
     ClientServerEnv _ env <- ask
     modifyIORef env.globals $ BM.insert interface name
     sendMessage' event registry.wlid
-  runEvent registry event@(Event_wl_registry_global_remove' Event_wl_registry_global_remove{name}) = do
+  runEvent registry event@(Event_wl_registry_global_remove name) = do
     ClientServerEnv _ env <- ask
     modifyIORef env.globals $ BM.deleteR name
     sendMessage' event registry.wlid
-  runRequest _registry (Request_wl_registry_bind' Request_wl_registry_bind{name, id = (interface, version, newId)}) = do
+  runRequest _registry (Request_wl_registry_bind name (interface, version, newId)) = do
     ClientServerEnv _ env <- ask
     interfaceFromName name >>= \case
       Just x -> do
@@ -338,13 +338,13 @@ instance Interface' Wl_registry Server where
 instance Interface' Wl_compositor Client where
   type Event Wl_compositor = Event_wl_compositor
   type Request Wl_compositor = Request_wl_compositor
-  runRequest compositor request@(Request_wl_compositor_create_surface' Request_wl_compositor_create_surface{id = surfaceId}) = do
+  runRequest compositor request@(Request_wl_compositor_create_surface surfaceId) = do
     _ <- newObject surfaceId =<< (defM :: Wayland Client Wl_surface)
     sendMessage' request compositor.wlid
-  runRequest compositor request@(Request_wl_compositor_create_region' Request_wl_compositor_create_region{id = regionId}) = do
+  runRequest compositor request@(Request_wl_compositor_create_region regionId) = do
     void $ newObject regionId Wl_region{wlid = regionId}
     sendMessage' request compositor.wlid
-  runRequest compositor request@(Request_wl_compositor_release' Request_wl_compositor_release) = do
+  runRequest compositor request@Request_wl_compositor_release = do
     sendMessage' request compositor.wlid
   runEvent _ _ = pass
 
@@ -352,11 +352,11 @@ instance Interface' Wl_compositor Server where
   type Event Wl_compositor = Event_wl_compositor
   type Request Wl_compositor = Request_wl_compositor
   runEvent _ _ = pass
-  runRequest _compositor (Request_wl_compositor_create_surface' Request_wl_compositor_create_surface{id = surfaceId}) = do
+  runRequest _compositor (Request_wl_compositor_create_surface surfaceId) = do
     _ <- newObject surfaceId =<< (defM :: Wayland Server Wl_surface)
     pass
-  runRequest _compositor (Request_wl_compositor_create_region' Request_wl_compositor_create_region{id = regionId}) = void $ newObject regionId Wl_region{wlid = regionId}
-  runRequest compositor (Request_wl_compositor_release' Request_wl_compositor_release) = dropObject compositor.wlid
+  runRequest _compositor (Request_wl_compositor_create_region regionId) = void $ newObject regionId Wl_region{wlid = regionId}
+  runRequest compositor Request_wl_compositor_release = dropObject compositor.wlid
 
 -- }}}
 
@@ -365,14 +365,14 @@ instance Interface' Wl_shm_pool Client where
   type Event Wl_shm_pool = Event_wl_shm_pool
   type Request Wl_shm_pool = Request_wl_shm_pool
 
-  runRequest shm_pool request@(Request_wl_shm_pool_create_buffer' Request_wl_shm_pool_create_buffer{id = bufId, offset = offset', width = width', height = height', stride = stride', format = format'}) = do
+  runRequest shm_pool request@(Request_wl_shm_pool_create_buffer bufId offset' width' height' stride' format') = do
     let buffer = Wl_buffer{wlid = bufId, offset = offset', width = width', height = height', stride = stride', format = format', pool = shm_pool.wlid}
     void $ newObject bufId buffer
     sendMessage' request shm_pool.wlid
-  runRequest shm_pool request@(Request_wl_shm_pool_destroy' Request_wl_shm_pool_destroy) = do
+  runRequest shm_pool request@Request_wl_shm_pool_destroy = do
     dropObject shm_pool.wlid
     sendMessage' request shm_pool.wlid
-  runRequest shm_pool request@(Request_wl_shm_pool_resize' Request_wl_shm_pool_resize{size = size'}) = do
+  runRequest shm_pool request@(Request_wl_shm_pool_resize size') = do
     writeIORef shm_pool.size size'
     sendMessage' request shm_pool.wlid
 
@@ -382,14 +382,14 @@ instance Interface' Wl_shm_pool Server where
   type Event Wl_shm_pool = Event_wl_shm_pool
   type Request Wl_shm_pool = Request_wl_shm_pool
 
-  runRequest shm_pool (Request_wl_shm_pool_create_buffer' Request_wl_shm_pool_create_buffer{id = bufId, offset = offset', width = width', height = height', stride = stride', format = format'}) = do
+  runRequest shm_pool (Request_wl_shm_pool_create_buffer bufId offset' width' height' stride' format') = do
     ClientServerEnv _ env <- ask
     let buffer = Wl_buffer{wlid = bufId, offset = offset', width = width', height = height', stride = stride', format = format', pool = shm_pool.wlid}
     void $ newObject bufId buffer
-  runRequest shm_pool request@(Request_wl_shm_pool_destroy' Request_wl_shm_pool_destroy) = do
+  runRequest shm_pool request@Request_wl_shm_pool_destroy = do
     dropObject shm_pool.wlid
     sendMessage' request shm_pool.wlid
-  runRequest shm_pool (Request_wl_shm_pool_resize' Request_wl_shm_pool_resize{size = size'}) = do
+  runRequest shm_pool (Request_wl_shm_pool_resize size') = do
     liftIO . setFdSize shm_pool.fd $ fromIntegral size'
     oldsize <- readIORef shm_pool.size
     ptr <- readIORef shm_pool.ptr
@@ -417,21 +417,21 @@ instance Interface' Wl_shm_pool Server where
 instance Interface' Wl_shm Client where
   type Event Wl_shm = Event_wl_shm
   type Request Wl_shm = Request_wl_shm
-  runRequest shm request@(Request_wl_shm_create_pool' Request_wl_shm_create_pool{id = poolId, fd = fd', size = size'}) = do
+  runRequest shm request@(Request_wl_shm_create_pool poolId fd' size') = do
     sizeRef <- newIORef size'
     ptrRef <- newIORef nullPtr {-IIRC client doesn't need exposed -}
     void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd', size = sizeRef, ptr = ptrRef}
     sendMessageWithFds' request [fd'] shm.wlid
-  runRequest shm request@(Request_wl_shm_release' Request_wl_shm_release{}) = do
+  runRequest shm request@(Request_wl_shm_release{}) = do
     dropObject shm.wlid
     sendMessage' request shm.wlid
 
-  runEvent shm (Event_wl_shm_format' Event_wl_shm_format{format}) = modifyIORef shm.formats (format :)
+  runEvent shm (Event_wl_shm_format format) = modifyIORef shm.formats (format :)
 
 instance Interface' Wl_shm Server where
   type Event Wl_shm = Event_wl_shm
   type Request Wl_shm = Request_wl_shm
-  runRequest _shm (Request_wl_shm_create_pool' Request_wl_shm_create_pool{id = poolId, fd = fd', size = size'}) = do
+  runRequest _shm (Request_wl_shm_create_pool poolId fd' size') = do
     ClientServerEnv _ env <- ask
     result <-
       liftIO
@@ -449,10 +449,10 @@ instance Interface' Wl_shm Server where
     sizeRef <- newIORef size'
     ptrRef <- newIORef ptr'
     void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd', size = sizeRef, ptr = ptrRef}
-  runRequest shm (Request_wl_shm_release' Request_wl_shm_release) = do
+  runRequest shm Request_wl_shm_release = do
     ClientServerEnv _ env <- ask
     dropObject shm.wlid
-  runEvent shm event@(Event_wl_shm_format' Event_wl_shm_format{format}) = do
+  runEvent shm event@(Event_wl_shm_format format) = do
     sendMessage' event shm.wlid
 
 -- }}}
@@ -461,16 +461,16 @@ instance Interface' Wl_shm Server where
 instance Interface' Wl_buffer Client where
   type Event Wl_buffer = Event_wl_buffer
   type Request Wl_buffer = Request_wl_buffer
-  runRequest buffer request@(Request_wl_buffer_destroy' Request_wl_buffer_destroy) = do
+  runRequest buffer request@Request_wl_buffer_destroy = do
     dropObject buffer.wlid
     sendMessage' request buffer.wlid
-  runEvent buffer (Event_wl_buffer_release' Event_wl_buffer_release) = pass
+  runEvent buffer Event_wl_buffer_release = pass
 
 instance Interface' Wl_buffer Server where
   type Event Wl_buffer = Event_wl_buffer
   type Request Wl_buffer = Request_wl_buffer
-  runRequest buffer (Request_wl_buffer_destroy' Request_wl_buffer_destroy) = dropObject buffer.wlid
-  runEvent buffer event@(Event_wl_buffer_release' Event_wl_buffer_release) = do
+  runRequest buffer Request_wl_buffer_destroy = dropObject buffer.wlid
+  runEvent buffer event@Event_wl_buffer_release = do
     sendMessage' event buffer.wlid
 
 -- }}}
@@ -479,16 +479,16 @@ instance Interface' Wl_buffer Server where
 instance Interface' Wl_data_offer Client where
   type Event Wl_data_offer = Event_wl_data_offer
   type Request Wl_data_offer = Request_wl_data_offer
-  runRequest _ (Request_wl_data_offer_accept' Request_wl_data_offer_accept{}) = pass
-  runRequest _ (Request_wl_data_offer_receive' Request_wl_data_offer_receive{}) = pass
-  runRequest data_offer request@(Request_wl_data_offer_destroy' Request_wl_data_offer_destroy{}) = do
+  runRequest _ (Request_wl_data_offer_accept{}) = pass
+  runRequest _ (Request_wl_data_offer_receive{}) = pass
+  runRequest data_offer request@(Request_wl_data_offer_destroy{}) = do
     dropObject data_offer.wlid
     sendMessage' request data_offer.wlid
-  runRequest _ (Request_wl_data_offer_finish' Request_wl_data_offer_finish{}) = pass
-  runRequest _ (Request_wl_data_offer_set_actions' Request_wl_data_offer_set_actions{}) = pass
-  runEvent _ (Event_wl_data_offer_offer' Event_wl_data_offer_offer{}) = pass
-  runEvent _ (Event_wl_data_offer_source_actions' Event_wl_data_offer_source_actions{}) = pass
-  runEvent _ (Event_wl_data_offer_action' Event_wl_data_offer_action{}) = pass
+  runRequest _ (Request_wl_data_offer_finish{}) = pass
+  runRequest _ (Request_wl_data_offer_set_actions{}) = pass
+  runEvent _ (Event_wl_data_offer_offer{}) = pass
+  runEvent _ (Event_wl_data_offer_source_actions{}) = pass
+  runEvent _ (Event_wl_data_offer_action{}) = pass
 
 instance Interface' Wl_data_offer Server
 
@@ -498,17 +498,17 @@ instance Interface' Wl_data_offer Server
 instance Interface' Wl_data_source Client where
   type Event Wl_data_source = Event_wl_data_source
   type Request Wl_data_source = Request_wl_data_source
-  runRequest _ (Request_wl_data_source_offer' Request_wl_data_source_offer{}) = pass
-  runRequest data_source request@(Request_wl_data_source_destroy' Request_wl_data_source_destroy{}) = do
+  runRequest _ (Request_wl_data_source_offer{}) = pass
+  runRequest data_source request@(Request_wl_data_source_destroy{}) = do
     dropObject data_source.wlid
     sendMessage' request data_source.wlid
-  runRequest _ (Request_wl_data_source_set_actions' Request_wl_data_source_set_actions{}) = pass
-  runEvent _ (Event_wl_data_source_target' Event_wl_data_source_target{}) = pass
-  runEvent _ (Event_wl_data_source_send' Event_wl_data_source_send{}) = pass
-  runEvent _ (Event_wl_data_source_cancelled' Event_wl_data_source_cancelled{}) = pass
-  runEvent _ (Event_wl_data_source_dnd_drop_performed' Event_wl_data_source_dnd_drop_performed{}) = pass
-  runEvent _ (Event_wl_data_source_dnd_finished' Event_wl_data_source_dnd_finished{}) = pass
-  runEvent _ (Event_wl_data_source_action' Event_wl_data_source_action{}) = pass
+  runRequest _ (Request_wl_data_source_set_actions{}) = pass
+  runEvent _ (Event_wl_data_source_target{}) = pass
+  runEvent _ (Event_wl_data_source_send{}) = pass
+  runEvent _ (Event_wl_data_source_cancelled{}) = pass
+  runEvent _ (Event_wl_data_source_dnd_drop_performed{}) = pass
+  runEvent _ (Event_wl_data_source_dnd_finished{}) = pass
+  runEvent _ (Event_wl_data_source_action{}) = pass
 
 instance Interface' Wl_data_source Server
 
@@ -518,15 +518,15 @@ instance Interface' Wl_data_source Server
 instance Interface' Wl_data_device Client where
   type Event Wl_data_device = Event_wl_data_device
   type Request Wl_data_device = Request_wl_data_device
-  runRequest _ (Request_wl_data_device_start_drag' Request_wl_data_device_start_drag{}) = pass
-  runRequest _ (Request_wl_data_device_set_selection' Request_wl_data_device_set_selection{}) = pass
-  runRequest _ (Request_wl_data_device_release' Request_wl_data_device_release{}) = pass
-  runEvent _ (Event_wl_data_device_data_offer' Event_wl_data_device_data_offer{}) = pass
-  runEvent _ (Event_wl_data_device_enter' Event_wl_data_device_enter{}) = pass
-  runEvent _ (Event_wl_data_device_leave' Event_wl_data_device_leave{}) = pass
-  runEvent _ (Event_wl_data_device_motion' Event_wl_data_device_motion{}) = pass
-  runEvent _ (Event_wl_data_device_drop' Event_wl_data_device_drop{}) = pass
-  runEvent _ (Event_wl_data_device_selection' Event_wl_data_device_selection{}) = pass
+  runRequest _ (Request_wl_data_device_start_drag{}) = pass
+  runRequest _ (Request_wl_data_device_set_selection{}) = pass
+  runRequest _ (Request_wl_data_device_release{}) = pass
+  runEvent _ (Event_wl_data_device_data_offer{}) = pass
+  runEvent _ (Event_wl_data_device_enter{}) = pass
+  runEvent _ (Event_wl_data_device_leave{}) = pass
+  runEvent _ (Event_wl_data_device_motion{}) = pass
+  runEvent _ (Event_wl_data_device_drop{}) = pass
+  runEvent _ (Event_wl_data_device_selection{}) = pass
 
 instance Interface' Wl_data_device Server
 
@@ -536,9 +536,9 @@ instance Interface' Wl_data_device Server
 instance Interface' Wl_data_device_manager Client where
   type Event Wl_data_device_manager = Event_wl_data_device_manager
   type Request Wl_data_device_manager = Request_wl_data_device_manager
-  runRequest _ (Request_wl_data_device_manager_create_data_source' Request_wl_data_device_manager_create_data_source{}) = pass
-  runRequest _ (Request_wl_data_device_manager_get_data_device' Request_wl_data_device_manager_get_data_device{}) = pass
-  runRequest _ (Request_wl_data_device_manager_release' Request_wl_data_device_manager_release{}) = pass
+  runRequest _ (Request_wl_data_device_manager_create_data_source{}) = pass
+  runRequest _ (Request_wl_data_device_manager_get_data_device{}) = pass
+  runRequest _ (Request_wl_data_device_manager_release{}) = pass
 
 instance Interface' Wl_data_device_manager Server
 
@@ -548,7 +548,7 @@ instance Interface' Wl_data_device_manager Server
 instance Interface' Wl_shell Client where
   type Event Wl_shell = Event_wl_shell
   type Request Wl_shell = Request_wl_shell
-  runRequest _ (Request_wl_shell_get_shell_surface' Request_wl_shell_get_shell_surface{}) = pass
+  runRequest _ (Request_wl_shell_get_shell_surface{}) = pass
 
 instance Interface' Wl_shell Server
 
@@ -558,19 +558,19 @@ instance Interface' Wl_shell Server
 instance Interface' Wl_shell_surface Client where
   type Event Wl_shell_surface = Event_wl_shell_surface
   type Request Wl_shell_surface = Request_wl_shell_surface
-  runRequest _ (Request_wl_shell_surface_pong' Request_wl_shell_surface_pong{}) = pass
-  runRequest _ (Request_wl_shell_surface_move' Request_wl_shell_surface_move{}) = pass
-  runRequest _ (Request_wl_shell_surface_resize' Request_wl_shell_surface_resize{}) = pass
-  runRequest _ (Request_wl_shell_surface_set_toplevel' Request_wl_shell_surface_set_toplevel{}) = pass
-  runRequest _ (Request_wl_shell_surface_set_transient' Request_wl_shell_surface_set_transient{}) = pass
-  runRequest _ (Request_wl_shell_surface_set_fullscreen' Request_wl_shell_surface_set_fullscreen{}) = pass
-  runRequest _ (Request_wl_shell_surface_set_popup' Request_wl_shell_surface_set_popup{}) = pass
-  runRequest _ (Request_wl_shell_surface_set_maximized' Request_wl_shell_surface_set_maximized{}) = pass
-  runRequest _ (Request_wl_shell_surface_set_title' Request_wl_shell_surface_set_title{}) = pass
-  runRequest _ (Request_wl_shell_surface_set_class' Request_wl_shell_surface_set_class{}) = pass
-  runEvent _ (Event_wl_shell_surface_ping' Event_wl_shell_surface_ping{}) = pass
-  runEvent _ (Event_wl_shell_surface_configure' Event_wl_shell_surface_configure{}) = pass
-  runEvent _ (Event_wl_shell_surface_popup_done' Event_wl_shell_surface_popup_done{}) = pass
+  runRequest _ (Request_wl_shell_surface_pong{}) = pass
+  runRequest _ (Request_wl_shell_surface_move{}) = pass
+  runRequest _ (Request_wl_shell_surface_resize{}) = pass
+  runRequest _ (Request_wl_shell_surface_set_toplevel{}) = pass
+  runRequest _ (Request_wl_shell_surface_set_transient{}) = pass
+  runRequest _ (Request_wl_shell_surface_set_fullscreen{}) = pass
+  runRequest _ (Request_wl_shell_surface_set_popup{}) = pass
+  runRequest _ (Request_wl_shell_surface_set_maximized{}) = pass
+  runRequest _ (Request_wl_shell_surface_set_title{}) = pass
+  runRequest _ (Request_wl_shell_surface_set_class{}) = pass
+  runEvent _ (Event_wl_shell_surface_ping{}) = pass
+  runEvent _ (Event_wl_shell_surface_configure{}) = pass
+  runEvent _ (Event_wl_shell_surface_popup_done{}) = pass
 
 instance Interface' Wl_shell_surface Server
 
@@ -580,32 +580,32 @@ instance Interface' Wl_shell_surface Server
 instance Interface' Wl_surface Client where
   type Event Wl_surface = Event_wl_surface
   type Request Wl_surface = Request_wl_surface
-  runRequest surface request@(Request_wl_surface_destroy' Request_wl_surface_destroy{}) = do
+  runRequest surface request@(Request_wl_surface_destroy{}) = do
     dropObject surface.wlid
     sendMessage' request surface.wlid
-  runRequest surface request@(Request_wl_surface_attach' Request_wl_surface_attach{buffer = bufferId, x, y}) = do
+  runRequest surface request@(Request_wl_surface_attach bufferId x y) = do
     sendMessage' request surface.wlid
-  runRequest _ (Request_wl_surface_damage' Request_wl_surface_damage{}) = pass
-  runRequest _ (Request_wl_surface_frame' Request_wl_surface_frame{}) = pass
-  runRequest _ (Request_wl_surface_set_opaque_region' Request_wl_surface_set_opaque_region{}) = pass
-  runRequest _ (Request_wl_surface_set_input_region' Request_wl_surface_set_input_region{}) = pass
-  runRequest surface request@(Request_wl_surface_commit' Request_wl_surface_commit) = do
+  runRequest _ (Request_wl_surface_damage{}) = pass
+  runRequest _ (Request_wl_surface_frame{}) = pass
+  runRequest _ (Request_wl_surface_set_opaque_region{}) = pass
+  runRequest _ (Request_wl_surface_set_input_region{}) = pass
+  runRequest surface request@Request_wl_surface_commit = do
     sendMessage' request surface.wlid
-  runRequest _ (Request_wl_surface_set_buffer_transform' Request_wl_surface_set_buffer_transform{}) = pass
-  runRequest _ (Request_wl_surface_set_buffer_scale' Request_wl_surface_set_buffer_scale{}) = pass
-  runRequest surface request@(Request_wl_surface_damage_buffer' Request_wl_surface_damage_buffer{}) = do
+  runRequest _ (Request_wl_surface_set_buffer_transform{}) = pass
+  runRequest _ (Request_wl_surface_set_buffer_scale{}) = pass
+  runRequest surface request@(Request_wl_surface_damage_buffer{}) = do
     sendMessage' request surface.wlid
-  runRequest _ (Request_wl_surface_offset' Request_wl_surface_offset{}) = pass
-  runRequest _ (Request_wl_surface_get_release' Request_wl_surface_get_release{}) = pass
-  runEvent _ (Event_wl_surface_enter' Event_wl_surface_enter{}) = pass
-  runEvent _ (Event_wl_surface_leave' Event_wl_surface_leave{}) = pass
-  runEvent _ (Event_wl_surface_preferred_buffer_scale' Event_wl_surface_preferred_buffer_scale{}) = pass
-  runEvent _ (Event_wl_surface_preferred_buffer_transform' Event_wl_surface_preferred_buffer_transform{}) = pass
+  runRequest _ (Request_wl_surface_offset{}) = pass
+  runRequest _ (Request_wl_surface_get_release{}) = pass
+  runEvent _ (Event_wl_surface_enter _) = pass
+  runEvent _ (Event_wl_surface_leave _) = pass
+  runEvent _ (Event_wl_surface_preferred_buffer_scale _) = pass
+  runEvent _ (Event_wl_surface_preferred_buffer_transform _) = pass
 
 instance Interface' Wl_surface Server where
   type Event Wl_surface = Event_wl_surface
   type Request Wl_surface = Request_wl_surface
-  runRequest surface (Request_wl_surface_attach' Request_wl_surface_attach{buffer = bufferId, x, y}) = do
+  runRequest surface (Request_wl_surface_attach bufferId x y) = do
     modifyIORef surface.pendingState $ \ss ->
       ss
         { buffer = Just bufferId
@@ -613,25 +613,25 @@ instance Interface' Wl_surface Server where
         , damage = []
         , frameCallbacks = []
         }
-  runRequest surface (Request_wl_surface_commit' Request_wl_surface_commit) = do
+  runRequest surface Request_wl_surface_commit = do
     ClientServerEnv _ env <- ask
     pending <- readIORef surface.pendingState
     liftIO $ do
       modifyIORef' surface.cuQueue (pending Seq.<|)
       writeIORef surface.pendingState emptyContentUpdate
 
-  runRequest surface (Request_wl_surface_destroy' Request_wl_surface_destroy) = dropObject surface.wlid
-  runRequest _surface (Request_wl_surface_damage' Request_wl_surface_damage{}) = pass
-  runRequest _surface (Request_wl_surface_damage_buffer' Request_wl_surface_damage_buffer{}) = pass
-  runRequest _surface (Request_wl_surface_frame' Request_wl_surface_frame{}) = pass
-  runRequest _surface (Request_wl_surface_set_opaque_region' Request_wl_surface_set_opaque_region{}) = pass
-  runRequest _surface (Request_wl_surface_set_input_region' Request_wl_surface_set_input_region{}) = pass
-  runRequest _surface (Request_wl_surface_set_buffer_scale' Request_wl_surface_set_buffer_scale{}) = pass
-  runRequest _surface (Request_wl_surface_set_buffer_transform' Request_wl_surface_set_buffer_transform{}) = pass
-  runRequest _surface (Request_wl_surface_offset' Request_wl_surface_offset{}) = pass
-  runRequest _surface (Request_wl_surface_get_release' Request_wl_surface_get_release{}) = pass
-  runEvent _surface (Event_wl_surface_enter' Event_wl_surface_enter{}) = pass
-  runEvent _surface (Event_wl_surface_leave' Event_wl_surface_leave{}) = pass
+  runRequest surface Request_wl_surface_destroy = dropObject surface.wlid
+  runRequest _surface (Request_wl_surface_damage{}) = pass
+  runRequest _surface (Request_wl_surface_damage_buffer{}) = pass
+  runRequest _surface (Request_wl_surface_frame{}) = pass
+  runRequest _surface (Request_wl_surface_set_opaque_region{}) = pass
+  runRequest _surface (Request_wl_surface_set_input_region{}) = pass
+  runRequest _surface (Request_wl_surface_set_buffer_scale{}) = pass
+  runRequest _surface (Request_wl_surface_set_buffer_transform{}) = pass
+  runRequest _surface (Request_wl_surface_offset{}) = pass
+  runRequest _surface (Request_wl_surface_get_release{}) = pass
+  runEvent _surface (Event_wl_surface_enter _) = pass
+  runEvent _surface (Event_wl_surface_leave _) = pass
 
 -- }}}
 
@@ -639,12 +639,12 @@ instance Interface' Wl_surface Server where
 instance Interface' Wl_seat Client where
   type Event Wl_seat = Event_wl_seat
   type Request Wl_seat = Request_wl_seat
-  runRequest _ (Request_wl_seat_get_pointer' Request_wl_seat_get_pointer{}) = pass
-  runRequest _ (Request_wl_seat_get_keyboard' Request_wl_seat_get_keyboard{}) = pass
-  runRequest _ (Request_wl_seat_get_touch' Request_wl_seat_get_touch{}) = pass
-  runRequest _ (Request_wl_seat_release' Request_wl_seat_release{}) = pass
-  runEvent _ (Event_wl_seat_capabilities' Event_wl_seat_capabilities{}) = pass
-  runEvent _ (Event_wl_seat_name' Event_wl_seat_name{}) = pass
+  runRequest _ (Request_wl_seat_get_pointer{}) = pass
+  runRequest _ (Request_wl_seat_get_keyboard{}) = pass
+  runRequest _ (Request_wl_seat_get_touch{}) = pass
+  runRequest _ (Request_wl_seat_release{}) = pass
+  runEvent _ (Event_wl_seat_capabilities _) = pass
+  runEvent _ (Event_wl_seat_name _) = pass
 
 instance Interface' Wl_seat Server
 
@@ -654,19 +654,19 @@ instance Interface' Wl_seat Server
 instance Interface' Wl_pointer Client where
   type Event Wl_pointer = Event_wl_pointer
   type Request Wl_pointer = Request_wl_pointer
-  runRequest _ (Request_wl_pointer_set_cursor' Request_wl_pointer_set_cursor{}) = pass
-  runRequest _ (Request_wl_pointer_release' Request_wl_pointer_release{}) = pass
-  runEvent _ (Event_wl_pointer_enter' Event_wl_pointer_enter{}) = pass
-  runEvent _ (Event_wl_pointer_leave' Event_wl_pointer_leave{}) = pass
-  runEvent _ (Event_wl_pointer_motion' Event_wl_pointer_motion{}) = pass
-  runEvent _ (Event_wl_pointer_button' Event_wl_pointer_button{}) = pass
-  runEvent _ (Event_wl_pointer_axis' Event_wl_pointer_axis{}) = pass
-  runEvent _ (Event_wl_pointer_frame' Event_wl_pointer_frame{}) = pass
-  runEvent _ (Event_wl_pointer_axis_source' Event_wl_pointer_axis_source{}) = pass
-  runEvent _ (Event_wl_pointer_axis_stop' Event_wl_pointer_axis_stop{}) = pass
-  runEvent _ (Event_wl_pointer_axis_discrete' Event_wl_pointer_axis_discrete{}) = pass
-  runEvent _ (Event_wl_pointer_axis_value120' Event_wl_pointer_axis_value120{}) = pass
-  runEvent _ (Event_wl_pointer_axis_relative_direction' Event_wl_pointer_axis_relative_direction{}) = pass
+  runRequest _ (Request_wl_pointer_set_cursor{}) = pass
+  runRequest _ (Request_wl_pointer_release{}) = pass
+  runEvent _ Event_wl_pointer_enter{} = pass
+  runEvent _ Event_wl_pointer_leave{} = pass
+  runEvent _ Event_wl_pointer_motion{} = pass
+  runEvent _ Event_wl_pointer_button{} = pass
+  runEvent _ Event_wl_pointer_axis{} = pass
+  runEvent _ Event_wl_pointer_frame{} = pass
+  runEvent _ Event_wl_pointer_axis_source{} = pass
+  runEvent _ Event_wl_pointer_axis_stop{} = pass
+  runEvent _ Event_wl_pointer_axis_discrete{} = pass
+  runEvent _ Event_wl_pointer_axis_value120{} = pass
+  runEvent _ Event_wl_pointer_axis_relative_direction{} = pass
 
 instance Interface' Wl_pointer Server
 
@@ -676,13 +676,13 @@ instance Interface' Wl_pointer Server
 instance Interface' Wl_keyboard Client where
   type Event Wl_keyboard = Event_wl_keyboard
   type Request Wl_keyboard = Request_wl_keyboard
-  runRequest _ (Request_wl_keyboard_release' Request_wl_keyboard_release{}) = pass
-  runEvent _ (Event_wl_keyboard_keymap' Event_wl_keyboard_keymap{}) = pass
-  runEvent _ (Event_wl_keyboard_enter' Event_wl_keyboard_enter{}) = pass
-  runEvent _ (Event_wl_keyboard_leave' Event_wl_keyboard_leave{}) = pass
-  runEvent _ (Event_wl_keyboard_key' Event_wl_keyboard_key{}) = pass
-  runEvent _ (Event_wl_keyboard_modifiers' Event_wl_keyboard_modifiers{}) = pass
-  runEvent _ (Event_wl_keyboard_repeat_info' Event_wl_keyboard_repeat_info{}) = pass
+  runRequest _ (Request_wl_keyboard_release{}) = pass
+  runEvent _ (Event_wl_keyboard_keymap{}) = pass
+  runEvent _ (Event_wl_keyboard_enter{}) = pass
+  runEvent _ (Event_wl_keyboard_leave{}) = pass
+  runEvent _ (Event_wl_keyboard_key{}) = pass
+  runEvent _ (Event_wl_keyboard_modifiers{}) = pass
+  runEvent _ (Event_wl_keyboard_repeat_info{}) = pass
 
 instance Interface' Wl_keyboard Server
 
@@ -692,14 +692,14 @@ instance Interface' Wl_keyboard Server
 instance Interface' Wl_touch Client where
   type Event Wl_touch = Event_wl_touch
   type Request Wl_touch = Request_wl_touch
-  runRequest _ (Request_wl_touch_release' Request_wl_touch_release{}) = pass
-  runEvent _ (Event_wl_touch_down' Event_wl_touch_down{}) = pass
-  runEvent _ (Event_wl_touch_up' Event_wl_touch_up{}) = pass
-  runEvent _ (Event_wl_touch_motion' Event_wl_touch_motion{}) = pass
-  runEvent _ (Event_wl_touch_frame' Event_wl_touch_frame{}) = pass
-  runEvent _ (Event_wl_touch_cancel' Event_wl_touch_cancel{}) = pass
-  runEvent _ (Event_wl_touch_shape' Event_wl_touch_shape{}) = pass
-  runEvent _ (Event_wl_touch_orientation' Event_wl_touch_orientation{}) = pass
+  runRequest _ (Request_wl_touch_release{}) = pass
+  runEvent _ (Event_wl_touch_down{}) = pass
+  runEvent _ (Event_wl_touch_up{}) = pass
+  runEvent _ (Event_wl_touch_motion{}) = pass
+  runEvent _ (Event_wl_touch_frame{}) = pass
+  runEvent _ (Event_wl_touch_cancel{}) = pass
+  runEvent _ (Event_wl_touch_shape{}) = pass
+  runEvent _ (Event_wl_touch_orientation{}) = pass
 
 instance Interface' Wl_touch Server
 
@@ -709,13 +709,13 @@ instance Interface' Wl_touch Server
 instance Interface' Wl_output Client where
   type Event Wl_output = Event_wl_output
   type Request Wl_output = Request_wl_output
-  runRequest _ (Request_wl_output_release' Request_wl_output_release{}) = pass
-  runEvent _ (Event_wl_output_geometry' Event_wl_output_geometry{}) = pass
-  runEvent _ (Event_wl_output_mode' Event_wl_output_mode{}) = pass
-  runEvent _ (Event_wl_output_done' Event_wl_output_done{}) = pass
-  runEvent _ (Event_wl_output_scale' Event_wl_output_scale{}) = pass
-  runEvent _ (Event_wl_output_name' Event_wl_output_name{}) = pass
-  runEvent _ (Event_wl_output_description' Event_wl_output_description{}) = pass
+  runRequest _ (Request_wl_output_release{}) = pass
+  runEvent _ (Event_wl_output_geometry{}) = pass
+  runEvent _ (Event_wl_output_mode{}) = pass
+  runEvent _ (Event_wl_output_done{}) = pass
+  runEvent _ (Event_wl_output_scale{}) = pass
+  runEvent _ (Event_wl_output_name{}) = pass
+  runEvent _ (Event_wl_output_description{}) = pass
 
 instance Interface' Wl_output Server
 
@@ -725,9 +725,9 @@ instance Interface' Wl_output Server
 instance Interface' Wl_region Client where
   type Event Wl_region = Event_wl_region
   type Request Wl_region = Request_wl_region
-  runRequest _ (Request_wl_region_destroy' Request_wl_region_destroy{}) = pass
-  runRequest _ (Request_wl_region_add' Request_wl_region_add{}) = pass
-  runRequest _ (Request_wl_region_subtract' Request_wl_region_subtract{}) = pass
+  runRequest _ (Request_wl_region_destroy{}) = pass
+  runRequest _ (Request_wl_region_add{}) = pass
+  runRequest _ (Request_wl_region_subtract{}) = pass
 
 instance Interface' Wl_region Server
 
@@ -737,8 +737,8 @@ instance Interface' Wl_region Server
 instance Interface' Wl_subcompositor Client where
   type Event Wl_subcompositor = Event_wl_subcompositor
   type Request Wl_subcompositor = Request_wl_subcompositor
-  runRequest _ (Request_wl_subcompositor_destroy' Request_wl_subcompositor_destroy{}) = pass
-  runRequest _ (Request_wl_subcompositor_get_subsurface' Request_wl_subcompositor_get_subsurface{}) = pass
+  runRequest _ (Request_wl_subcompositor_destroy{}) = pass
+  runRequest _ (Request_wl_subcompositor_get_subsurface{}) = pass
 
 instance Interface' Wl_subcompositor Server
 
@@ -748,12 +748,12 @@ instance Interface' Wl_subcompositor Server
 instance Interface' Wl_subsurface Client where
   type Event Wl_subsurface = Event_wl_subsurface
   type Request Wl_subsurface = Request_wl_subsurface
-  runRequest _ (Request_wl_subsurface_destroy' Request_wl_subsurface_destroy{}) = pass
-  runRequest _ (Request_wl_subsurface_set_position' Request_wl_subsurface_set_position{}) = pass
-  runRequest _ (Request_wl_subsurface_place_above' Request_wl_subsurface_place_above{}) = pass
-  runRequest _ (Request_wl_subsurface_place_below' Request_wl_subsurface_place_below{}) = pass
-  runRequest _ (Request_wl_subsurface_set_sync' Request_wl_subsurface_set_sync{}) = pass
-  runRequest _ (Request_wl_subsurface_set_desync' Request_wl_subsurface_set_desync{}) = pass
+  runRequest _ (Request_wl_subsurface_destroy{}) = pass
+  runRequest _ (Request_wl_subsurface_set_position{}) = pass
+  runRequest _ (Request_wl_subsurface_place_above{}) = pass
+  runRequest _ (Request_wl_subsurface_place_below{}) = pass
+  runRequest _ (Request_wl_subsurface_set_sync{}) = pass
+  runRequest _ (Request_wl_subsurface_set_desync{}) = pass
 
 instance Interface' Wl_subsurface Server
 
@@ -763,8 +763,8 @@ instance Interface' Wl_subsurface Server
 instance Interface' Wl_fixes Client where
   type Event Wl_fixes = Event_wl_fixes
   type Request Wl_fixes = Request_wl_fixes
-  runRequest _ (Request_wl_fixes_destroy' Request_wl_fixes_destroy{}) = pass
-  runRequest _ (Request_wl_fixes_destroy_registry' Request_wl_fixes_destroy_registry{}) = pass
+  runRequest _ (Request_wl_fixes_destroy{}) = pass
+  runRequest _ (Request_wl_fixes_destroy_registry{}) = pass
 
 instance Interface' Wl_fixes Server
 
@@ -788,7 +788,7 @@ bindToInterface registry intName = go 1
         Just x -> do
           new_id <- newObjectId
           ver <- fromJust . Map.lookup (BS8.unpack intName) <$> readIORef env.versionTable
-          runRequest registry (Request_wl_registry_bind' Request_wl_registry_bind{name = x, id = (intName, ver, new_id)})
+          runRequest registry (Request_wl_registry_bind x(intName, ver, new_id))
           pure $ Just new_id
         Nothing -> liftIO (threadDelay $ 100 * 1000) >> go (count + 1)
 

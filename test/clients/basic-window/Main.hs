@@ -11,7 +11,6 @@ import Network.Socket (Family (AF_UNIX), SockAddr (SockAddrUnix), SocketType (St
 import Relude hiding (hFlush)
 import Saywayland
 import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
-import GHC.IO.Handle
 import Control.Concurrent.STM (newTQueue, writeTMVar)
 
 import System.Random (randomIO)
@@ -51,7 +50,7 @@ program = do
 
   display <- fromJust <$> getInterface' @Wl_display 1
   registryId :: TObjectID Wl_registry <- TObjectID <$> newObjectId
-  runRequest display $ Request_wl_display_get_registry' $ Request_wl_display_get_registry registryId
+  runRequest display $ Request_wl_display_get_registry registryId
   registry <- fromJust <$> getInterface registryId
 
   liftIO
@@ -69,25 +68,25 @@ program = do
   wl_compositor <- fromJust <$> getInterface wlCompositorId
 
   wlSurfaceId :: TObjectID Wl_surface <- TObjectID <$> newObjectId
-  runRequest wl_compositor $ Request_wl_compositor_create_surface' $ Request_wl_compositor_create_surface wlSurfaceId
+  runRequest wl_compositor $ Request_wl_compositor_create_surface wlSurfaceId
   surface <- fromJust <$> getInterface wlSurfaceId
 
   xdgWmBaseId :: TObjectID Xdg_wm_base <- TObjectID . fromJust <$> bindToInterface registry "xdg_wm_base"
   xdg_wm_base <- fromJust <$> getInterface xdgWmBaseId
 
   xdgSurfaceId :: TObjectID Xdg_surface <- TObjectID <$> newObjectId
-  runRequest xdg_wm_base $ Request_xdg_wm_base_get_xdg_surface' $ Request_xdg_wm_base_get_xdg_surface xdgSurfaceId wlSurfaceId
+  runRequest xdg_wm_base $ Request_xdg_wm_base_get_xdg_surface xdgSurfaceId wlSurfaceId
   xdg_surface <- fromJust <$> getInterface xdgSurfaceId
 
   xdgToplevelId :: TObjectID Xdg_toplevel <- TObjectID <$> newObjectId
-  runRequest xdg_surface $ Request_xdg_surface_get_toplevel' $ Request_xdg_surface_get_toplevel xdgToplevelId
+  runRequest xdg_surface $ Request_xdg_surface_get_toplevel xdgToplevelId
 
   configured <- liftIO newEmptyTMVarIO
   modifyIORef env.eventHandlers $ (:) $ EventHandler $ \_oid -> \case
-    (Event_xdg_surface_configure' _) -> do
+    (Event_xdg_surface_configure _) -> do
       atomically $ writeTMVar configured ()
     _ -> pass
-  runRequest surface $ Request_wl_surface_commit' Request_wl_surface_commit
+  runRequest surface Request_wl_surface_commit
   liftIO . atomically $ takeTMVar configured
   bufferWidth <- liftIO $ newIORef 512
   bufferHeight <- liftIO $ newIORef 512
@@ -102,25 +101,17 @@ program = do
         let frameSize = bw * bh * colorChannels
         liftIO . setFdSize fileDescriptor $ fromIntegral frameSize
         wlShmPoolId :: TObjectID Wl_shm_pool <- TObjectID <$> newObjectId
-        runRequest wl_shm $ Request_wl_shm_create_pool' Request_wl_shm_create_pool{id = wlShmPoolId, fd = fileDescriptor, size = frameSize}
+        runRequest wl_shm $ Request_wl_shm_create_pool wlShmPoolId fileDescriptor frameSize
         wl_shm_pool <- fromJust <$> getInterface wlShmPoolId
         wlBufferId :: TObjectID Wl_buffer <- TObjectID <$> newObjectId
-        runRequest wl_shm_pool
-          $ Request_wl_shm_pool_create_buffer' Request_wl_shm_pool_create_buffer
-            { id = wlBufferId
-            , offset = 0
-            , width = bw
-            , height = bh
-            , stride = bw * colorChannels
-            , format = Enum_wl_shm_format_argb8888
-            }
+        runRequest wl_shm_pool $ Request_wl_shm_pool_create_buffer wlBufferId 0 bw bh (bw * colorChannels) Enum_wl_shm_format_argb8888
         buffer <- fromJust <$> getInterface wlBufferId
         fileHandle <- liftIO $ fdToHandle fileDescriptor
 
         liftIO $ hPut fileHandle $ image bw bh
         liftIO $ hFlush fileHandle
-        runRequest surface $ Request_wl_surface_attach' Request_wl_surface_attach{buffer = wlBufferId, x = 0, y = 0}
-        runRequest surface $ Request_wl_surface_commit' Request_wl_surface_commit
+        runRequest surface $ Request_wl_surface_attach wlBufferId 0 0
+        runRequest surface Request_wl_surface_commit
         -- Wait for exit
         takeMVar running
 

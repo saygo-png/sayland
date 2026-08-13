@@ -55,7 +55,7 @@ program = do
 
   display <- fromJust <$> getInterface' @Wl_display 1
   registryId <- TObjectID <$> newObjectId
-  runRequest display $ Request_wl_display_get_registry' $ Request_wl_display_get_registry registryId
+  runRequest display $ Request_wl_display_get_registry registryId
   registry <- fromJust <$> getInterface registryId
 
   liftIO
@@ -76,30 +76,24 @@ program = do
   zwlr_layer_shell_V1 :: Zwlr_layer_shell_v1 <- fromJust <$> getInterface zwlrLayerShellV1Id
 
   modifyIORef env.eventHandlers $ (:) $ EventHandler $ \_oid -> \case
-    (Event_zwlr_layer_surface_v1_configure' (Event_zwlr_layer_surface_v1_configure receivedSerial _ _)) -> do
+    (Event_zwlr_layer_surface_v1_configure receivedSerial _ _) -> do
       atomically $ putTMVar serial receivedSerial
     _ -> pass
 
   wlSurfaceId <- TObjectID <$> newObjectId
-  runRequest wl_compositor $ Request_wl_compositor_create_surface' $ Request_wl_compositor_create_surface wlSurfaceId
+  runRequest wl_compositor $ Request_wl_compositor_create_surface wlSurfaceId
   surface <- fromJust <$> getInterface wlSurfaceId
 
   layerSurfaceId <- TObjectID <$> newObjectId
-  runRequest zwlr_layer_shell_V1
-    $ Request_zwlr_layer_shell_v1_get_layer_surface' Request_zwlr_layer_shell_v1_get_layer_surface
-      { id = layerSurfaceId
-      , surface = wlSurfaceId
-      , output = 0
-      , layer = Enum_zwlr_layer_shell_v1_layer_background
-      , namespace = "wallpaper"
-      }
+  runRequest zwlr_layer_shell_V1 $ Request_zwlr_layer_shell_v1_get_layer_surface layerSurfaceId wlSurfaceId 0 Enum_zwlr_layer_shell_v1_layer_background "wallpaper"
+      
 
   zwlrLayerSurfaceV1 <- fromJust <$> getInterface layerSurfaceId
-  runRequest zwlrLayerSurfaceV1 $ Request_zwlr_layer_surface_v1_set_size' Request_zwlr_layer_surface_v1_set_size{width = fromIntegral bufferWidth, height = fromIntegral bufferHeight}
-  runRequest zwlrLayerSurfaceV1 $ Request_zwlr_layer_surface_v1_set_exclusive_zone' Request_zwlr_layer_surface_v1_set_exclusive_zone{zone = -1}
+  runRequest zwlrLayerSurfaceV1 $ Request_zwlr_layer_surface_v1_set_size (fromIntegral bufferWidth) (fromIntegral bufferHeight)
+  runRequest zwlrLayerSurfaceV1 $ Request_zwlr_layer_surface_v1_set_exclusive_zone $ -1
 
-  runRequest surface $ Request_wl_surface_commit' Request_wl_surface_commit
-  atomically (takeTMVar serial) >>= runRequest zwlrLayerSurfaceV1 . Request_zwlr_layer_surface_v1_ack_configure' . Request_zwlr_layer_surface_v1_ack_configure
+  runRequest surface Request_wl_surface_commit
+  atomically (takeTMVar serial) >>= runRequest zwlrLayerSurfaceV1 . Request_zwlr_layer_surface_v1_ack_configure
 
   let makeSharedMemoryObject = shmOpen poolName (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
       useSharedMemoryObject fileDescriptor =
@@ -107,24 +101,17 @@ program = do
           let frameSize = bufferWidth * bufferHeight * colorChannels
           liftIO . setFdSize fileDescriptor $ fromIntegral frameSize
           wlShmPoolId <- TObjectID <$> newObjectId
-          runRequest wl_shm $ Request_wl_shm_create_pool' Request_wl_shm_create_pool{id = wlShmPoolId, fd = fileDescriptor, size = frameSize}
+          runRequest wl_shm $ Request_wl_shm_create_pool wlShmPoolId fileDescriptor frameSize
           wl_shm_pool <- fromJust <$> getInterface wlShmPoolId
           wlBufferId <- TObjectID <$> newObjectId
-          runRequest wl_shm_pool
-            $ Request_wl_shm_pool_create_buffer' Request_wl_shm_pool_create_buffer
-              { id = wlBufferId
-              , offset = 0
-              , width = bufferWidth
-              , height = bufferHeight
-              , stride = bufferWidth * colorChannels
-              , format = colorFormat
-              }
+          runRequest wl_shm_pool $ Request_wl_shm_pool_create_buffer wlBufferId 0 bufferWidth bufferHeight (bufferWidth * colorChannels) colorFormat
+              
 
           fileHandle <- liftIO $ fdToHandle fileDescriptor
 
           liftIO $ hPut fileHandle image
-          runRequest surface $ Request_wl_surface_attach' Request_wl_surface_attach{buffer = wlBufferId, x = 0, y = 0}
-          runRequest surface $ Request_wl_surface_commit' Request_wl_surface_commit
+          runRequest surface $ Request_wl_surface_attach wlBufferId 0 0
+          runRequest surface Request_wl_surface_commit
 
           -- Wait for exit
           takeMVar running
