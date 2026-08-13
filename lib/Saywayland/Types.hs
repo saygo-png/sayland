@@ -165,8 +165,8 @@ newObject (TObjectID intId) int =
     ClientServerEnv _ env -> liftIO (modifyIORef env.objects (Map.insert intId $ Interface int)) $> int
 
 -- | function that removes interface behind the provided id from the object map.
-dropObject :: TObjectID a -> Wayland p ()
-dropObject (TObjectID i) =
+dropObject' :: TObjectID a -> Wayland p ()
+dropObject' (TObjectID i) =
   ask >>= \case
     ClientEnv env -> modifyIORef env.objects $ Map.delete i
     ClientServerEnv _ env -> modifyIORef env.objects $ Map.delete i
