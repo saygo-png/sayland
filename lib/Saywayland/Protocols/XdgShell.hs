@@ -136,7 +136,7 @@ instance Interface' Xdg_surface Server where
   type Event Xdg_surface = Event_xdg_surface
   type Request Xdg_surface = Request_xdg_surface
   runRequest xdg_surface Request_xdg_surface_destroy = do
-    ClientServerEnv _ env <- ask
+    ClientServerEnv _ env _ <- ask
     readIORef xdg_surface.xdgRole >>= \case
       Nothing -> delete
       Just x -> do

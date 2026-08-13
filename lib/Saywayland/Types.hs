@@ -49,6 +49,7 @@ wlFormatter (x:xs) = toUpper x:xs
 
 type ObjectID = Word32
 
+type TObjectID :: forall k. k -> Type
 type role TObjectID phantom
 newtype TObjectID a = TObjectID ObjectID deriving newtype (Show, Eq, Ord, Num)
 
@@ -80,9 +81,11 @@ data EventHandler p where
 -- | Wayland Environment
 type role WaylandEnv nominal
 
+type ClientID = Int
+
 data WaylandEnv (p :: Perspective) where
-  ClientEnv :: ClientEnvironment Client -> WaylandEnv 'Client
-  ClientServerEnv :: ServerEnvironment -> ClientEnvironment Server -> WaylandEnv 'Server
+  ClientEnv       :: ClientEnvironment Client -> WaylandEnv 'Client
+  ClientServerEnv :: ServerEnvironment -> ClientEnvironment Server -> ClientID -> WaylandEnv 'Server
 
 data ServerEnvironment = ServerEnvironment
   { 
@@ -90,9 +93,9 @@ data ServerEnvironment = ServerEnvironment
     socket        :: Socket
   , socketPath    :: FilePath
   -- | currently connected clients
-  , clients       :: TVar (Map Int (ClientEnvironment Server))
+  , clients       :: TVar (Map ClientID (ClientEnvironment Server))
   -- | client counter, for identifying individual clients.
-  , clientSerial  :: TVar Int
+  , clientSerial  :: TVar ClientID
   -- | interfaces supported by the server
   , interfaceTable:: IORef (Map String (IO (Interface Server)))
   -- | versions of interfaces
@@ -159,34 +162,29 @@ newObjectId = do
 
 -- | function that inserts the given interface to the objects map with provided id as key.
 newObject :: (Interface' i p) => TObjectID i -> i -> Wayland p i
-newObject (TObjectID intId) int =
-  ask >>= \case
-    ClientEnv env -> liftIO (modifyIORef env.objects (Map.insert intId $ Interface int)) $> int
-    ClientServerEnv _ env -> liftIO (modifyIORef env.objects (Map.insert intId $ Interface int)) $> int
+newObject (TObjectID intId) int = do
+  objs <- (.objects) <$> getClientEnv
+  modifyIORef objs $ Map.insert intId $ Interface int
+  pure int
 
 -- | function that removes interface behind the provided id from the object map.
 dropObject' :: TObjectID a -> Wayland p ()
-dropObject' (TObjectID i) =
-  ask >>= \case
-    ClientEnv env -> modifyIORef env.objects $ Map.delete i
-    ClientServerEnv _ env -> modifyIORef env.objects $ Map.delete i
+dropObject' (TObjectID i) = getClientEnv >>= (`modifyIORef` Map.delete i) . (.objects)
 
 {- | Convenience function for sending a Wayland message.
 See 'mkMessage'.
 -}
 sendMessageWithFds :: [Fd] -> Word32 -> Word16 -> BSL.ByteString -> Wayland p ()
-sendMessageWithFds fds objectID opcode messageBody =
-  ask >>= \case
-    ClientEnv env -> liftIO $ sendManyWithFds env.socket msg fds
-    ClientServerEnv _ env -> liftIO $ sendManyWithFds env.socket msg fds
+sendMessageWithFds fds objectID opcode messageBody = do
+  socket' <- (.socket) <$> getClientEnv
+  liftIO $ sendManyWithFds socket' msg fds
   where
     msg = [BS.toStrict $ mkMessage objectID opcode messageBody]
 
 sendMessage :: Word32 -> Word16 -> BSL.ByteString -> Wayland p ()
-sendMessage objectID opcode messageBody =
-  ask >>= \case
-    ClientEnv env -> liftIO . sendAll env.socket $ msg
-    ClientServerEnv _ env -> liftIO . sendAll env.socket $ msg
+sendMessage objectID opcode messageBody = do
+  socket' <- (.socket) <$> getClientEnv
+  liftIO $ sendAll socket' msg
   where
     msg = mkMessage objectID opcode messageBody
 
@@ -197,9 +195,7 @@ sendMessage' :: (WaylandEvent e) => e -> TObjectID i -> Wayland p ()
 sendMessage' e (TObjectID o) = do
   colorize <- liftIO getColorize
   liftIO (traceIO $ colorize Vivid Magenta $ showEvent o e)
-  q <- ask <&> \case
-    ClientEnv env -> env.fdQueue
-    ClientServerEnv _ env -> env.fdQueue
+  q <- (.fdQueue) <$> getClientEnv
   let dat = AdditionalParserData q
   sendMessage o (getOpcode e) $ runPut $ putEvent dat e
 
@@ -208,9 +204,7 @@ sendMessageWithFds' :: (WaylandEvent e) => e -> [Fd] -> TObjectID i -> Wayland p
 sendMessageWithFds' e fd (TObjectID o) = do
   colorize <- liftIO getColorize
   liftIO (traceIO $ colorize Vivid Magenta $ showEvent o e)
-  q <- ask <&> \case
-    ClientEnv env -> env.fdQueue
-    ClientServerEnv _ env -> env.fdQueue
+  q <- (.fdQueue) <$> getClientEnv
   let dat = AdditionalParserData q
   sendMessageWithFds fd o (getOpcode e) $ runPut $ putEvent dat e
 
@@ -238,7 +232,7 @@ getColorize = do
 getClientEnv :: Wayland p (ClientEnvironment p)
 getClientEnv = ask <&> \case
   ClientEnv env -> env
-  ClientServerEnv _ env -> env
+  ClientServerEnv _ env _ -> env
 -- | helper function for getting an object from a global
 interfaceFromName :: Word32 -> Wayland p (Maybe BS.ByteString)
 interfaceFromName n = do

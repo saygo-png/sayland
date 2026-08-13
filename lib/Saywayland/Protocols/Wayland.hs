@@ -11,17 +11,15 @@ module Saywayland.Protocols.Wayland where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (try)
-import Control.Lens (makeFieldsId, (.~), transform)
+import Control.Lens (makeFieldsId, (.~))
 import Data.Bimap qualified as BM
-import Data.Binary.Put (runPut)
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
-import Data.Char (toUpper)
 import Data.Map qualified as Map
 import Data.Maybe (fromJust)
 import Data.Sequence qualified as Seq
 import Debug.Trace (traceIO)
-import Foreign (Ptr, nullPtr, withForeignPtr)
+import Foreign (Ptr, nullPtr)
 import MMAP (mapShared, mkMmapFlags, mmap, munmap, protRead, protWrite)
 import Protocol
 import Relude hiding (get)
@@ -253,10 +251,9 @@ $(generateTables False wlFormatter "protocols/wayland.xml")
 
 -- | function that removes interface behind the provided id from the object map AND, if running on server, sends the delete_id event.
 dropObject :: TObjectID a -> Wayland p ()
-dropObject (TObjectID i) =
-  ask >>= \case
+dropObject (TObjectID i) = ask >>= \case
     ClientEnv env -> modifyIORef env.objects $ Map.delete i
-    ClientServerEnv _ env -> do
+    ClientServerEnv _ env _ -> do
       modifyIORef env.objects $ Map.delete i
       Just wldisplay <- getInterface' @Wl_display 1
       runEvent wldisplay $ Event_wl_display_delete_id i
@@ -293,7 +290,7 @@ instance Interface' Wl_display Server where
   type Event Wl_display = Event_wl_display
   type Request Wl_display = Request_wl_display
   runEvent display event@(Event_wl_display_delete_id did) = do
-    ClientServerEnv _ env <- ask
+    ClientServerEnv _ env _ <- ask
     liftIO $ modifyIORef env.objects (Map.delete did)
     sendMessage' event display.wlid
   runEvent display event@(Event_wl_display_error object_id code message) = do
@@ -307,7 +304,7 @@ instance Interface' Wl_display Server where
     runEvent callbackObject event
   runRequest _display (Request_wl_display_get_registry registry) = do
     registryObject <- newObject registry Wl_registry{wlid = registry}
-    ClientServerEnv _ env <- ask
+    ClientServerEnv _ env _ <- ask
     versions <- zip [0 ..] . Map.toList <$> readIORef env.versionTable
     forM_ versions $ \(name, (interface', version)) -> do
       let interface = encodeUtf8 interface'
@@ -371,15 +368,15 @@ instance Interface' Wl_registry Server where
   type Event Wl_registry = Event_wl_registry
   type Request Wl_registry = Request_wl_registry
   runEvent registry event@(Event_wl_registry_global name interface version) = do
-    ClientServerEnv _ env <- ask
+    ClientServerEnv _ env _ <- ask
     modifyIORef env.globals $ BM.insert interface name
     sendMessage' event registry.wlid
   runEvent registry event@(Event_wl_registry_global_remove name) = do
-    ClientServerEnv _ env <- ask
+    ClientServerEnv _ env _ <- ask
     modifyIORef env.globals $ BM.deleteR name
     sendMessage' event registry.wlid
   runRequest _registry (Request_wl_registry_bind name (interface, version, newId)) = do
-    ClientServerEnv _ env <- ask
+    ClientServerEnv _ env _ <- ask
     interfaceFromName name >>= \case
       Just x -> do
         y' <- fromJust . Map.lookup (BS8.unpack x) <$> readIORef env.interfaceTable
@@ -435,7 +432,7 @@ instance Interface' Wl_shm_pool Server where
   type Request Wl_shm_pool = Request_wl_shm_pool
 
   runRequest shm_pool (Request_wl_shm_pool_create_buffer bufId offset' width' height' stride' format') = do
-    ClientServerEnv _ env <- ask
+    ClientServerEnv _ env _ <- ask
     let buffer = Wl_buffer{wlid = bufId, offset = offset', width = width', height = height', stride = stride', format = format', pool = shm_pool.wlid}
     void $ newObject bufId buffer
   runRequest shm_pool request@Request_wl_shm_pool_destroy = do
@@ -484,7 +481,7 @@ instance Interface' Wl_shm Server where
   type Event Wl_shm = Event_wl_shm
   type Request Wl_shm = Request_wl_shm
   runRequest _shm (Request_wl_shm_create_pool poolId fd' size') = do
-    ClientServerEnv _ env <- ask
+    ClientServerEnv _ env _ <- ask
     result <-
       liftIO
         $ try
@@ -502,7 +499,7 @@ instance Interface' Wl_shm Server where
     ptrRef <- newIORef ptr'
     void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd', size = sizeRef, ptr = ptrRef}
   runRequest shm Request_wl_shm_release = do
-    ClientServerEnv _ env <- ask
+    ClientServerEnv _ env _ <- ask
     dropObject shm.wlid
   runEvent shm event@(Event_wl_shm_format format) = do
     sendMessage' event shm.wlid

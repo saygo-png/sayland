@@ -53,7 +53,7 @@ handleIncomingClient env socket' = do
     modifyTVar env.clientSerial (+ 1)
     readTVar env.clientSerial
   atomically . modifyTVar env.clients $ Map.insert serial' clientenv
-  void . liftIO . async $ runReaderT (clientLoop socket') $ ClientServerEnv env clientenv
+  void . liftIO . async $ runReaderT (clientLoop socket') $ ClientServerEnv env clientenv serial'
 
 getHeader :: Get (Word32, Word16, Word16)
 getHeader = (,,) <$> getWord32le <*> getWord16le <*> getWord16le
@@ -78,9 +78,7 @@ clientLoop = clientLoop' ""
 
 clientLoop' :: BS.ByteString -> Socket -> Wayland p ()
 clientLoop' bytes' sock = do
-  queue <- ask <&> \case
-    ClientServerEnv _ env -> env.fdQueue
-    ClientEnv env -> env.fdQueue
+  queue <- (.fdQueue) <$> getClientEnv
   (_, bytes'', cmsgs, _flags) <- liftIO $ recvMsg sock 8 4096 mempty
   let newFds = concatMap (decodeFds . cmsgData) $ filter (\x -> cmsgId x == CmsgIdFds) cmsgs
   liftIO . atomically $ mapM_ (writeTQueue queue) newFds
@@ -117,7 +115,7 @@ handleMessage oid opcode msg = do
       case Map.lookup oid objects of
         Just (Interface x) -> dispatchMessage x oid opcode msg
         Nothing -> liftIO $ traceIO $ "invalid object reference with id: " <> show oid
-    ClientServerEnv _ env -> do
+    ClientServerEnv _ env _ -> do
       objects <- readIORef env.objects
       case Map.lookup oid objects of
         Just (Interface x) -> dispatchMessage x oid opcode msg
@@ -141,7 +139,7 @@ instance Dispatch Client where
 
 instance Dispatch Server where
   dispatchMessage x oid opcode msg = do
-    ClientServerEnv _ env <- ask
+    ClientServerEnv _ env _ <- ask
     getter <- liftIO $ getEvent opcode $ AdditionalParserData env.fdQueue
     case runGetOrFail getter (toLazy msg) of
       Left (_, _, err) -> fail err
