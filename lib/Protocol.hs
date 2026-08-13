@@ -333,11 +333,11 @@ mkPut formatter interfaceName prefix prefix2 events =
     nestPutters (x : xs) = InfixE (Just $ nestPutters xs) (VarE '(>>)) (Just x)
     mkClause :: (Word16, Element) -> Q Clause
     mkClause (_opcode, element) =
-      mapM (\(a, b) -> putForType b <&> (`AppE` (VarE $ mkName $ fromJust $ findAttr (qname "name") a)) . (`AppE` VarE adata)) (zip args argTypes)
+      mapM (\(a, b) -> putForType b <&> (`AppE` (VarE $ mkName $ "arg_" <> fromJust (findAttr (qname "name") a))) . (`AppE` VarE adata)) (zip args argTypes)
         <&> \x ->
           ( Clause
               [ VarP adata
-              , ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [] $ fmap VarP argNames
+              , ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [] $ fmap (VarP . mkName . ("arg_" <>)) argNames
               ]
               $ NormalB
               $ nestPutters (reverse x)
@@ -346,7 +346,7 @@ mkPut formatter interfaceName prefix prefix2 events =
       where
         args = findChildren (qname "arg") element
         argTypes = fmap (argType formatter interfaceName) args
-        argNames = mkName . fromJust . findAttr (qname "name") <$> args
+        argNames = fromJust . findAttr (qname "name") <$> args
         eventName = fromJust $ findAttr (qname "name") element
 
 mkParser :: (String -> String) -> String -> String -> String -> [(Word16, Element)] -> Q [Dec]
