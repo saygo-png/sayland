@@ -43,6 +43,7 @@ data ContentUpdate = ContentUpdate
   , bufferTransform :: Maybe Enum_wl_output_transform
   , bufferRelease   :: Maybe (TObjectID Wl_callback)
   , subsurfaces     :: Maybe SubsurfaceStack
+  , cuSynchronized  :: Bool
   }
 
 data SurfaceRole where SurfaceRole :: Typeable a => a -> SurfaceRole
@@ -60,7 +61,8 @@ emptyContentUpdate = ContentUpdate
   , bufferScale   = Nothing
   , bufferTransform = Nothing
   , bufferRelease   = Nothing
-  , subsurfaces   = Nothing
+  , subsurfaces     = Nothing
+  , cuSynchronized  = True
   }
 
 -- Interfaces {{{
@@ -630,44 +632,44 @@ instance Interface' Wl_shell_surface Server
 instance Interface' Wl_surface Client where
   type Event Wl_surface = Event_wl_surface
   type Request Wl_surface = Request_wl_surface
-  runRequest surface request@(Request_wl_surface_destroy{}) = do
-    dropObject surface.wlid
-    sendMessage' request surface.wlid
-  runRequest surface request@(Request_wl_surface_attach bufferId x y) = do
-    atomicModifyIORef surface.pendingState $ \s -> (s {buffer = Just bufferId, offset = Just (x,y)},())
-    sendMessage' request surface.wlid
-  runRequest surface request@(Request_wl_surface_damage x y w h) = do
-    liftIO $ traceIO "New clients should not use this request (wl_surface.damage). Instead damage can be posted with wl_surface.damage_buffer which uses buffer coordinates instead of surface coordinates."
-    atomicModifyIORef surface.pendingState $ \s -> (s {damage = Rectangle{position=(x,y), size=(w,h)}:s.damage},())
-    sendMessage' request surface.wlid
-  runRequest surface request@(Request_wl_surface_frame cb) = do
-    atomicModifyIORef surface.pendingState $ \s -> (s {frameCallbacks = cb:s.frameCallbacks},())
-    sendMessage' request surface.wlid
-  runRequest surface request@(Request_wl_surface_set_opaque_region region) = do
-    atomicModifyIORef surface.pendingState $ \s -> (s {opaqueRegion = Just region},())
-    sendMessage' request surface.wlid
-  runRequest surface request@(Request_wl_surface_set_input_region region) = do
-    atomicModifyIORef surface.pendingState $ \s -> (s {inputRegion = Just region},())
-    sendMessage' request surface.wlid
-  runRequest surface request@(Request_wl_surface_set_buffer_transform transform) = do
-    atomicModifyIORef surface.pendingState $ \s -> (s {bufferTransform = Just transform},())
-    sendMessage' request surface.wlid
-  runRequest surface request@(Request_wl_surface_set_buffer_scale scale) = do
-    atomicModifyIORef surface.pendingState $ \s -> (s {bufferScale = Just scale},())
-    sendMessage' request surface.wlid
-  runRequest surface request@(Request_wl_surface_damage_buffer x y w h) = do
-    atomicModifyIORef surface.pendingState $ \s -> (s {damageBuffer = Rectangle{position=(x,y), size=(w,h)}:s.damageBuffer},())
-    sendMessage' request surface.wlid
-  runRequest surface request@(Request_wl_surface_offset x y) = do
-    atomicModifyIORef surface.pendingState $ \s -> ((s :: ContentUpdate) {offset = Just (x,y)},())
-    sendMessage' request surface.wlid
-  runRequest surface request@(Request_wl_surface_get_release release) = do
-    atomicModifyIORef surface.pendingState $ \s -> (s{bufferRelease = Just release},())
-    sendMessage' request surface.wlid
-  runRequest surface request@Request_wl_surface_commit = do
-    cu <- liftIO $ atomicSwapIORef surface.pendingState emptyContentUpdate
-    atomicModifyIORef surface.cuQueue $ (,()) . (cu Seq.<|)
-    sendMessage' request surface.wlid
+  runRequest surface' request@(Request_wl_surface_destroy{}) = do
+    dropObject surface'.wlid
+    sendMessage' request surface'.wlid
+  runRequest surface' request@(Request_wl_surface_attach bufferId x y) = do
+    atomicModifyIORef surface'.pendingState $ \s -> (s {buffer = Just bufferId, offset = Just (x,y)},())
+    sendMessage' request surface'.wlid
+  runRequest surface' request@(Request_wl_surface_damage x y w h) = do
+    liftIO $ traceIO "New clients should not use this request (wl_surface.damage). Instead damage can be posted with wl_surface.damage_buffer which uses buffer coordinates instead of surface' coordinates."
+    atomicModifyIORef surface'.pendingState $ \s -> (s {damage = Rectangle{position=(x,y), size=(w,h)}:s.damage},())
+    sendMessage' request surface'.wlid
+  runRequest surface' request@(Request_wl_surface_frame cb) = do
+    atomicModifyIORef surface'.pendingState $ \s -> (s {frameCallbacks = cb:s.frameCallbacks},())
+    sendMessage' request surface'.wlid
+  runRequest surface' request@(Request_wl_surface_set_opaque_region region) = do
+    atomicModifyIORef surface'.pendingState $ \s -> (s {opaqueRegion = Just region},())
+    sendMessage' request surface'.wlid
+  runRequest surface' request@(Request_wl_surface_set_input_region region) = do
+    atomicModifyIORef surface'.pendingState $ \s -> (s {inputRegion = Just region},())
+    sendMessage' request surface'.wlid
+  runRequest surface' request@(Request_wl_surface_set_buffer_transform transform) = do
+    atomicModifyIORef surface'.pendingState $ \s -> (s {bufferTransform = Just transform},())
+    sendMessage' request surface'.wlid
+  runRequest surface' request@(Request_wl_surface_set_buffer_scale scale) = do
+    atomicModifyIORef surface'.pendingState $ \s -> (s {bufferScale = Just scale},())
+    sendMessage' request surface'.wlid
+  runRequest surface' request@(Request_wl_surface_damage_buffer x y w h) = do
+    atomicModifyIORef surface'.pendingState $ \s -> (s {damageBuffer = Rectangle{position=(x,y), size=(w,h)}:s.damageBuffer},())
+    sendMessage' request surface'.wlid
+  runRequest surface' request@(Request_wl_surface_offset x y) = do
+    atomicModifyIORef surface'.pendingState $ \s -> ((s :: ContentUpdate) {offset = Just (x,y)},())
+    sendMessage' request surface'.wlid
+  runRequest surface' request@(Request_wl_surface_get_release release) = do
+    atomicModifyIORef surface'.pendingState $ \s -> (s{bufferRelease = Just release},())
+    sendMessage' request surface'.wlid
+  runRequest surface' request@Request_wl_surface_commit = do
+    cu <- liftIO $ atomicSwapIORef surface'.pendingState emptyContentUpdate
+    atomicModifyIORef surface'.cuQueue $ (,()) . (cu Seq.<|)
+    sendMessage' request surface'.wlid
   runEvent _ (Event_wl_surface_enter _) = pass
   runEvent _ (Event_wl_surface_leave _) = pass
   runEvent _ (Event_wl_surface_preferred_buffer_scale _) = pass
@@ -699,7 +701,10 @@ instance Interface' Wl_surface Server where
     atomicModifyIORef surface.pendingState $ \s -> ((s :: ContentUpdate) {bufferRelease = Just release}, ())
   runRequest surface Request_wl_surface_commit = liftIO $ do
     cu <- atomicSwapIORef surface.pendingState emptyContentUpdate
-    atomicModifyIORef' surface.cuQueue $ (,()) . (cu Seq.<|)
+    sync <- readIORef surface.role >>= \x -> case cast x of
+      Just (Wl_subsurface _ _ _ _ syncref) -> readIORef syncref
+      _ -> pure True
+    atomicModifyIORef' surface.cuQueue $ (,()) . (cu {cuSynchronized = sync} Seq.<|)
   runEvent _surface (Event_wl_surface_enter _) = pass
   runEvent _surface (Event_wl_surface_leave _) = pass
   runEvent _surface (Event_wl_surface_preferred_buffer_scale _) = pass
