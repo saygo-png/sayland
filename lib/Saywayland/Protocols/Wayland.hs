@@ -26,6 +26,7 @@ import Relude hiding (get)
 import Saywayland.Types
 import System.Posix (Fd, setFdSize)
 import GHC.IORef (atomicSwapIORef)
+import Data.Data (cast)
 
 
 $(loadProtocolFileEnums False "protocols/wayland.xml")
@@ -44,7 +45,7 @@ data ContentUpdate = ContentUpdate
   , subsurfaces     :: Maybe SubsurfaceStack
   }
 
-data SurfaceRole where SurfaceRole :: a -> SurfaceRole
+data SurfaceRole where SurfaceRole :: Typeable a => a -> SurfaceRole
 
 -- used both as a template for content updates, and to indicate no change.
 emptyContentUpdate :: ContentUpdate
@@ -818,9 +819,19 @@ instance Interface' Wl_subcompositor Client where
   runRequest subcompositor request@Request_wl_subcompositor_destroy = do
     dropObject subcompositor.wlid
     sendMessage' request subcompositor.wlid
-  runRequest _ (Request_wl_subcompositor_get_subsurface subsurface surface' parent') = do
-    obj <- (wlid .~ subsurface) . (surface .~ surface') . (parent .~ parent') <$> (defM :: Wayland Client Wl_subsurface)
-    void $ newObject subsurface obj 
+  runRequest subcompositor request@(Request_wl_subcompositor_get_subsurface subsurface surface' parent') = do
+    surfaceObj' <- getInterface surface'
+    case surfaceObj' of
+      Nothing -> error "wl_subcompositor: bad_surface"
+      Just surfaceObj -> do
+        SurfaceRole role' <- readIORef surfaceObj.role
+        case cast role' of
+          Just () -> do
+            obj <- (wlid .~ subsurface) . (surface .~ surface') . (parent .~ parent') <$> (defM :: Wayland Client Wl_subsurface)
+            void $ newObject subsurface obj 
+            writeIORef surfaceObj.role $ SurfaceRole subsurface
+            sendMessage' request subcompositor.wlid
+          _ -> error "surface already has a role assigned"
   runEvent _ _ = pass
 
 instance Interface' Wl_subcompositor Server where
@@ -828,7 +839,18 @@ instance Interface' Wl_subcompositor Server where
   type Request Wl_subcompositor = Request_wl_subcompositor
   runEvent _ _ = pass
   runRequest subcompositor Request_wl_subcompositor_destroy = dropObject subcompositor.wlid
-  runRequest _subcompositor (Request_wl_subcompositor_get_subsurface subsurface surface' parent') = do
+  runRequest subcompositor (Request_wl_subcompositor_get_subsurface subsurface surface' parent') = do
+    surfaceObj' <- getInterface surface'
+    case surfaceObj' of
+      Nothing -> sendError subcompositor.wlid 0 "bad_surface"
+      Just surfaceObj -> do
+        SurfaceRole role' <- readIORef surfaceObj.role
+        case cast role' of
+          Just () -> do
+            obj <- (wlid .~ subsurface) . (surface .~ surface') . (parent .~ parent') <$> (defM :: Wayland Server Wl_subsurface)
+            void $ newObject subsurface obj 
+            writeIORef surfaceObj.role $ SurfaceRole subsurface
+          _ -> sendError subcompositor.wlid 0 "bad_surface"
     obj <- (wlid .~ subsurface) . (surface .~ surface') . (parent .~ parent') <$> (defM :: Wayland Server Wl_subsurface)
     void $ newObject subsurface obj
 
@@ -836,25 +858,26 @@ instance Interface' Wl_subcompositor Server where
 
 -- Wl_subsurface {{{
 
-{-
-insertSibling :: TObjectID Wl_surface -> TObjectID Wl_surface -> Bool -> SurfaceState -> (SurfaceState, Bool)
-insertSibling what relative_to isabove state'@SurfaceState{sSubsurfaces = SubsurfaceStack{below, above}} = (state'{sSubsurfaces=SubsurfaceStack{below=below',above=above'}},ab || bb)
-  where
-    (below', bb) = insertSibling' below
-    (above', ab) = insertSibling' above
-    insertSibling' :: Seq.Seq (TObjectID Wl_surface) -> (Seq.Seq (TObjectID Wl_surface), Bool)
-    insertSibling' seq' = case i of
-      Just x -> ((Seq.take x' seq' Seq.:|> what) <> Seq.drop x' seq', True)
-        where x' = bool x (x + 1) isabove
-      Nothing-> (seq', False)
-      where
-        i = Seq.findIndexL (== relative_to) seq'
--}
-
 instance Interface' Wl_subsurface Client where
   type Event Wl_subsurface = Event_wl_subsurface
   type Request Wl_subsurface = Request_wl_subsurface
   runRequest subsurface request@Request_wl_subsurface_destroy = do
+    surfaceObj' <- getInterface subsurface.surface
+    case surfaceObj' of
+      Just surfaceObj -> do
+        writeIORef surfaceObj.role $ SurfaceRole ()
+      Nothing -> pass
+    parentObj' <- getInterface subsurface.parent
+    case parentObj' of
+      Just parentObj -> do
+        writeIORef parentObj.role $ SurfaceRole ()
+        modifyIORef parentObj.state $ \state' -> state'
+          { sSubsurfaces = state'.sSubsurfaces {
+              above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
+            , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
+            }
+          }
+      Nothing -> pass
     dropObject subsurface.wlid
     sendMessage' request subsurface.wlid
   runRequest subsurface request@(Request_wl_subsurface_set_position x y) = do
@@ -897,12 +920,29 @@ instance Interface' Wl_subsurface Client where
 instance Interface' Wl_subsurface Server where
   type Event Wl_subsurface = Event_wl_subsurface
   type Request Wl_subsurface = Request_wl_subsurface
-  runRequest subsurface Request_wl_subsurface_destroy = dropObject subsurface.wlid
+  runRequest subsurface Request_wl_subsurface_destroy = do
+    surfaceObj' <- getInterface subsurface.surface
+    case surfaceObj' of
+      Just surfaceObj -> do
+        writeIORef surfaceObj.role $ SurfaceRole ()
+      Nothing -> pass
+    parentObj' <- getInterface subsurface.parent
+    case parentObj' of
+      Just parentObj -> do
+        writeIORef parentObj.role $ SurfaceRole ()
+        modifyIORef parentObj.state $ \state' -> state'
+          { sSubsurfaces = state'.sSubsurfaces {
+              above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
+            , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
+            }
+          }
+      Nothing -> pass
+    dropObject subsurface.wlid
   runRequest subsurface (Request_wl_subsurface_set_position x y) = atomicWriteIORef subsurface.position (x,y)
   runRequest subsurface (Request_wl_subsurface_place_below sibling) = do
     parentSurface' <- getInterface subsurface.parent
     case parentSurface' of
-      Nothing -> error "invalid parent surface"
+      Nothing -> sendError subsurface.wlid 0 "invalid parent surface"
       Just parentSurface -> do
         b <- atomicModifyIORef parentSurface.state $ \s ->
           let joint = s.sSubsurfaces.below <> s.sSubsurfaces.above
@@ -914,7 +954,7 @@ instance Interface' Wl_subsurface Server where
   runRequest subsurface (Request_wl_subsurface_place_above sibling) = do
     parentSurface' <- getInterface subsurface.parent
     case parentSurface' of
-      Nothing -> error "invalid parent surface"
+      Nothing -> sendError subsurface.wlid 0 "invalid parent surface"
       Just parentSurface -> do
         b <- atomicModifyIORef parentSurface.state $ \s ->
           let joint = s.sSubsurfaces.below <> s.sSubsurfaces.above
