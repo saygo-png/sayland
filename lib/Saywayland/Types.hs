@@ -59,7 +59,7 @@ type NewID = (BS.ByteString, Word32, ObjectID)
 data Rectangle = Rectangle
   { position  :: (Int, Int)
   , size      :: (Int, Int)
-  }
+  } deriving stock (Eq, Ord)
 
 -- | HasWlid, a lens defined globally due to ID being a part of every wayland interface.
 class HasWlid s a | s -> a where
