@@ -24,7 +24,7 @@ common common-options
     -Wno-missing-import-lists -Wno-missing-kind-signatures
     -Wno-missing-local-signatures -Wno-missing-safe-haskell-mode
     -Wno-safe -Wno-unsafe -Wno-unticked-promoted-constructors
-    -Wno-partial-fields -Wno-incomplete-record-selectors -threaded
+    -Wno-incomplete-record-selectors -threaded
 
   default-extensions:
     DuplicateRecordFields
@@ -96,6 +96,7 @@ test-suite client-basic-window
     , bimap
     , containers
     , network
+    , random
     , relude
     , saywayland
     , stm
