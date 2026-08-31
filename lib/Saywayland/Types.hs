@@ -158,20 +158,20 @@ type Wayland p = ReaderT (WaylandEnv p) IO
 
 -- Utils {{{
 
--- | function that increases the counter by 1 and returns it's new value
+-- | Increase the counter by 1 and returns it's new value.
 newObjectId :: Wayland p Word32
 newObjectId = do
   ClientEnv env <- ask
   liftIO $ atomicModifyIORef' env.counter $ dup . (+) 1
 
--- | function that inserts the given interface to the objects map with provided id as key.
+-- | Insert the given interface to the objects map with provided id as key.
 newObject :: (Interface' i p) => TObjectID i -> i -> Wayland p i
 newObject (TObjectID intId) int = do
   objs <- (.objects) <$> getClientEnv
   _ <- atomicModifyIORef' objs $ dup . Map.insert intId (Interface int)
   pure int
 
--- | function that removes interface behind the provided id from the object map.
+-- | Remove interface from the object map by id.
 dropObject' :: TObjectID a -> Wayland p ()
 dropObject' (TObjectID i) = getClientEnv >>= (`modifyIORef` Map.delete i) . (.objects)
 
@@ -239,20 +239,20 @@ getClientEnv =
     ClientEnv env -> env
     ClientServerEnv _ env _ -> env
 
--- | helper function for getting an object from a global
+-- | Helper function for getting an object from a global.
 interfaceFromName :: Word32 -> Wayland p (Maybe BS.ByteString)
 interfaceFromName n = do
   env <- getClientEnv
   glob <- readIORef env.globals
   pure $ BM.lookupR n glob
 
--- | get an Interface using its id.
+-- | Get an Interface using its id.
 getInterface :: (Typeable i) => TObjectID i -> Wayland p (Maybe i)
 getInterface (TObjectID objectID) = do
   env <- getClientEnv
   (proxyInterface <=< Map.lookup objectID) <$> readIORef env.objects
 
--- | get an interface by @TypeApplication
+-- | Get an Interface by @TypeApplication
 getInterface' :: forall i p. (Typeable i) => Word32 -> Wayland p (Maybe i)
 getInterface' objectID = do
   env <- getClientEnv
