@@ -20,6 +20,7 @@ import System.Console.ANSI (Color (..), ColorIntensity (..), ConsoleLayer (..), 
 import System.Posix (Fd)
 import Control.Concurrent.STM (TQueue)
 import Data.Char (toUpper)
+import Relude.Extra (dup)
 
 -- Constants {{{
 
@@ -157,14 +158,13 @@ type Wayland p = ReaderT (WaylandEnv p) IO
 newObjectId :: Wayland p Word32
 newObjectId = do
   ClientEnv env <- ask
-  liftIO $ modifyIORef env.counter (+ 1)
-  liftIO $ readIORef env.counter
+  liftIO $ atomicModifyIORef' env.counter $ dup . (+) 1
 
 -- | function that inserts the given interface to the objects map with provided id as key.
 newObject :: (Interface' i p) => TObjectID i -> i -> Wayland p i
 newObject (TObjectID intId) int = do
   objs <- (.objects) <$> getClientEnv
-  modifyIORef objs $ Map.insert intId $ Interface int
+  _ <- atomicModifyIORef' objs $ dup . Map.insert intId (Interface int)
   pure int
 
 -- | function that removes interface behind the provided id from the object map.
