@@ -27,6 +27,7 @@ import Protocol
 import Relude hiding (get)
 import Saywayland.Types
 import System.Posix (Fd, setFdSize)
+import Relude.Extra.Tuple (dup)
 
 $(loadProtocolFileEnums False "protocols/wayland.xml")
 
@@ -292,7 +293,7 @@ dropObject (TObjectID i) =
   ask >>= \case
     ClientEnv env -> modifyIORef env.objects $ Map.delete i
     ClientServerEnv _ env _ -> do
-      modifyIORef env.objects $ Map.delete i
+      _ <- atomicModifyIORef' env.objects $ (dup . Map.delete i)
       Just wldisplay <- getInterface' @Wl_display 1
       runEvent wldisplay $ Event_wl_display_delete_id i
 
