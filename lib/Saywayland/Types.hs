@@ -171,10 +171,6 @@ newObject (TObjectID intId) int = do
   _ <- atomicModifyIORef' objs $ dup . Map.insert intId (Interface int)
   pure int
 
--- | Remove interface from the object map by id.
-dropObject' :: TObjectID a -> Wayland p ()
-dropObject' (TObjectID i) = getClientEnv >>= (`modifyIORef` Map.delete i) . (.objects)
-
 {- | Convenience function for sending a Wayland message.
 See 'mkMessage'.
 -}
