@@ -11,13 +11,14 @@ import Data.Char (toUpper)
 import Data.Map qualified as Map
 import Protocol
 import Relude
-import Saywayland.Types
 import Saywayland.Protocols.Wayland
 import Saywayland.Protocols.XdgShell
+import Saywayland.Types
 
 $(loadProtocolFileEnums False "protocols/wlr-layer-shell-unstable-v1.xml")
 
 newtype Zwlr_layer_shell_v1 = Zwlr_layer_shell_v1 {wlid :: TObjectID Zwlr_layer_shell_v1}
+
 newtype Zwlr_layer_surface_v1 = Zwlr_layer_surface_v1 {wlid :: TObjectID Zwlr_layer_surface_v1}
 
 $(concat <$> mapM makeFieldsId [''Zwlr_layer_shell_v1, ''Zwlr_layer_surface_v1])

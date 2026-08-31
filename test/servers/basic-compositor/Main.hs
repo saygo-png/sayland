@@ -32,15 +32,16 @@ main = bracket env cleanup program
           versionTable <- newIORef $ Map.fromList waylandVersionTable
           eventHandlers <- newIORef []
           clientSerial <- newTVarIO 0
-          pure ServerEnvironment
-                { socket = socket'
-                , socketPath
-                , clients
-                , interfaceTable
-                , versionTable
-                , eventHandlers
-                , clientSerial
-                }
+          pure
+            ServerEnvironment
+              { socket = socket'
+              , socketPath
+              , clients
+              , interfaceTable
+              , versionTable
+              , eventHandlers
+              , clientSerial
+              }
 
-program :: MonadIO m => ServerEnvironment -> m ()
+program :: (MonadIO m) => ServerEnvironment -> m ()
 program = listenForClients

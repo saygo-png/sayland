@@ -15,59 +15,61 @@ import Control.Lens (makeFieldsId, (.~))
 import Data.Bimap qualified as BM
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
+import Data.Data (cast)
 import Data.Map qualified as Map
 import Data.Maybe (fromJust)
 import Data.Sequence qualified as Seq
 import Debug.Trace (traceIO)
 import Foreign (Ptr, nullPtr)
+import GHC.IORef (atomicSwapIORef)
 import MMAP (mapShared, mkMmapFlags, mmap, munmap, protRead, protWrite)
 import Protocol
 import Relude hiding (get)
 import Saywayland.Types
 import System.Posix (Fd, setFdSize)
-import GHC.IORef (atomicSwapIORef)
-import Data.Data (cast)
-
 
 $(loadProtocolFileEnums False "protocols/wayland.xml")
+
 --  Nothing or empty list means no change. In order to "reset" values, set them to the defaults - ObjectID `0`, normal transform, etc.
 data ContentUpdate = ContentUpdate
-  { cuSurface         :: TObjectID Wl_surface
-  , buffer          :: Maybe (TObjectID Wl_buffer)
-  , offset          :: Maybe (Int, Int)
-  , damage          :: [Rectangle]
-  , damageBuffer    :: [Rectangle]
-  , frameCallbacks  :: [TObjectID Wl_callback]
-  , opaqueRegion    :: Maybe (TObjectID Wl_region)
-  , inputRegion     :: Maybe (TObjectID Wl_region)
-  , bufferScale     :: Maybe Int
+  { cuSurface :: TObjectID Wl_surface
+  , buffer :: Maybe (TObjectID Wl_buffer)
+  , offset :: Maybe (Int, Int)
+  , damage :: [Rectangle]
+  , damageBuffer :: [Rectangle]
+  , frameCallbacks :: [TObjectID Wl_callback]
+  , opaqueRegion :: Maybe (TObjectID Wl_region)
+  , inputRegion :: Maybe (TObjectID Wl_region)
+  , bufferScale :: Maybe Int
   , bufferTransform :: Maybe Enum_wl_output_transform
-  , bufferRelease   :: Maybe (TObjectID Wl_callback)
-  , subsurfaces     :: Maybe SubsurfaceStack
-  , fifoBarrier     :: Bool
-  , slaveCUs        :: [ContentUpdate]
-  } deriving stock (Eq,Ord)
+  , bufferRelease :: Maybe (TObjectID Wl_callback)
+  , subsurfaces :: Maybe SubsurfaceStack
+  , fifoBarrier :: Bool
+  , slaveCUs :: [ContentUpdate]
+  }
+  deriving stock (Eq, Ord)
 
-data SurfaceRole where SurfaceRole :: Typeable a => a -> SurfaceRole
+data SurfaceRole where SurfaceRole :: (Typeable a) => a -> SurfaceRole
 
 -- used both as a template for content updates, and to indicate no change.
 emptyContentUpdate :: ContentUpdate
-emptyContentUpdate = ContentUpdate
-  { cuSurface       = 0
-  , buffer        = Nothing
-  , offset        = Just (0,0)
-  , damage        = []
-  , damageBuffer  = []
-  , frameCallbacks= []
-  , opaqueRegion  = Nothing
-  , inputRegion   = Nothing
-  , bufferScale   = Nothing
-  , bufferTransform = Nothing
-  , bufferRelease   = Nothing
-  , subsurfaces     = Nothing
-  , fifoBarrier     = False
-  , slaveCUs        = []
-  }
+emptyContentUpdate =
+  ContentUpdate
+    { cuSurface = 0
+    , buffer = Nothing
+    , offset = Just (0, 0)
+    , damage = []
+    , damageBuffer = []
+    , frameCallbacks = []
+    , opaqueRegion = Nothing
+    , inputRegion = Nothing
+    , bufferScale = Nothing
+    , bufferTransform = Nothing
+    , bufferRelease = Nothing
+    , subsurfaces = Nothing
+    , fifoBarrier = False
+    , slaveCUs = []
+    }
 
 -- Interfaces {{{
 newtype Wl_display = Wl_display {wlid :: TObjectID Wl_display}
@@ -83,13 +85,13 @@ data Wl_shm_pool = Wl_shm_pool {wlid :: TObjectID Wl_shm_pool, fd :: Fd, size ::
 data Wl_shm = Wl_shm {wlid :: TObjectID Wl_shm, formats :: IORef [Enum_wl_shm_format]}
 
 data Wl_buffer = Wl_buffer
-  { wlid    :: TObjectID Wl_buffer
-  , offset  :: Int
-  , width   :: Int
-  , height  :: Int
-  , stride  :: Int
-  , pool    :: TObjectID Wl_shm_pool
-  , format  :: Enum_wl_shm_format
+  { wlid :: TObjectID Wl_buffer
+  , offset :: Int
+  , width :: Int
+  , height :: Int
+  , stride :: Int
+  , pool :: TObjectID Wl_shm_pool
+  , format :: Enum_wl_shm_format
   }
 
 newtype Wl_data_offer = Wl_data_offer {wlid :: TObjectID Wl_data_offer}
@@ -109,27 +111,28 @@ data Wl_region = Wl_region {wlid :: TObjectID Wl_region, included :: IORef [Rect
 data SubsurfaceStack = SubsurfaceStack
   { above :: Seq.Seq (TObjectID Wl_surface)
   , below :: Seq.Seq (TObjectID Wl_surface)
-  } deriving stock (Eq, Ord)
+  }
+  deriving stock (Eq, Ord)
 
 data SurfaceState = SurfaceState
-  { sBuffer         :: TObjectID Wl_buffer
-  , sBufferOffset   :: (Int, Int)
-  , sDamage         :: [Rectangle]
-  , sCallbacks      :: [TObjectID Wl_callback]
-  , sOpaqueRegion   :: TObjectID Wl_region
-  , sInputRegion    :: TObjectID Wl_region
-  , sBufferScale    :: Int
-  , sBufferTransform:: Enum_wl_output_transform
-  , sSubsurfaces    :: SubsurfaceStack
-  , sFifoBarrier    :: Bool
+  { sBuffer :: TObjectID Wl_buffer
+  , sBufferOffset :: (Int, Int)
+  , sDamage :: [Rectangle]
+  , sCallbacks :: [TObjectID Wl_callback]
+  , sOpaqueRegion :: TObjectID Wl_region
+  , sInputRegion :: TObjectID Wl_region
+  , sBufferScale :: Int
+  , sBufferTransform :: Enum_wl_output_transform
+  , sSubsurfaces :: SubsurfaceStack
+  , sFifoBarrier :: Bool
   }
 
 data Wl_surface = Wl_surface
-  { wlid          :: TObjectID Wl_surface
-  , pendingState  :: IORef ContentUpdate
-  , cuQueue       :: IORef (Seq.Seq ContentUpdate)
-  , role          :: IORef SurfaceRole
-  , state         :: IORef SurfaceState
+  { wlid :: TObjectID Wl_surface
+  , pendingState :: IORef ContentUpdate
+  , cuQueue :: IORef (Seq.Seq ContentUpdate)
+  , role :: IORef SurfaceRole
+  , state :: IORef SurfaceState
   }
 
 newtype Wl_seat = Wl_seat {wlid :: TObjectID Wl_seat}
@@ -148,14 +151,36 @@ data Wl_subsurface = Wl_subsurface {wlid :: TObjectID Wl_subsurface, surface :: 
 
 newtype Wl_fixes = Wl_fixes {wlid :: TObjectID Wl_fixes}
 
-
 $(loadProtocolFile wlFormatter False "protocols/wayland.xml")
 
-$(concat <$> mapM makeFieldsId [''Wl_display, ''Wl_registry, ''Wl_callback, ''Wl_compositor, ''Wl_shm
-    , ''Wl_shm_pool, ''Wl_buffer, ''Wl_data_offer, ''Wl_data_source
-    , ''Wl_data_device, ''Wl_data_device_manager, ''Wl_shell, ''Wl_shell_surface
-    , ''Wl_region, ''Wl_surface, ''Wl_seat, ''Wl_pointer, ''Wl_keyboard, ''Wl_touch
-    , ''Wl_output, ''Wl_subcompositor, ''Wl_subsurface, ''Wl_fixes])
+$( concat
+     <$> mapM
+       makeFieldsId
+       [ ''Wl_display
+       , ''Wl_registry
+       , ''Wl_callback
+       , ''Wl_compositor
+       , ''Wl_shm
+       , ''Wl_shm_pool
+       , ''Wl_buffer
+       , ''Wl_data_offer
+       , ''Wl_data_source
+       , ''Wl_data_device
+       , ''Wl_data_device_manager
+       , ''Wl_shell
+       , ''Wl_shell_surface
+       , ''Wl_region
+       , ''Wl_surface
+       , ''Wl_seat
+       , ''Wl_pointer
+       , ''Wl_keyboard
+       , ''Wl_touch
+       , ''Wl_output
+       , ''Wl_subcompositor
+       , ''Wl_subsurface
+       , ''Wl_fixes
+       ]
+ )
 
 -- DefaultIO instances {{{
 instance DefaultIO Wl_display where
@@ -165,7 +190,7 @@ instance DefaultIO Wl_registry where
   defM = pure Wl_registry{wlid = 0}
 
 instance DefaultIO Wl_buffer where
-  defM = pure Wl_buffer{wlid = 0, offset = 0, width = 0, height = 0, stride = 0, format = Enum_wl_shm_format_argb8888,pool=0}
+  defM = pure Wl_buffer{wlid = 0, offset = 0, width = 0, height = 0, stride = 0, format = Enum_wl_shm_format_argb8888, pool = 0}
 
 instance DefaultIO Wl_region where
   defM = do
@@ -194,17 +219,19 @@ instance DefaultIO Wl_surface where
     role <- newIORef $ SurfaceRole ()
     pendingState <- newIORef emptyContentUpdate
     cuQueue <- newIORef Seq.Empty
-    state <- newIORef  $ SurfaceState
-      { sBuffer       = 0
-      , sBufferOffset = (0,0)
-      , sDamage       = []
-      , sCallbacks    = []
-      , sOpaqueRegion = 0
-      , sInputRegion  = 0
-      , sBufferScale  = 1
-      , sBufferTransform  = Enum_wl_output_transform_normal
-      , sSubsurfaces = SubsurfaceStack {above=Seq.empty, below=Seq.empty}
-      }
+    state <-
+      newIORef
+        $ SurfaceState
+          { sBuffer = 0
+          , sBufferOffset = (0, 0)
+          , sDamage = []
+          , sCallbacks = []
+          , sOpaqueRegion = 0
+          , sInputRegion = 0
+          , sBufferScale = 1
+          , sBufferTransform = Enum_wl_output_transform_normal
+          , sSubsurfaces = SubsurfaceStack{above = Seq.empty, below = Seq.empty}
+          }
     pure Wl_surface{..}
 
 instance DefaultIO Wl_data_offer where
@@ -245,21 +272,24 @@ instance DefaultIO Wl_subcompositor where
 
 instance DefaultIO Wl_subsurface where
   defM = do
-    position <- newIORef (0,0)
+    position <- newIORef (0, 0)
     synchronized <- newIORef True
     pure Wl_subsurface{wlid = 0, surface = 0, parent = 0, position, synchronized}
 
 instance DefaultIO Wl_fixes where
   defM = pure Wl_fixes{wlid = 0}
+
 -- }}}
 -- Tables {{{
 $(generateTables False wlFormatter "protocols/wayland.xml")
+
 -- }}}
 -- }}}
 
 -- | function that removes interface behind the provided id from the object map AND, if running on server, sends the delete_id event.
 dropObject :: TObjectID a -> Wayland p ()
-dropObject (TObjectID i) = ask >>= \case
+dropObject (TObjectID i) =
+  ask >>= \case
     ClientEnv env -> modifyIORef env.objects $ Map.delete i
     ClientServerEnv _ env _ -> do
       modifyIORef env.objects $ Map.delete i
@@ -271,8 +301,6 @@ sendError :: TObjectID a -> Word32 -> BS.ByteString -> Wayland Server ()
 sendError (TObjectID i) code msg = do
   Just wldisplay <- getInterface' @Wl_display 1
   runEvent wldisplay $ Event_wl_display_error i code msg
-  
-
 
 -- Interface Implementations {{{
 
@@ -341,6 +369,7 @@ instance Interface' Wl_callback Server where
     dropObject callback.wlid
     sendMessage' event callback.wlid
   runRequest _ _ = pass
+
 -- }}}
 
 -- Wl_registry {{{
@@ -391,6 +420,7 @@ instance Interface' Wl_registry Server where
         Interface y <- liftIO y'
         void $ newObject (TObjectID newId) $ y & wlid .~ TObjectID newId
       Nothing -> error $ "interface with name `" <> show name <> "` not found."
+
 -- }}}
 
 -- Wl_compositor {{{
@@ -415,6 +445,7 @@ instance Interface' Wl_compositor Server where
   runRequest _compositor (Request_wl_compositor_create_surface surfaceId) = void $ newObject surfaceId . (wlid .~ surfaceId) =<< (defM :: Wayland Server Wl_surface)
   runRequest _compositor (Request_wl_compositor_create_region regionId) = void $ newObject regionId . (wlid .~ regionId) =<< (defM :: Wayland Server Wl_region)
   runRequest compositor Request_wl_compositor_release = dropObject compositor.wlid
+
 -- }}}
 
 -- Wl_shm_pool {{{
@@ -641,45 +672,45 @@ instance Interface' Wl_surface Client where
     dropObject surface'.wlid
     sendMessage' request surface'.wlid
   runRequest surface' request@(Request_wl_surface_attach bufferId x y) = do
-    atomicModifyIORef surface'.pendingState $ \s -> (s {buffer = Just bufferId, offset = Just (x,y)},())
+    atomicModifyIORef surface'.pendingState $ \s -> (s{buffer = Just bufferId, offset = Just (x, y)}, ())
     sendMessage' request surface'.wlid
   runRequest surface' request@(Request_wl_surface_damage x y w h) = do
     liftIO $ traceIO "New clients should not use this request (wl_surface.damage). Instead damage can be posted with wl_surface.damage_buffer which uses buffer coordinates instead of surface' coordinates."
-    atomicModifyIORef surface'.pendingState $ \s -> (s {damage = Rectangle{position=(x,y), size=(w,h)}:s.damage},())
+    atomicModifyIORef surface'.pendingState $ \s -> (s{damage = Rectangle{position = (x, y), size = (w, h)} : s.damage}, ())
     sendMessage' request surface'.wlid
   runRequest surface' request@(Request_wl_surface_frame cb) = do
-    atomicModifyIORef surface'.pendingState $ \s -> (s {frameCallbacks = cb:s.frameCallbacks},())
+    atomicModifyIORef surface'.pendingState $ \s -> (s{frameCallbacks = cb : s.frameCallbacks}, ())
     sendMessage' request surface'.wlid
   runRequest surface' request@(Request_wl_surface_set_opaque_region region) = do
-    atomicModifyIORef surface'.pendingState $ \s -> (s {opaqueRegion = Just region},())
+    atomicModifyIORef surface'.pendingState $ \s -> (s{opaqueRegion = Just region}, ())
     sendMessage' request surface'.wlid
   runRequest surface' request@(Request_wl_surface_set_input_region region) = do
-    atomicModifyIORef surface'.pendingState $ \s -> (s {inputRegion = Just region},())
+    atomicModifyIORef surface'.pendingState $ \s -> (s{inputRegion = Just region}, ())
     sendMessage' request surface'.wlid
   runRequest surface' request@(Request_wl_surface_set_buffer_transform transform) = do
-    atomicModifyIORef surface'.pendingState $ \s -> (s {bufferTransform = Just transform},())
+    atomicModifyIORef surface'.pendingState $ \s -> (s{bufferTransform = Just transform}, ())
     sendMessage' request surface'.wlid
   runRequest surface' request@(Request_wl_surface_set_buffer_scale scale) = do
-    atomicModifyIORef surface'.pendingState $ \s -> (s {bufferScale = Just scale},())
+    atomicModifyIORef surface'.pendingState $ \s -> (s{bufferScale = Just scale}, ())
     sendMessage' request surface'.wlid
   runRequest surface' request@(Request_wl_surface_damage_buffer x y w h) = do
-    atomicModifyIORef surface'.pendingState $ \s -> (s {damageBuffer = Rectangle{position=(x,y), size=(w,h)}:s.damageBuffer},())
+    atomicModifyIORef surface'.pendingState $ \s -> (s{damageBuffer = Rectangle{position = (x, y), size = (w, h)} : s.damageBuffer}, ())
     sendMessage' request surface'.wlid
   runRequest surface' request@(Request_wl_surface_offset x y) = do
-    atomicModifyIORef surface'.pendingState $ \s -> ((s :: ContentUpdate) {offset = Just (x,y)},())
+    atomicModifyIORef surface'.pendingState $ \s -> ((s :: ContentUpdate){offset = Just (x, y)}, ())
     sendMessage' request surface'.wlid
   runRequest surface' request@(Request_wl_surface_get_release release) = do
-    atomicModifyIORef surface'.pendingState $ \s -> (s{bufferRelease = Just release},())
+    atomicModifyIORef surface'.pendingState $ \s -> (s{bufferRelease = Just release}, ())
     sendMessage' request surface'.wlid
   runRequest surface' request@Request_wl_surface_commit = do
-    cu <- liftIO $ atomicSwapIORef surface'.pendingState emptyContentUpdate {cuSurface=surface'.wlid}
-    atomicModifyIORef surface'.cuQueue $ (,()) . (cu {cuSurface = surface'.wlid} Seq.<|)
+    cu <- liftIO $ atomicSwapIORef surface'.pendingState emptyContentUpdate{cuSurface = surface'.wlid}
+    atomicModifyIORef surface'.cuQueue $ (,()) . (cu{cuSurface = surface'.wlid} Seq.<|)
     SurfaceRole role <- readIORef surface'.role
     case cast role of
       Just (x :: Wl_subsurface) -> do
         sync <- readIORef x.synchronized
         when sync $ getInterface x.surface >>= \case
-          Just x' -> atomicModifyIORef x'.pendingState $ \s -> (s {slaveCUs = cu:s.slaveCUs},())
+          Just x' -> atomicModifyIORef x'.pendingState $ \s -> (s{slaveCUs = cu : s.slaveCUs}, ())
           Nothing -> writeIORef surface'.role $ SurfaceRole ()
       Nothing -> pass
     sendMessage' request surface'.wlid
@@ -692,37 +723,37 @@ instance Interface' Wl_surface Server where
   type Event Wl_surface = Event_wl_surface
   type Request Wl_surface = Request_wl_surface
   runRequest surface (Request_wl_surface_attach bufferId x y) =
-    atomicModifyIORef surface.pendingState $ \s -> (s {buffer = Just bufferId, offset = Just (x,y)},())
+    atomicModifyIORef surface.pendingState $ \s -> (s{buffer = Just bufferId, offset = Just (x, y)}, ())
   runRequest surface Request_wl_surface_destroy = dropObject surface.wlid
   runRequest surface (Request_wl_surface_damage x y w h) =
-    atomicModifyIORef surface.pendingState $ \s -> (s {damage = Rectangle {position=(x,y), size=(w,h)}:s.damage}, ())
+    atomicModifyIORef surface.pendingState $ \s -> (s{damage = Rectangle{position = (x, y), size = (w, h)} : s.damage}, ())
   runRequest surface (Request_wl_surface_damage_buffer x y w h) =
-    atomicModifyIORef surface.pendingState $ \s -> (s {damageBuffer = Rectangle {position=(x,y), size=(w,h)}:s.damageBuffer}, ())
+    atomicModifyIORef surface.pendingState $ \s -> (s{damageBuffer = Rectangle{position = (x, y), size = (w, h)} : s.damageBuffer}, ())
   runRequest surface (Request_wl_surface_frame cb) =
-    atomicModifyIORef surface.pendingState $ \s -> (s {frameCallbacks = cb:s.frameCallbacks}, ())
+    atomicModifyIORef surface.pendingState $ \s -> (s{frameCallbacks = cb : s.frameCallbacks}, ())
   runRequest surface (Request_wl_surface_set_opaque_region region) =
-    atomicModifyIORef surface.pendingState $ \s -> (s {opaqueRegion = Just region}, ())
+    atomicModifyIORef surface.pendingState $ \s -> (s{opaqueRegion = Just region}, ())
   runRequest surface (Request_wl_surface_set_input_region region) =
-    atomicModifyIORef surface.pendingState $ \s -> (s {inputRegion = Just region}, ())
+    atomicModifyIORef surface.pendingState $ \s -> (s{inputRegion = Just region}, ())
   runRequest surface (Request_wl_surface_set_buffer_scale scale) =
-    atomicModifyIORef surface.pendingState $ \s -> (s {bufferScale = Just scale}, ())
+    atomicModifyIORef surface.pendingState $ \s -> (s{bufferScale = Just scale}, ())
   runRequest surface (Request_wl_surface_set_buffer_transform transform') =
-    atomicModifyIORef surface.pendingState $ \s -> (s {bufferTransform = Just transform'}, ())
+    atomicModifyIORef surface.pendingState $ \s -> (s{bufferTransform = Just transform'}, ())
   runRequest surface (Request_wl_surface_offset x y) =
-    atomicModifyIORef surface.pendingState $ \s -> ((s :: ContentUpdate) {offset = Just (x,y)}, ())
+    atomicModifyIORef surface.pendingState $ \s -> ((s :: ContentUpdate){offset = Just (x, y)}, ())
   runRequest surface (Request_wl_surface_get_release release) =
-    atomicModifyIORef surface.pendingState $ \s -> ((s :: ContentUpdate) {bufferRelease = Just release}, ())
+    atomicModifyIORef surface.pendingState $ \s -> ((s :: ContentUpdate){bufferRelease = Just release}, ())
   runRequest surface Request_wl_surface_commit = do
-    cu <- liftIO $ atomicSwapIORef surface.pendingState emptyContentUpdate {cuSurface = surface.wlid}
+    cu <- liftIO $ atomicSwapIORef surface.pendingState emptyContentUpdate{cuSurface = surface.wlid}
     SurfaceRole role <- readIORef surface.role
     case cast role of
       Just (x :: Wl_subsurface) -> do
         sync <- readIORef x.synchronized
         when sync $ getInterface x.surface >>= \case
-          Just x' -> atomicModifyIORef x'.pendingState $ \s -> (s {slaveCUs = cu:s.slaveCUs},())
+          Just x' -> atomicModifyIORef x'.pendingState $ \s -> (s{slaveCUs = cu : s.slaveCUs}, ())
           Nothing -> writeIORef surface.role $ SurfaceRole ()
       Nothing -> pass
-    atomicModifyIORef' surface.cuQueue $ (,()) . (cu {cuSurface = surface.wlid} Seq.<|)
+    atomicModifyIORef' surface.cuQueue $ (,()) . (cu{cuSurface = surface.wlid} Seq.<|)
   runEvent _surface (Event_wl_surface_enter _) = pass
   runEvent _surface (Event_wl_surface_leave _) = pass
   runEvent _surface (Event_wl_surface_preferred_buffer_scale _) = pass
@@ -851,7 +882,7 @@ instance Interface' Wl_subcompositor Client where
         case cast role' of
           Just () -> do
             obj <- (wlid .~ subsurface) . (surface .~ surface') . (parent .~ parent') <$> (defM :: Wayland Client Wl_subsurface)
-            void $ newObject subsurface obj 
+            void $ newObject subsurface obj
             writeIORef surfaceObj.role $ SurfaceRole subsurface
             sendMessage' request subcompositor.wlid
           _ -> error "surface already has a role assigned"
@@ -871,7 +902,7 @@ instance Interface' Wl_subcompositor Server where
         case cast role' of
           Just () -> do
             obj <- (wlid .~ subsurface) . (surface .~ surface') . (parent .~ parent') <$> (defM :: Wayland Server Wl_subsurface)
-            void $ newObject subsurface obj 
+            void $ newObject subsurface obj
             writeIORef surfaceObj.role $ SurfaceRole subsurface
           _ -> sendError subcompositor.wlid 0 "bad_surface"
     obj <- (wlid .~ subsurface) . (surface .~ surface') . (parent .~ parent') <$> (defM :: Wayland Server Wl_subsurface)
@@ -894,17 +925,19 @@ instance Interface' Wl_subsurface Client where
     case parentObj' of
       Just parentObj -> do
         writeIORef parentObj.role $ SurfaceRole ()
-        modifyIORef parentObj.state $ \state' -> state'
-          { sSubsurfaces = state'.sSubsurfaces {
-              above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
-            , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
+        modifyIORef parentObj.state $ \state' ->
+          state'
+            { sSubsurfaces =
+                state'.sSubsurfaces
+                  { above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
+                  , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
+                  }
             }
-          }
       Nothing -> pass
     dropObject subsurface.wlid
     sendMessage' request subsurface.wlid
   runRequest subsurface request@(Request_wl_subsurface_set_position x y) = do
-    atomicWriteIORef subsurface.position (x,y)
+    atomicWriteIORef subsurface.position (x, y)
     sendMessage' request subsurface.wlid
   runRequest subsurface request@(Request_wl_subsurface_place_below sibling) = do
     parentSurface' <- getInterface subsurface.parent
@@ -918,7 +951,7 @@ instance Interface' Wl_subsurface Client where
               (before, after) = Seq.breakl (== sibling) joint
               joint2 = (before Seq.|> subsurface.surface) <> after
               (below, above) = Seq.breakl (== subsurface.parent) joint2
-          in bool (s {subsurfaces = Just SubsurfaceStack{below, above}}, True) (s, False) (after == Seq.empty)
+           in bool (s{subsurfaces = Just SubsurfaceStack{below, above}}, True) (s, False) (after == Seq.empty)
         unless b $ error "bad_surface: wl_surface is not a sibling or the parent"
     sendMessage' request subsurface.wlid
   runRequest subsurface request@(Request_wl_subsurface_place_above sibling) = do
@@ -933,7 +966,7 @@ instance Interface' Wl_subsurface Client where
               (before, after) = Seq.breakl (== sibling) joint
               joint2 = (before Seq.|> fromJust (after Seq.!? 0) Seq.|> subsurface.surface) <> Seq.drop 1 after
               (below, above) = Seq.breakl (== subsurface.parent) joint2
-          in bool (s {subsurfaces = Just SubsurfaceStack{below, above}}, True) (s, False) (after == Seq.empty)
+           in bool (s{subsurfaces = Just SubsurfaceStack{below, above}}, True) (s, False) (after == Seq.empty)
         unless b $ error "bad_surface: wl_surface is not a sibling or the parent"
     sendMessage' request subsurface.wlid
   runRequest subsurface request@Request_wl_subsurface_set_sync = do
@@ -957,15 +990,17 @@ instance Interface' Wl_subsurface Server where
     case parentObj' of
       Just parentObj -> do
         writeIORef parentObj.role $ SurfaceRole ()
-        modifyIORef parentObj.state $ \state' -> state'
-          { sSubsurfaces = state'.sSubsurfaces {
-              above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
-            , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
+        modifyIORef parentObj.state $ \state' ->
+          state'
+            { sSubsurfaces =
+                state'.sSubsurfaces
+                  { above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
+                  , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
+                  }
             }
-          }
       Nothing -> pass
     dropObject subsurface.wlid
-  runRequest subsurface (Request_wl_subsurface_set_position x y) = atomicWriteIORef subsurface.position (x,y)
+  runRequest subsurface (Request_wl_subsurface_set_position x y) = atomicWriteIORef subsurface.position (x, y)
   runRequest subsurface (Request_wl_subsurface_place_below sibling) = do
     parentSurface' <- getInterface subsurface.parent
     case parentSurface' of
@@ -978,7 +1013,7 @@ instance Interface' Wl_subsurface Server where
               (before, after) = Seq.breakl (== sibling) joint
               joint2 = (before Seq.|> subsurface.surface) <> after
               (below, above) = Seq.breakl (== subsurface.parent) joint2
-          in bool (s {subsurfaces = Just SubsurfaceStack{below, above}}, True) (s, False) (after == Seq.empty)
+           in bool (s{subsurfaces = Just SubsurfaceStack{below, above}}, True) (s, False) (after == Seq.empty)
         unless b $ sendError subsurface.wlid 0 "wl_surface is not a sibling or the parent"
   runRequest subsurface (Request_wl_subsurface_place_above sibling) = do
     parentSurface' <- getInterface subsurface.parent
@@ -992,7 +1027,7 @@ instance Interface' Wl_subsurface Server where
               (before, after) = Seq.breakl (== sibling) joint
               joint2 = (before Seq.|> fromJust (after Seq.!? 0) Seq.|> subsurface.surface) <> Seq.drop 1 after
               (below, above) = Seq.breakl (== subsurface.parent) joint2
-          in bool (s {subsurfaces = Just SubsurfaceStack{below, above}}, True) (s, False) (after == Seq.empty)
+           in bool (s{subsurfaces = Just SubsurfaceStack{below, above}}, True) (s, False) (after == Seq.empty)
         unless b $ sendError subsurface.wlid 0 "wl_surface is not a sibling or the parent"
   runRequest subsurface (Request_wl_subsurface_set_sync{}) = atomicWriteIORef subsurface.synchronized True
   runRequest subsurface (Request_wl_subsurface_set_desync{}) = atomicWriteIORef subsurface.synchronized False
@@ -1029,7 +1064,7 @@ bindToInterface registry intName = go 1
         Just x -> do
           new_id <- newObjectId
           ver <- fromJust . Map.lookup (BS8.unpack intName) <$> readIORef env.versionTable
-          runRequest registry (Request_wl_registry_bind x(intName, ver, new_id))
+          runRequest registry (Request_wl_registry_bind x (intName, ver, new_id))
           pure $ Just new_id
         Nothing -> liftIO (threadDelay $ 100 * 1000) >> go (count + 1)
 

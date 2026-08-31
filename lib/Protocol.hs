@@ -5,14 +5,17 @@ module Protocol (module Protocol) where
 
 -- This module's purpose is to define all requests and events that exist and should be implemented. Implementing them is handled in `Protocols/`
 
+import Control.Concurrent.STM (readTQueue)
 import Data.Binary
 import Data.Binary.Get
 import Data.Binary.Put (putByteString, putInt32le, putWord32le)
 import Data.ByteString qualified as BS
 import Data.Maybe (fromJust)
+import Data.Traversable (for)
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
 import Relude hiding (Type, get, put)
+import Relude.Extra (Elem)
 import Relude.Unsafe qualified as Unsafe
 import Saywayland.Types
 import System.Directory (listDirectory)
@@ -20,9 +23,6 @@ import System.FilePath (takeExtension, (</>))
 import System.Posix (Fd)
 import Text.Show qualified
 import Text.XML.Light
-import Control.Concurrent.STM (readTQueue)
-import Data.Traversable (for)
-import Relude.Extra (Elem)
 
 type VersionTable = [(String, Word32)]
 
@@ -89,7 +89,6 @@ putFixed24_8 d = putInt32le $ fromIntegral @Integer $ round $ d * 256
 -- | Get an Fd from previously obtained ancillary data
 getFd :: AdditionalParserData -> IO (Get Fd)
 getFd dat = pure <$> atomically (readTQueue dat.fdqueue)
-
 
 -- todo: the following 2 can and should be replaced by Binary instances (?)
 
@@ -217,7 +216,6 @@ loadProtocols formatter isIO path = do
 findInterfaces :: Element -> [Element]
 findInterfaces = findChildren (qname "interface")
 
-
 -- | Load a protocol from the specified `path`. Arguments have the same meaning as in `loadProtocols`.
 loadProtocolFile :: (String -> String) -> Bool -> FilePath -> Q [Dec]
 loadProtocolFile formatter isIO path = do
@@ -241,6 +239,7 @@ generateTables isIO formatter path = do
   pure
     $ concatMap (`generateInterfaceTable` formatter) protocols
     <> concatMap generateVersionTable protocols
+
 {-
 mkEvents :: (String -> String) -> String -> String -> [Element] -> [Dec]
 mkEvents formatter interfaceName prefix events = DataD [] (mkName prefix') [] Nothing constructors []:datatypes
@@ -308,11 +307,12 @@ mkOpcodeGetter interfaceName prefix prefix2 events =
       , FunD (mkName prefix) m
       ]
       [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''Word16)
-      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]]
+      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]
+      ]
       (null m)
   where
     mkClause :: (Word16, Element) -> Q Clause
-    mkClause (opcode, element) = pure $ Clause [ConP (mkName $  prefix2 <> interfaceName <> "_" <> eventName) [] [WildP | _<- args]] (NormalB $ LitE $ IntegerL $ fromIntegral opcode) []
+    mkClause (opcode, element) = pure $ Clause [ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [] [WildP | _ <- args]] (NormalB $ LitE $ IntegerL $ fromIntegral opcode) []
       where
         eventName = fromJust $ findAttr (qname "name") element
         args = findChildren (qname "arg") element
@@ -325,7 +325,8 @@ mkPut formatter interfaceName prefix prefix2 events =
       , FunD (mkName prefix) m
       ]
       [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''AdditionalParserData) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''Put)
-      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]]
+      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]
+      ]
       (null m)
   where
     nestPutters [] = AppE (VarE 'pure) $ ConE '()
@@ -357,7 +358,8 @@ mkParser formatter interfaceName prefix prefix2 events =
       , FunD (mkName prefix) m
       ]
       [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''Word16) $ AppT (AppT ArrowT $ ConT ''AdditionalParserData) (AppT (ConT ''IO) $ AppT (ConT ''Get) $ ConT $ mkName $ prefix2 <> interfaceName))
-      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]]
+      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]
+      ]
       (null m)
   where
     mkClause :: (Word16, Element) -> Q Clause
@@ -428,7 +430,7 @@ loadInterface formatter int = do
 loadInterfaceEnums :: Element -> [Dec]
 loadInterfaceEnums int = concatMap (uncurry $ mkEnum name') enums'
   where
-    name' =  fromJust $ findAttr (qname "name") int
+    name' = fromJust $ findAttr (qname "name") int
     enums' = loadEnum <$> findChildren (qname "enum") int
 
 -- | Load enum data from XML spec.
@@ -457,7 +459,7 @@ argType formatter intName x = case findAttr (qname "enum") x of
     Just "string" -> ConT ''BS.ByteString
     Just "object" -> case findAttr (qname "interface") x of
       Just x -> AppT (ConT ''TObjectID) . ConT . mkName $ formatter x
-      Nothing-> ConT ''ObjectID
+      Nothing -> ConT ''ObjectID
     Just "array" -> ConT ''BS.ByteString
     Just "fd" -> ConT ''Fd
     Just y -> error $ "unknown type: " <> fromString y

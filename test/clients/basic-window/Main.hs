@@ -1,6 +1,7 @@
 module Main (main) where
 
 import Control.Concurrent (forkIO)
+import Control.Concurrent.STM (newTQueue, writeTMVar)
 import Control.Exception (bracket, finally)
 import Data.Bimap qualified as BM
 import Data.ByteString (hPut, pack)
@@ -11,8 +12,6 @@ import Network.Socket (Family (AF_UNIX), SockAddr (SockAddrUnix), SocketType (St
 import Relude hiding (hFlush)
 import Saywayland
 import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
-import Control.Concurrent.STM (newTQueue, writeTMVar)
-
 import System.Random (randomIO)
 
 interfaceTable :: InterfaceClientTable

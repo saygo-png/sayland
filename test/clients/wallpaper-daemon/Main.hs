@@ -3,6 +3,7 @@ module Main (main) where
 
 import Config
 import Control.Concurrent (forkIO)
+import Control.Concurrent.STM (newTQueue)
 import Control.Exception
 import Data.Bimap qualified as BM
 import Data.ByteString.Lazy hiding (singleton)
@@ -18,7 +19,6 @@ import Saywayland.WaylandSocket
 import System.Posix (ownerReadMode, ownerWriteMode, setFdSize, unionFileModes)
 import System.Posix.IO
 import System.Posix.SharedMem
-import Control.Concurrent.STM (newTQueue)
 
 interfaceTable :: InterfaceClientTable
 interfaceTable = waylandInterfaceClientTable <> wlr_layer_shell_unstable_v1InterfaceClientTable
@@ -86,7 +86,6 @@ program = do
 
   layerSurfaceId <- TObjectID <$> newObjectId
   runRequest zwlr_layer_shell_V1 $ Request_zwlr_layer_shell_v1_get_layer_surface layerSurfaceId wlSurfaceId 0 Enum_zwlr_layer_shell_v1_layer_background "wallpaper"
-      
 
   zwlrLayerSurfaceV1 <- fromJust <$> getInterface layerSurfaceId
   runRequest zwlrLayerSurfaceV1 $ Request_zwlr_layer_surface_v1_set_size (fromIntegral bufferWidth) (fromIntegral bufferHeight)
@@ -105,7 +104,6 @@ program = do
           wl_shm_pool <- fromJust <$> getInterface wlShmPoolId
           wlBufferId <- TObjectID <$> newObjectId
           runRequest wl_shm_pool $ Request_wl_shm_pool_create_buffer wlBufferId 0 bufferWidth bufferHeight (bufferWidth * colorChannels) colorFormat
-              
 
           fileHandle <- liftIO $ fdToHandle fileDescriptor
 

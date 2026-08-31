@@ -1,5 +1,7 @@
 module Saywayland.WaylandSocket (module Saywayland.WaylandSocket) where
 
+import Control.Concurrent.Async (async)
+import Control.Concurrent.STM (modifyTVar, newTQueue, writeTQueue)
 import Data.Bimap qualified as BM
 import Data.Binary.Get
 import Data.ByteString qualified as BS
@@ -20,35 +22,34 @@ import System.Directory (doesFileExist)
 import System.Environment.Blank (getEnv)
 import System.FilePath
 import System.Posix (Fd (Fd))
-import Control.Concurrent.STM (writeTQueue, newTQueue, modifyTVar)
-import Control.Concurrent.Async (async)
 
 -- Listeners {{{
 
 -- | listen for client connections in provided socket.
-listenForClients :: MonadIO m => ServerEnvironment -> m ()
+listenForClients :: (MonadIO m) => ServerEnvironment -> m ()
 listenForClients env = do
   (sock, _) <- liftIO $ accept env.socket
   liftIO $ traceIO "New client connected."
   handleIncomingClient env sock
   listenForClients env
 
-handleIncomingClient :: MonadIO m => ServerEnvironment -> Socket -> m ()
+handleIncomingClient :: (MonadIO m) => ServerEnvironment -> Socket -> m ()
 handleIncomingClient env socket' = do
   counter <- liftIO $ newIORef 0
   objects <- liftIO $ newIORef $ one (1, Interface Wl_display{wlid = 1})
   globals <- liftIO $ newIORef BM.empty
   fdQueue <- liftIO $ atomically newTQueue
-  let clientenv = ClientEnvironment
-            { socket = socket'
-            , counter
-            , objects
-            , eventHandlers = env.eventHandlers
-            , globals
-            , interfaceTable = env.interfaceTable
-            , versionTable = env.versionTable
-            , fdQueue
-            }
+  let clientenv =
+        ClientEnvironment
+          { socket = socket'
+          , counter
+          , objects
+          , eventHandlers = env.eventHandlers
+          , globals
+          , interfaceTable = env.interfaceTable
+          , versionTable = env.versionTable
+          , fdQueue
+          }
   serial' <- atomically $ do
     modifyTVar env.clientSerial (+ 1)
     readTVar env.clientSerial
@@ -68,8 +69,8 @@ decodeFds bs =
       | otherwise =
           let (x, rest) = BS.splitAt (sizeOf (0 :: CInt)) b
               v =
-                unsafePerformIO $
-                  BS.useAsCString x (peek . castPtr)
+                unsafePerformIO
+                  $ BS.useAsCString x (peek . castPtr)
            in go rest (v : acc)
 
 -- | handle communication between a server and a client in provided socket, works both on the server and the client.
@@ -86,7 +87,7 @@ clientLoop' bytes' sock = do
   bool
     ( case extractMessage bytes of
         Just (oid, opcode, x, y) -> do
-          --void $ ask >>= liftIO . async . runReaderT (handleMessage oid opcode x)
+          -- void $ ask >>= liftIO . async . runReaderT (handleMessage oid opcode x)
           handleMessage oid opcode x
           clientLoop' y sock
         Nothing -> error "impossible/undefined edge case"

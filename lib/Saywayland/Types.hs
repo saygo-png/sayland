@@ -1,7 +1,9 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE TypeFamilies #-}
+
 module Saywayland.Types where
 
+import Control.Concurrent.STM (TQueue)
 import Control.Lens (Lens')
 import Data.Bimap qualified as BM
 import Data.Binary
@@ -9,6 +11,7 @@ import Data.Binary.Put
 import Data.Bits
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
+import Data.Char (toUpper)
 import Data.Data (cast)
 import Data.Map qualified as Map
 import Debug.Trace (traceIO)
@@ -16,11 +19,9 @@ import Network.Socket (Socket)
 import Network.Socket.ByteString (sendManyWithFds)
 import Network.Socket.ByteString.Lazy (sendAll)
 import Relude hiding (ByteString, get, put)
+import Relude.Extra (dup)
 import System.Console.ANSI (Color (..), ColorIntensity (..), ConsoleLayer (..), SGR (..), hNowSupportsANSI, setSGRCode)
 import System.Posix (Fd)
-import Control.Concurrent.STM (TQueue)
-import Data.Char (toUpper)
-import Relude.Extra (dup)
 
 -- Constants {{{
 
@@ -36,13 +37,13 @@ waylandNull = 0
 wlDisplayID :: Word32
 wlDisplayID = 1
 
--- | predefined empty AdditionalParserData
---nodata :: IO AdditionalParserData
---nodata = newIORef [] <&> AdditionalParserData
-
+{- | predefined empty AdditionalParserData
+nodata :: IO AdditionalParserData
+nodata = newIORef [] <&> AdditionalParserData
+-}
 wlFormatter :: String -> String
 wlFormatter [] = []
-wlFormatter (x:xs) = toUpper x:xs
+wlFormatter (x : xs) = toUpper x : xs
 
 -- }}}
 
@@ -51,16 +52,19 @@ wlFormatter (x:xs) = toUpper x:xs
 type ObjectID = Word32
 
 type TObjectID :: forall k. k -> Type
+
 type role TObjectID phantom
+
 newtype TObjectID a = TObjectID ObjectID deriving newtype (Show, Eq, Ord, Num)
 
 type NewID = (BS.ByteString, Word32, ObjectID)
 
 -- a rectangle, described in pixels
 data Rectangle = Rectangle
-  { position  :: (Int, Int)
-  , size      :: (Int, Int)
-  } deriving stock (Eq, Ord)
+  { position :: (Int, Int)
+  , size :: (Int, Int)
+  }
+  deriving stock (Eq, Ord)
 
 -- | HasWlid, a lens defined globally due to ID being a part of every wayland interface.
 class HasWlid s a | s -> a where
@@ -68,7 +72,7 @@ class HasWlid s a | s -> a where
 
 -- | A Default-like structure, but using IO
 class DefaultIO a where
-  defM :: MonadIO m => m a
+  defM :: (MonadIO m) => m a
 
 -- | Perspective of the current Wayland Environment
 data Perspective = Client | Server
@@ -85,24 +89,23 @@ type role WaylandEnv nominal
 type ClientID = Int
 
 data WaylandEnv (p :: Perspective) where
-  ClientEnv       :: ClientEnvironment Client -> WaylandEnv 'Client
+  ClientEnv :: ClientEnvironment Client -> WaylandEnv 'Client
   ClientServerEnv :: ServerEnvironment -> ClientEnvironment Server -> ClientID -> WaylandEnv 'Server
 
 data ServerEnvironment = ServerEnvironment
-  { 
-  -- | global server socket
-    socket        :: Socket
-  , socketPath    :: FilePath
-  -- | currently connected clients
-  , clients       :: TVar (Map ClientID (ClientEnvironment Server))
-  -- | client counter, for identifying individual clients.
-  , clientSerial  :: TVar ClientID
-  -- | interfaces supported by the server
-  , interfaceTable:: IORef (Map String (IO (Interface Server)))
-  -- | versions of interfaces
-  , versionTable  :: IORef (Map String Word32)
-  -- | server-side event handlers
+  { socket :: Socket
+  -- ^ global server socket
+  , socketPath :: FilePath
+  , clients :: TVar (Map ClientID (ClientEnvironment Server))
+  -- ^ currently connected clients
+  , clientSerial :: TVar ClientID
+  -- ^ client counter, for identifying individual clients.
+  , interfaceTable :: IORef (Map String (IO (Interface Server)))
+  -- ^ interfaces supported by the server
+  , versionTable :: IORef (Map String Word32)
+  -- ^ versions of interfaces
   , eventHandlers :: IORef [EventHandler Server]
+  -- ^ server-side event handlers
   }
 
 type role ClientEnvironment nominal
@@ -116,7 +119,8 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
   , versionTable :: IORef (Map String Word32)
   , eventHandlers :: IORef [EventHandler p]
   , fdQueue :: TQueue Fd
-  } deriving stock Eq
+  }
+  deriving stock (Eq)
 
 class
   ( WaylandEvent (Event a)
@@ -230,9 +234,11 @@ getColorize = do
 
 -- | Get the ClientEnvironment behind the Wayland monad.
 getClientEnv :: Wayland p (ClientEnvironment p)
-getClientEnv = ask <&> \case
-  ClientEnv env -> env
-  ClientServerEnv _ env _ -> env
+getClientEnv =
+  ask <&> \case
+    ClientEnv env -> env
+    ClientServerEnv _ env _ -> env
+
 -- | helper function for getting an object from a global
 interfaceFromName :: Word32 -> Wayland p (Maybe BS.ByteString)
 interfaceFromName n = do
@@ -241,7 +247,7 @@ interfaceFromName n = do
   pure $ BM.lookupR n glob
 
 -- | get an Interface using its id.
-getInterface :: Typeable i => TObjectID i -> Wayland p (Maybe i)
+getInterface :: (Typeable i) => TObjectID i -> Wayland p (Maybe i)
 getInterface (TObjectID objectID) = do
   env <- getClientEnv
   (proxyInterface <=< Map.lookup objectID) <$> readIORef env.objects
