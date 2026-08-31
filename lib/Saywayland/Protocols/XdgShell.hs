@@ -199,7 +199,7 @@ instance Interface' Xdg_surface Server where
       Nothing -> sendError xdg_surface.wlid 1 "not_constructed"
   runRequest _ (Request_xdg_surface_ack_configure{}) = pass
   runRequest _ _ = pass
-  runEvent _ _ = pass
+  runEvent xdg_surface event@(Event_xdg_surface_configure _) = sendMessage' event xdg_surface.wlid
 
 instance Interface' Xdg_toplevel Client where
   type Event Xdg_toplevel = Event_xdg_toplevel
