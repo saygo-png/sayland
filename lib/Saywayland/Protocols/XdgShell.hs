@@ -25,9 +25,9 @@ newtype Xdg_positioner = Xdg_positioner {wlid :: TObjectID Xdg_positioner}
 -- todo: xdgRole might be unnecessary, instead Wl_surface.role should be used.
 data Xdg_surface = Xdg_surface {wlid :: TObjectID Xdg_surface, wl_surface :: TObjectID Wl_surface, xdgRole :: IORef (Maybe XDGRole)}
 
-data Xdg_toplevel = Xdg_toplevel {wlid :: TObjectID Xdg_toplevel, size :: IORef (Int, Int), parent :: IORef (Maybe (TObjectID Xdg_toplevel))}
+data Xdg_toplevel = Xdg_toplevel {toplevel_xdg_surface :: TObjectID Xdg_surface, wlid :: TObjectID Xdg_toplevel, size :: IORef (Int, Int), parent :: IORef (Maybe (TObjectID Xdg_toplevel))}
 
-data Xdg_popup = Xdg_popup {wlid :: TObjectID Xdg_popup, parent :: TObjectID Xdg_surface, positioner :: TObjectID Xdg_positioner}
+data Xdg_popup = Xdg_popup {popup_xdg_surface :: TObjectID Xdg_surface, wlid :: TObjectID Xdg_popup, parent :: TObjectID Xdg_surface, positioner :: TObjectID Xdg_positioner}
 
 data XDGRole = XDGToplevel Xdg_toplevel | XDGPopup Xdg_popup
 
@@ -39,12 +39,11 @@ instance DefaultIO Xdg_surface where defM = newIORef Nothing <&> Xdg_surface 0 0
 
 instance DefaultIO Xdg_toplevel where
   defM = do
-    let wlid = 0
     size <- newIORef (0,0)
     parent <- newIORef Nothing
-    pure Xdg_toplevel {..}
+    pure Xdg_toplevel {wlid=0, toplevel_xdg_surface = 0, ..}
 
-instance DefaultIO Xdg_popup where defM = pure $ Xdg_popup{wlid = 0, parent = 0, positioner = 0}
+instance DefaultIO Xdg_popup where defM = pure $ Xdg_popup{popup_xdg_surface = 0, wlid = 0, parent = 0, positioner = 0}
 
 $(concat <$> mapM makeFieldsId [''Xdg_wm_base, ''Xdg_positioner, ''Xdg_surface, ''Xdg_toplevel, ''Xdg_popup])
 
@@ -136,7 +135,7 @@ instance Interface' Xdg_surface Client where
         case cast role' of
           Just () -> do
             toplevel <- defM
-            toplevelObject <- newObject toplevelId (toplevel {wlid = toplevelId} :: Xdg_toplevel)
+            toplevelObject <- newObject toplevelId (toplevel {wlid = toplevelId, toplevel_xdg_surface = xdg_surface.wlid} :: Xdg_toplevel)
             writeIORef xdg_surface.xdgRole $ Just $ XDGToplevel toplevelObject
             sendMessage' request xdg_surface.wlid
             writeIORef surfaceObj.role $ SurfaceRole toplevelObject
@@ -149,7 +148,7 @@ instance Interface' Xdg_surface Client where
         SurfaceRole role' <- readIORef surfaceObj.role
         case cast role' of
           Just () -> do
-            popupObject <- newObject popupId Xdg_popup{wlid = popupId, parent = popupParent, positioner = popupPositioner}
+            popupObject <- newObject popupId Xdg_popup{wlid = popupId, parent = popupParent, positioner = popupPositioner, popup_xdg_surface = xdg_surface.wlid}
             writeIORef xdg_surface.xdgRole $ Just $ XDGPopup popupObject
             sendMessage' request xdg_surface.wlid
             writeIORef surfaceObj.role $ SurfaceRole popupObject
@@ -186,7 +185,7 @@ instance Interface' Xdg_surface Server where
     case surfaceObject' of
       Just surfaceObject -> do
         toplevel <- defM
-        toplevelObject <- newObject toplevelId (toplevel {wlid = toplevelId} :: Xdg_toplevel)
+        toplevelObject <- newObject toplevelId (toplevel {wlid = toplevelId, toplevel_xdg_surface = xdg_surface.wlid} :: Xdg_toplevel)
         writeIORef xdg_surface.xdgRole $ Just $ XDGToplevel toplevelObject
         writeIORef surfaceObject.role $ SurfaceRole toplevelObject
       Nothing -> sendError xdg_surface.wlid 1 "not_constructed" -- ?
@@ -194,7 +193,7 @@ instance Interface' Xdg_surface Server where
     surfaceObject' <- getInterface xdg_surface.wl_surface
     case surfaceObject' of
       Just surfaceObject -> do
-        popupObject <- newObject popupId Xdg_popup{wlid = popupId, parent = popupParent, positioner = popupPositioner}
+        popupObject <- newObject popupId Xdg_popup{wlid = popupId, parent = popupParent, positioner = popupPositioner, popup_xdg_surface = xdg_surface.wlid}
         writeIORef xdg_surface.xdgRole $ Just $ XDGPopup popupObject
         writeIORef surfaceObject.role $ SurfaceRole popupObject
       Nothing -> sendError xdg_surface.wlid 1 "not_constructed"
