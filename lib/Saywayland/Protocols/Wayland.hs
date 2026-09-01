@@ -5,9 +5,9 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Saywayland.Protocols.Wayland where
+module Saywayland.Protocols.Wayland (module Saywayland.Protocols.Wayland) where
 
--- this module imlements some interfaces using classes defined by the `Protocol` module.
+-- Module implementing some interfaces using classes defined by the `Protocol` module.
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (try)
@@ -31,7 +31,7 @@ import Relude.Extra.Tuple (dup)
 
 $(loadProtocolFileEnums False "protocols/wayland.xml")
 
---  Nothing or empty list means no change. In order to "reset" values, set them to the defaults - ObjectID `0`, normal transform, etc.
+-- Nothing or empty list means no change. In order to "reset" values, set them to the defaults - ObjectID `0`, normal transform, etc.
 data ContentUpdate = ContentUpdate
   { cuSurface :: TObjectID Wl_surface
   , buffer :: Maybe (TObjectID Wl_buffer)
@@ -52,7 +52,7 @@ data ContentUpdate = ContentUpdate
 
 data SurfaceRole where SurfaceRole :: (Typeable a) => a -> SurfaceRole
 
--- used both as a template for content updates, and to indicate no change.
+-- Used both as a template for content updates, and to indicate no change.
 emptyContentUpdate :: ContentUpdate
 emptyContentUpdate =
   ContentUpdate
@@ -377,7 +377,7 @@ instance Interface' Wl_callback Server where
 instance Interface' Wl_registry Client where
   type Event Wl_registry = Event_wl_registry
   type Request Wl_registry = Request_wl_registry
-  runEvent registry (Event_wl_registry_global name interface version) = do
+  runEvent _registry (Event_wl_registry_global name interface version) = do
     ClientEnv env <- ask
     let interface' = BS.init interface
     modifyIORef env.globals $ BM.insert interface' name
@@ -388,11 +388,11 @@ instance Interface' Wl_registry Client where
           $ modifyIORef env.versionTable
           $ Map.insert (BS8.unpack interface') version
       Nothing -> pass
-  runEvent registry (Event_wl_registry_global_remove name) = do
+  runEvent _registry (Event_wl_registry_global_remove name) = do
     ClientEnv env <- ask
     modifyIORef env.globals $ BM.deleteR name
 
-  runRequest registry request@(Request_wl_registry_bind name (interfaceName, interfaceVersion, newId)) = do
+  runRequest registry request@(Request_wl_registry_bind name (_interfaceName, _interfaceVersion, newId)) = do
     ClientEnv env <- ask
     interfaceFromName name >>= \case
       Just x -> do
@@ -405,7 +405,7 @@ instance Interface' Wl_registry Client where
 instance Interface' Wl_registry Server where
   type Event Wl_registry = Event_wl_registry
   type Request Wl_registry = Request_wl_registry
-  runEvent registry event@(Event_wl_registry_global name interface version) = do
+  runEvent registry event@(Event_wl_registry_global name interface _version) = do
     ClientServerEnv _ env _ <- ask
     modifyIORef env.globals $ BM.insert interface name
     sendMessage' event registry.wlid
@@ -413,7 +413,7 @@ instance Interface' Wl_registry Server where
     ClientServerEnv _ env _ <- ask
     modifyIORef env.globals $ BM.deleteR name
     sendMessage' event registry.wlid
-  runRequest _registry (Request_wl_registry_bind name (interface, version, newId)) = do
+  runRequest _registry (Request_wl_registry_bind name (_interface, _version, newId)) = do
     ClientServerEnv _ env _ <- ask
     interfaceFromName name >>= \case
       Just x -> do
@@ -472,7 +472,7 @@ instance Interface' Wl_shm_pool Server where
   type Request Wl_shm_pool = Request_wl_shm_pool
 
   runRequest shm_pool (Request_wl_shm_pool_create_buffer bufId offset' width' height' stride' format') = do
-    ClientServerEnv _ env _ <- ask
+    ClientServerEnv {} <- ask
     let buffer = Wl_buffer{wlid = bufId, offset = offset', width = width', height = height', stride = stride', format = format', pool = shm_pool.wlid}
     void $ newObject bufId buffer
   runRequest shm_pool request@Request_wl_shm_pool_destroy = do
@@ -521,7 +521,7 @@ instance Interface' Wl_shm Server where
   type Event Wl_shm = Event_wl_shm
   type Request Wl_shm = Request_wl_shm
   runRequest _shm (Request_wl_shm_create_pool poolId fd' size') = do
-    ClientServerEnv _ env _ <- ask
+    ClientServerEnv {} <- ask
     result <-
       liftIO
         $ try
@@ -539,9 +539,9 @@ instance Interface' Wl_shm Server where
     ptrRef <- newIORef ptr'
     void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd', size = sizeRef, ptr = ptrRef}
   runRequest shm Request_wl_shm_release = do
-    ClientServerEnv _ env _ <- ask
+    ClientServerEnv {} <- ask
     dropObject shm.wlid
-  runEvent shm event@(Event_wl_shm_format format) = do
+  runEvent shm event@(Event_wl_shm_format _format) = do
     sendMessage' event shm.wlid
 
 -- }}}
@@ -553,7 +553,7 @@ instance Interface' Wl_buffer Client where
   runRequest buffer request@Request_wl_buffer_destroy = do
     dropObject buffer.wlid
     sendMessage' request buffer.wlid
-  runEvent buffer Event_wl_buffer_release = pass
+  runEvent _buffer Event_wl_buffer_release = pass
 
 instance Interface' Wl_buffer Server where
   type Event Wl_buffer = Event_wl_buffer

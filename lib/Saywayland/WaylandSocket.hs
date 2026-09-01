@@ -59,7 +59,7 @@ handleIncomingClient env socket' = do
 getHeader :: Get (Word32, Word16, Word16)
 getHeader = (,,) <$> getWord32le <*> getWord16le <*> getWord16le
 
--- | a monstrocity that gets a list of file descriptors from an ancillary data bytestring
+-- | a monstracity that gets a list of file descriptors from an ancillary data bytestring.
 decodeFds :: BS.ByteString -> [Fd]
 decodeFds bs =
   Fd <$> go bs []

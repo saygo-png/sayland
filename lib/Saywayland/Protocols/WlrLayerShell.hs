@@ -3,7 +3,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Saywayland.Protocols.WlrLayerShell where
+module Saywayland.Protocols.WlrLayerShell (module Saywayland.Protocols.WlrLayerShell) where
 
 import Control.Lens
 import Data.Binary.Put (runPut)
@@ -36,8 +36,8 @@ $(generateTables False wlFormatter "protocols/wlr-layer-shell-unstable-v1.xml")
 instance Interface' Zwlr_layer_shell_v1 Client where
   type Event Zwlr_layer_shell_v1 = Event_zwlr_layer_shell_v1
   type Request Zwlr_layer_shell_v1 = Request_zwlr_layer_shell_v1
-  runEvent shell _ = pass
-  runRequest shell request@(Request_zwlr_layer_shell_v1_get_layer_surface layerSurfaceId surfaceId outputId layer namespace) = do
+  runEvent _shell _ = pass
+  runRequest shell request@(Request_zwlr_layer_shell_v1_get_layer_surface layerSurfaceId _surfaceId _outputId _layer _namespace) = do
     sendMessage' request shell.wlid
     void $ newObject layerSurfaceId $ Zwlr_layer_surface_v1{wlid = layerSurfaceId}
   runRequest _shell Request_zwlr_layer_shell_v1_destroy = pass
@@ -51,15 +51,15 @@ instance Interface' Zwlr_layer_surface_v1 Client where
   type Request Zwlr_layer_surface_v1 = Request_zwlr_layer_surface_v1
   runEvent _ls Event_zwlr_layer_surface_v1_closed = pass
   runEvent _ls (Event_zwlr_layer_surface_v1_configure _ _ _) = pass
-  runRequest ls request@(Request_zwlr_layer_surface_v1_ack_configure serial) = do
+  runRequest ls request@(Request_zwlr_layer_surface_v1_ack_configure _serial) = do
     sendMessage' request ls.wlid
-  runRequest ls request@(Request_zwlr_layer_surface_v1_set_anchor anchor) = do
+  runRequest ls request@(Request_zwlr_layer_surface_v1_set_anchor _anchor) = do
     sendMessage' request ls.wlid
-  runRequest ls request@(Request_zwlr_layer_surface_v1_set_exclusive_zone zone) = do
+  runRequest ls request@(Request_zwlr_layer_surface_v1_set_exclusive_zone _zone) = do
     sendMessage' request ls.wlid
-  runRequest ls request@(Request_zwlr_layer_surface_v1_set_size width height) = do
+  runRequest ls request@(Request_zwlr_layer_surface_v1_set_size _width _height) = do
     sendMessage' request ls.wlid
-  runRequest _ls (Request_zwlr_layer_surface_v1_destroy) = pass
+  runRequest _ls Request_zwlr_layer_surface_v1_destroy = pass
   runRequest _ls (Request_zwlr_layer_surface_v1_get_popup _) = pass
   runRequest _ls (Request_zwlr_layer_surface_v1_set_keyboard_interactivity _) = pass
   runRequest _ls (Request_zwlr_layer_surface_v1_set_layer _) = pass
