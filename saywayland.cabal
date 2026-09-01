@@ -62,10 +62,12 @@ library
   exposed-modules:
     Protocol
     Saywayland
+    Saywayland.Internal.Utils
     Saywayland.Protocols.Wayland
     Saywayland.Protocols.WlrLayerShell
     Saywayland.Protocols.XdgShell
     Saywayland.Types
+    Saywayland.Utils
     Saywayland.WaylandSocket
 
 -- Test of a simple wallpaper daemon

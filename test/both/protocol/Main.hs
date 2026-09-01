@@ -2,8 +2,8 @@ module Main (main) where
 
 import Language.Haskell.TH
 import Protocol
+import Saywayland.Internal.Utils (wlFormatter)
 import Prelude
-import Saywayland (wlFormatter)
 
 main :: IO ()
 main = do

@@ -10,12 +10,8 @@ import Data.ByteString.Lazy hiding (singleton)
 import Data.Map qualified as Map
 import Data.Maybe (fromJust)
 import Network.Socket hiding (openSocket)
-import Protocol (InterfaceClientTable, VersionTable)
 import Relude hiding (ByteString, get, isPrefixOf, put)
-import Saywayland.Protocols.Wayland
-import Saywayland.Protocols.WlrLayerShell
-import Saywayland.Types
-import Saywayland.WaylandSocket
+import Saywayland
 import System.Posix (ownerReadMode, ownerWriteMode, setFdSize, unionFileModes)
 import System.Posix.IO
 import System.Posix.SharedMem

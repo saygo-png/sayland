@@ -15,8 +15,10 @@ import GHC.IO (unsafePerformIO)
 import Network.Socket
 import Network.Socket.ByteString (recvMsg)
 import Relude
+import Saywayland.Internal.Utils
 import Saywayland.Protocols.Wayland
 import Saywayland.Types
+import Saywayland.Utils
 import System.Console.ANSI (Color (Magenta), ColorIntensity (Vivid))
 import System.Directory (doesFileExist)
 import System.Environment.Blank (getEnv)
@@ -76,24 +78,23 @@ decodeFds bs =
 -- | handle communication between a server and a client in provided socket, works both on the server and the client.
 clientLoop :: Socket -> Wayland p ()
 clientLoop = clientLoop' ""
-
-clientLoop' :: BS.ByteString -> Socket -> Wayland p ()
-clientLoop' bytes' sock = do
-  queue <- (.fdQueue) <$> getClientEnv
-  (_, bytes'', cmsgs, _flags) <- liftIO $ recvMsg sock 8 4096 mempty
-  let newFds = concatMap (decodeFds . cmsgData) $ filter (\x -> cmsgId x == CmsgIdFds) cmsgs
-  liftIO . atomically $ mapM_ (writeTQueue queue) newFds
-  let bytes = bytes' <> bytes''
-  bool
-    ( case extractMessage bytes of
-        Just (oid, opcode, x, y) -> do
-          -- void $ ask >>= liftIO . async . runReaderT (handleMessage oid opcode x)
-          handleMessage oid opcode x
-          clientLoop' y sock
-        Nothing -> error "impossible/undefined edge case"
-    )
-    (clientLoop' bytes sock)
-    (isPartial bytes)
+  where
+    clientLoop' :: BS.ByteString -> Socket -> Wayland p ()
+    clientLoop' bytes' sock = do
+      queue <- (.fdQueue) <$> getClientEnv
+      (_, bytes'', cmsgs, _flags) <- liftIO $ recvMsg sock 8 4096 mempty
+      let newFds = concatMap (decodeFds . cmsgData) $ filter (\x -> cmsgId x == CmsgIdFds) cmsgs
+      liftIO . atomically $ mapM_ (writeTQueue queue) newFds
+      let bytes = bytes' <> bytes''
+      bool
+        ( case extractMessage bytes of
+            Just (oid, opcode, x, y) -> do
+              handleMessage oid opcode x
+              clientLoop' y sock
+            Nothing -> error "impossible/undefined edge case"
+        )
+        (clientLoop' bytes sock)
+        (isPartial bytes)
 
 isPartial :: BS.ByteString -> Bool
 isPartial s = case runGetOrFail getHeader (fromStrict s) of
@@ -180,14 +181,6 @@ findSocket' f =
       getXdgRuntimeDir >>= \case
         Just xdg -> newNumbered (f . (xdg </>)) "wayland-" 0 99
         Nothing -> pure Nothing
-
--- }}}
-
--- Helpers {{{
-newNumbered :: (FilePath -> IO Bool) -> FilePath -> Int -> Int -> IO (Maybe FilePath)
-newNumbered req s i maxi = bool (req this >>= bool (newNumbered req s (i + 1) maxi) (pure $ Just this)) (pure Nothing) (maxi < i)
-  where
-    this = s <> fromString (show i)
 
 -- }}}
 

@@ -1,53 +1,16 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module Saywayland.Types where
+module Saywayland.Types (module Saywayland.Types) where
 
 import Control.Concurrent.STM (TQueue)
 import Control.Lens (Lens')
 import Data.Bimap qualified as BM
 import Data.Binary
-import Data.Binary.Put
-import Data.Bits
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BSL
-import Data.Char (toUpper)
-import Data.Data (cast)
-import Data.Map qualified as Map
-import Debug.Trace (traceIO)
 import Network.Socket (Socket)
-import Network.Socket.ByteString (sendManyWithFds)
-import Network.Socket.ByteString.Lazy (sendAll)
 import Relude hiding (ByteString, get, put)
-import Relude.Extra (dup)
-import System.Console.ANSI (Color (..), ColorIntensity (..), ConsoleLayer (..), SGR (..), hNowSupportsANSI, setSGRCode)
 import System.Posix (Fd)
-
--- Constants {{{
-
--- | The header size is always 8 in Wayland.
-headerSize :: Word16
-headerSize = 8
-
--- | Constant representing the Wayland null, which is just 0.
-waylandNull :: Word32
-waylandNull = 0
-
--- | Constant representing the wl_display ID which is always 1 in Wayland.
-wlDisplayID :: Word32
-wlDisplayID = 1
-
-{- | predefined empty AdditionalParserData
-nodata :: IO AdditionalParserData
-nodata = newIORef [] <&> AdditionalParserData
--}
-wlFormatter :: String -> String
-wlFormatter [] = []
-wlFormatter (x : xs) = toUpper x : xs
-
--- }}}
-
--- Types {{{
 
 type ObjectID = Word32
 
@@ -153,113 +116,5 @@ newtype AdditionalParserData = AdditionalParserData
 
 -- | The Wayland monad. Allows easy access to the Wayland environment state without threading repetitive arguments.
 type Wayland p = ReaderT (WaylandEnv p) IO
-
--- }}}
-
--- Utils {{{
-
--- | Increase the counter by 1 and returns it's new value.
-newObjectId :: Wayland p Word32
-newObjectId = do
-  ClientEnv env <- ask
-  liftIO $ atomicModifyIORef' env.counter $ dup . (+) 1
-
--- | Insert the given interface to the objects map with provided id as key.
-newObject :: (Interface' i p) => TObjectID i -> i -> Wayland p i
-newObject (TObjectID intId) int = do
-  objs <- (.objects) <$> getClientEnv
-  _ <- atomicModifyIORef' objs $ dup . Map.insert intId (Interface int)
-  pure int
-
-{- | Convenience function for sending a Wayland message.
-See 'mkMessage'.
--}
-sendMessageWithFds :: [Fd] -> Word32 -> Word16 -> BSL.ByteString -> Wayland p ()
-sendMessageWithFds fds objectID opcode messageBody = do
-  socket' <- (.socket) <$> getClientEnv
-  liftIO $ sendManyWithFds socket' msg fds
-  where
-    msg = [BS.toStrict $ mkMessage objectID opcode messageBody]
-
-sendMessage :: Word32 -> Word16 -> BSL.ByteString -> Wayland p ()
-sendMessage objectID opcode messageBody = do
-  socket' <- (.socket) <$> getClientEnv
-  liftIO $ sendAll socket' msg
-  where
-    msg = mkMessage objectID opcode messageBody
-
--- | Convenience function for formatting events, before sending them.
-sendMessage' :: (WaylandEvent e) => e -> TObjectID i -> Wayland p ()
-sendMessage' e (TObjectID o) = do
-  colorize <- liftIO getColorize
-  liftIO (traceIO $ colorize Vivid Yellow $ ("    -> " <>) $ showEvent o e)
-  q <- (.fdQueue) <$> getClientEnv
-  let dat = AdditionalParserData q
-  sendMessage o (getOpcode e) $ runPut $ putEvent dat e
-
--- | sendMessageWithFds, but with sendMessage' aspect.
-sendMessageWithFds' :: (WaylandEvent e) => e -> [Fd] -> TObjectID i -> Wayland p ()
-sendMessageWithFds' e fd (TObjectID o) = do
-  colorize <- liftIO getColorize
-  liftIO (traceIO $ colorize Vivid Yellow $ ("    -> " <>) $ showEvent o e)
-  q <- (.fdQueue) <$> getClientEnv
-  let dat = AdditionalParserData q
-  sendMessageWithFds fd o (getOpcode e) $ runPut $ putEvent dat e
-
-{- | Convenience function for formatting a Wayland message.
-It takes an objectID, operation code and a message body.
-The header is generated based on this, the size is derived automatically.
--}
-mkMessage :: Word32 -> Word16 -> BSL.ByteString -> BSL.ByteString
-mkMessage objectID opcode messageBody =
-  runPut $ do
-    putWord32le objectID
-    putWord16le opcode
-    putWord16le $ 8 + fromIntegral (BSL.length messageBody)
-    putLazyByteString messageBody
-
-getColorize :: (IsString s, Semigroup s) => IO (ColorIntensity -> Color -> s -> s)
-getColorize = do
-  ansiSupport <- hNowSupportsANSI stdout
-  pure
-    $ if ansiSupport
-      then \ci c t -> fromString (setSGRCode [SetColor Foreground ci c]) <> t <> fromString (setSGRCode [Reset])
-      else const $ const id
-
--- | Get the ClientEnvironment behind the Wayland monad.
-getClientEnv :: Wayland p (ClientEnvironment p)
-getClientEnv =
-  ask <&> \case
-    ClientEnv env -> env
-    ClientServerEnv _ env _ -> env
-
--- | Helper function for getting an object from a global.
-interfaceFromName :: Word32 -> Wayland p (Maybe BS.ByteString)
-interfaceFromName n = do
-  env <- getClientEnv
-  glob <- readIORef env.globals
-  pure $ BM.lookupR n glob
-
--- | Get an Interface using its id.
-getInterface :: (Typeable i) => TObjectID i -> Wayland p (Maybe i)
-getInterface (TObjectID objectID) = do
-  env <- getClientEnv
-  (proxyInterface <=< Map.lookup objectID) <$> readIORef env.objects
-
--- | Get an Interface by @TypeApplication
-getInterface' :: forall i p. (Typeable i) => Word32 -> Wayland p (Maybe i)
-getInterface' objectID = do
-  env <- getClientEnv
-  (proxyInterface <=< Map.lookup objectID) <$> readIORef env.objects
-
--- | Round a byte length up to the nearest 4-byte boundary.
-roundLength :: Word32 -> Int64
-roundLength l = (fromIntegral l + 3) .&. (-4)
-
--- | Cast provided interface into proxied type.
-proxyInterface :: forall i p. (Typeable i) => Interface p -> Maybe i
-proxyInterface (Interface i) = cast i
-
--- }}}
 
 -- vim: foldmethod=marker

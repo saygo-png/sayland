@@ -6,14 +6,13 @@
 module Saywayland.Protocols.WlrLayerShell (module Saywayland.Protocols.WlrLayerShell) where
 
 import Control.Lens
-import Data.Binary.Put (runPut)
-import Data.Char (toUpper)
-import Data.Map qualified as Map
 import Protocol
 import Relude
+import Saywayland.Internal.Utils
 import Saywayland.Protocols.Wayland
 import Saywayland.Protocols.XdgShell
 import Saywayland.Types
+import Saywayland.Utils
 
 $(loadProtocolFileEnums False "protocols/wlr-layer-shell-unstable-v1.xml")
 

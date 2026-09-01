@@ -1,9 +1,9 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
-{-# LANGUAGE RecordWildCards #-}
 
 module Saywayland.Protocols.XdgShell (module Saywayland.Protocols.XdgShell) where
 
@@ -12,8 +12,10 @@ import Data.Data (cast)
 import Data.Map qualified as Map
 import Protocol
 import Relude
+import Saywayland.Internal.Utils
 import Saywayland.Protocols.Wayland
 import Saywayland.Types
+import Saywayland.Utils
 
 -- Interfaces {{{
 $(loadProtocolFileEnums False "protocols/xdg-shell.xml")
@@ -39,9 +41,9 @@ instance DefaultIO Xdg_surface where defM = newIORef Nothing <&> Xdg_surface 0 0
 
 instance DefaultIO Xdg_toplevel where
   defM = do
-    size <- newIORef (0,0)
+    size <- newIORef (0, 0)
     parent <- newIORef Nothing
-    pure Xdg_toplevel {wlid=0, toplevel_xdg_surface = 0, ..}
+    pure Xdg_toplevel{wlid = 0, toplevel_xdg_surface = 0, ..}
 
 instance DefaultIO Xdg_popup where defM = pure $ Xdg_popup{popup_xdg_surface = 0, wlid = 0, parent = 0, positioner = 0}
 
@@ -135,7 +137,7 @@ instance Interface' Xdg_surface Client where
         case cast role' of
           Just () -> do
             toplevel <- defM
-            toplevelObject <- newObject toplevelId (toplevel {wlid = toplevelId, toplevel_xdg_surface = xdg_surface.wlid} :: Xdg_toplevel)
+            toplevelObject <- newObject toplevelId (toplevel{wlid = toplevelId, toplevel_xdg_surface = xdg_surface.wlid} :: Xdg_toplevel)
             writeIORef xdg_surface.xdgRole $ Just $ XDGToplevel toplevelObject
             sendMessage' request xdg_surface.wlid
             writeIORef surfaceObj.role $ SurfaceRole toplevelObject
@@ -185,7 +187,7 @@ instance Interface' Xdg_surface Server where
     case surfaceObject' of
       Just surfaceObject -> do
         toplevel <- defM
-        toplevelObject <- newObject toplevelId (toplevel {wlid = toplevelId, toplevel_xdg_surface = xdg_surface.wlid} :: Xdg_toplevel)
+        toplevelObject <- newObject toplevelId (toplevel{wlid = toplevelId, toplevel_xdg_surface = xdg_surface.wlid} :: Xdg_toplevel)
         writeIORef xdg_surface.xdgRole $ Just $ XDGToplevel toplevelObject
         writeIORef surfaceObject.role $ SurfaceRole toplevelObject
       Nothing -> sendError xdg_surface.wlid 1 "not_constructed" -- ?
@@ -206,7 +208,7 @@ instance Interface' Xdg_toplevel Client where
   type Request Xdg_toplevel = Request_xdg_toplevel
   runRequest _ _ = pass
   runEvent toplevel (Event_xdg_toplevel_configure w h _) = do
-    writeIORef toplevel.size (w,h)
+    writeIORef toplevel.size (w, h)
   runEvent _toplevel (Event_xdg_toplevel_configure_bounds _ _) = pass
   runEvent _ _ = pass
 
@@ -215,7 +217,7 @@ instance Interface' Xdg_toplevel Server where
   type Request Xdg_toplevel = Request_xdg_toplevel
   runRequest _ _ = pass
   runEvent toplevel event@(Event_xdg_toplevel_configure w h _) = do
-    writeIORef toplevel.size (w,h)
+    writeIORef toplevel.size (w, h)
     sendMessage' event toplevel.wlid
   runEvent toplevel event@(Event_xdg_toplevel_configure_bounds _ _) = sendMessage' event toplevel.wlid
   runEvent _ _ = pass

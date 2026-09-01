@@ -25,9 +25,11 @@ import GHC.IORef (atomicSwapIORef)
 import MMAP (mapShared, mkMmapFlags, mmap, munmap, protRead, protWrite)
 import Protocol
 import Relude hiding (get)
-import Saywayland.Types
-import System.Posix (Fd, setFdSize)
 import Relude.Extra.Tuple (dup)
+import Saywayland.Internal.Utils
+import Saywayland.Types
+import Saywayland.Utils
+import System.Posix (Fd, setFdSize)
 
 $(loadProtocolFileEnums False "protocols/wayland.xml")
 
@@ -472,7 +474,7 @@ instance Interface' Wl_shm_pool Server where
   type Request Wl_shm_pool = Request_wl_shm_pool
 
   runRequest shm_pool (Request_wl_shm_pool_create_buffer bufId offset' width' height' stride' format') = do
-    ClientServerEnv {} <- ask
+    ClientServerEnv{} <- ask
     let buffer = Wl_buffer{wlid = bufId, offset = offset', width = width', height = height', stride = stride', format = format', pool = shm_pool.wlid}
     void $ newObject bufId buffer
   runRequest shm_pool request@Request_wl_shm_pool_destroy = do
@@ -521,7 +523,7 @@ instance Interface' Wl_shm Server where
   type Event Wl_shm = Event_wl_shm
   type Request Wl_shm = Request_wl_shm
   runRequest _shm (Request_wl_shm_create_pool poolId fd' size') = do
-    ClientServerEnv {} <- ask
+    ClientServerEnv{} <- ask
     result <-
       liftIO
         $ try
@@ -539,7 +541,7 @@ instance Interface' Wl_shm Server where
     ptrRef <- newIORef ptr'
     void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd', size = sizeRef, ptr = ptrRef}
   runRequest shm Request_wl_shm_release = do
-    ClientServerEnv {} <- ask
+    ClientServerEnv{} <- ask
     dropObject shm.wlid
   runEvent shm event@(Event_wl_shm_format _format) = do
     sendMessage' event shm.wlid
