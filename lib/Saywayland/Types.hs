@@ -188,13 +188,11 @@ sendMessage objectID opcode messageBody = do
   where
     msg = mkMessage objectID opcode messageBody
 
-{- | Convenience function for formatting events, before sending them.
-Events are colored in magenta following the wayland.app colorscheme.
--}
+-- | Convenience function for formatting events, before sending them.
 sendMessage' :: (WaylandEvent e) => e -> TObjectID i -> Wayland p ()
 sendMessage' e (TObjectID o) = do
   colorize <- liftIO getColorize
-  liftIO (traceIO $ colorize Vivid Magenta $ showEvent o e)
+  liftIO (traceIO $ colorize Vivid Yellow $ ("    -> " <>) $ showEvent o e)
   q <- (.fdQueue) <$> getClientEnv
   let dat = AdditionalParserData q
   sendMessage o (getOpcode e) $ runPut $ putEvent dat e
@@ -203,7 +201,7 @@ sendMessage' e (TObjectID o) = do
 sendMessageWithFds' :: (WaylandEvent e) => e -> [Fd] -> TObjectID i -> Wayland p ()
 sendMessageWithFds' e fd (TObjectID o) = do
   colorize <- liftIO getColorize
-  liftIO (traceIO $ colorize Vivid Magenta $ showEvent o e)
+  liftIO (traceIO $ colorize Vivid Yellow $ ("    -> " <>) $ showEvent o e)
   q <- (.fdQueue) <$> getClientEnv
   let dat = AdditionalParserData q
   sendMessageWithFds fd o (getOpcode e) $ runPut $ putEvent dat e

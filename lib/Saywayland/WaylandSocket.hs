@@ -133,7 +133,7 @@ instance Dispatch Client where
       Left (_, _, err) -> fail err
       Right (_, _, event) -> do
         colorize <- liftIO getColorize
-        liftIO . traceIO . colorize Vivid Magenta $ showEvent oid event
+        liftIO . traceIO . colorize Vivid Magenta $ ("  <- " <>) $ showEvent oid event
         runEvent x event
         handlers <- liftIO $ readIORef env.eventHandlers
         forM_ handlers $ \(EventHandler f) -> for_ (cast event) $ f oid
@@ -146,7 +146,7 @@ instance Dispatch Server where
       Left (_, _, err) -> fail err
       Right (_, _, event) -> do
         colorize <- liftIO getColorize
-        liftIO . traceIO . colorize Vivid Magenta $ showEvent oid event
+        liftIO . traceIO . colorize Vivid Magenta $ ("  <- " <>) $ showEvent oid event
         runRequest x event
         handlers <- liftIO $ readIORef env.eventHandlers
         forM_ handlers $ \(EventHandler f) -> for_ (cast event) $ f oid

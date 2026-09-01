@@ -277,9 +277,9 @@ mkShow interfaceName prefix prefix2 events =
       (null m)
   where
     arrow = case prefix2 of
-      "Request_" -> "        -> "
-      "Event_" -> "        <- "
-      _ -> "        ?? "
+      "Request_" -> ""
+      "Event_" -> ""
+      _ -> "??? "
     mkShowC :: Element -> Clause
     mkShowC e = Clause [VarP $ mkName "oid", ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [] $ fmap (VarP . addBoundPrefix) args] (NormalB $ chainShow (reverse args)) []
       where
