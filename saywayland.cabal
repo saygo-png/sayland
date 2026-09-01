@@ -108,15 +108,12 @@ test-suite server-basic-compositor
   hs-source-dirs: test/servers/basic-compositor
   main-is:        Main.hs
   build-depends:
-    , async
     , base
-    , bimap
     , containers
     , directory
     , network
     , relude
     , saywayland
-    , unix
 
 test-suite template-haskell-protocol
   import:         common-options, executable-options

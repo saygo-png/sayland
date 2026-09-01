@@ -44,7 +44,6 @@ main = do
 program :: Wayland Client ()
 program = do
   ClientEnv env <- ask
-  serial :: TMVar Word32 <- newEmptyTMVarIO
   running :: MVar () <- newEmptyMVar
 
   display <- fromJust <$> getInterface' @Wl_display 1
@@ -68,7 +67,7 @@ program = do
 
   wlSurfaceId :: TObjectID Wl_surface <- TObjectID <$> newObjectId
   runRequest wl_compositor $ Request_wl_compositor_create_surface wlSurfaceId
-  surface <- fromJust <$> getInterface wlSurfaceId
+  surface' <- fromJust <$> getInterface wlSurfaceId
 
   xdgWmBaseId :: TObjectID Xdg_wm_base <- TObjectID . fromJust <$> bindToInterface registry "xdg_wm_base"
   xdg_wm_base <- fromJust <$> getInterface xdgWmBaseId
@@ -84,13 +83,12 @@ program = do
   modifyIORef env.eventHandlers $ (:) $ EventHandler $ \_oid -> \case
     (Event_xdg_surface_configure _) -> do
       atomically $ writeTMVar configured ()
-    _ -> pass
-  runRequest surface Request_wl_surface_commit
+  runRequest surface' Request_wl_surface_commit
   liftIO . atomically $ takeTMVar configured
   bufferWidth <- liftIO $ newIORef 512
   bufferHeight <- liftIO $ newIORef 512
   shm_pool_rand :: Int <- randomIO
-  let colorChannels = 4
+  let colorChannels :: Int = 4
   let
     makeSharedMemoryObject = shmOpen ("basic-window" <> show shm_pool_rand) (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
     useSharedMemoryObject fileDescriptor =
@@ -104,13 +102,12 @@ program = do
         wl_shm_pool <- fromJust <$> getInterface wlShmPoolId
         wlBufferId :: TObjectID Wl_buffer <- TObjectID <$> newObjectId
         runRequest wl_shm_pool $ Request_wl_shm_pool_create_buffer wlBufferId 0 bw bh (bw * colorChannels) Enum_wl_shm_format_argb8888
-        buffer <- fromJust <$> getInterface wlBufferId
         fileHandle <- liftIO $ fdToHandle fileDescriptor
 
         liftIO $ hPut fileHandle $ image bw bh
         liftIO $ hFlush fileHandle
-        runRequest surface $ Request_wl_surface_attach wlBufferId 0 0
-        runRequest surface Request_wl_surface_commit
+        runRequest surface' $ Request_wl_surface_attach wlBufferId 0 0
+        runRequest surface' Request_wl_surface_commit
         -- Wait for exit
         takeMVar running
 

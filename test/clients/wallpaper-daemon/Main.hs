@@ -82,7 +82,7 @@ program = do
 
   wlSurfaceId <- TObjectID <$> newObjectId
   runRequest wl_compositor $ Request_wl_compositor_create_surface wlSurfaceId
-  surface <- fromJust <$> getInterface wlSurfaceId
+  surface' <- fromJust <$> getInterface wlSurfaceId
 
   layerSurfaceId <- TObjectID <$> newObjectId
   runRequest zwlr_layer_shell_V1 $ Request_zwlr_layer_shell_v1_get_layer_surface layerSurfaceId wlSurfaceId 0 Enum_zwlr_layer_shell_v1_layer_background "wallpaper"
@@ -91,7 +91,7 @@ program = do
   runRequest zwlrLayerSurfaceV1 $ Request_zwlr_layer_surface_v1_set_size (fromIntegral bufferWidth) (fromIntegral bufferHeight)
   runRequest zwlrLayerSurfaceV1 $ Request_zwlr_layer_surface_v1_set_exclusive_zone $ -1
 
-  runRequest surface Request_wl_surface_commit
+  runRequest surface' Request_wl_surface_commit
   atomically (takeTMVar serial) >>= runRequest zwlrLayerSurfaceV1 . Request_zwlr_layer_surface_v1_ack_configure
 
   let makeSharedMemoryObject = shmOpen poolName (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
@@ -108,8 +108,8 @@ program = do
           fileHandle <- liftIO $ fdToHandle fileDescriptor
 
           liftIO $ hPut fileHandle image
-          runRequest surface $ Request_wl_surface_attach wlBufferId 0 0
-          runRequest surface Request_wl_surface_commit
+          runRequest surface' $ Request_wl_surface_attach wlBufferId 0 0
+          runRequest surface' Request_wl_surface_commit
 
           -- Wait for exit
           takeMVar running
