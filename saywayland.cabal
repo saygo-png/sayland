@@ -67,7 +67,6 @@ library
     Saywayland.Protocols.XdgShell
     Saywayland.Types
     Saywayland.WaylandSocket
-    SaywaylandTH
 
 -- Test of a simple wallpaper daemon
 test-suite client-wallpaper-daemon
