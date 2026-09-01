@@ -3,7 +3,8 @@ module Main (main) where
 import Language.Haskell.TH
 import Protocol
 import Prelude
+import Saywayland (wlFormatter)
 
 main :: IO ()
 main = do
-  runQ (loadProtocols id True "protocols") >>= writeFile "output.hs" . pprint
+  runQ (loadProtocols wlFormatter True "protocols") >>= writeFile "output.hs" . pprint
