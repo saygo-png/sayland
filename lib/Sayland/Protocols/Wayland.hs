@@ -48,6 +48,7 @@ data ContentUpdate = ContentUpdate
   , cuBufferRelease :: Maybe (TObjectID Wl_callback)
   , cuSubsurfaces :: Maybe SubsurfaceStack
   , cuFifoBarrier :: Bool
+  , cuFifoWaitBarrier :: Bool
   , cuSlaveCUs :: [ContentUpdate]
   }
   deriving stock (Eq, Ord)
@@ -71,6 +72,7 @@ emptyContentUpdate =
     , cuBufferRelease = Nothing
     , cuSubsurfaces = Nothing
     , cuFifoBarrier = False
+    , cuFifoWaitBarrier = False
     , cuSlaveCUs = []
     }
 
@@ -296,7 +298,7 @@ dropObject (TObjectID i) =
   ask >>= \case
     ClientEnv env -> modifyIORef env.objects $ Map.delete i
     ClientServerEnv _ env _ -> do
-      _ <- atomicModifyIORef' env.objects (dup . Map.delete i)
+      void $ atomicModifyIORef' env.objects (dup . Map.delete i)
       Just wldisplay <- getInterface' @Wl_display 1
       runEvent wldisplay $ Event_wl_display_delete_id i
 
@@ -344,6 +346,7 @@ instance Interface' Wl_display Server where
   runRequest _display (Request_wl_display_get_registry registry) = do
     ClientServerEnv _ env _ <- ask
     versions <- zip [0 ..] . Map.toList <$> readIORef env.versionTable
+    _registry <- newObject registry Wl_registry{wlid = registry}
     forM_ versions $ \(name, (interface', version)) -> do
       let interface = encodeUtf8 interface'
           event = Event_wl_registry_global name interface version
@@ -368,8 +371,8 @@ instance Interface' Wl_callback Server where
   type Request Wl_callback = Request_wl_callback
   runEvent callback event@(Event_wl_callback_done _callback_data) = do
     putMVar callback.done ()
-    dropObject callback.wlid
     sendMessage' event callback.wlid
+    dropObject callback.wlid
   runRequest _ _ = pass
 
 -- }}}
@@ -436,8 +439,8 @@ instance Interface' Wl_compositor Client where
     void $ newObject regionId . (lWlid .~ regionId) =<< (defM :: Wayland Client Wl_region)
     sendMessage' request compositor.wlid
   runRequest compositor request@Request_wl_compositor_release = do
-    dropObject compositor.wlid
     sendMessage' request compositor.wlid
+    dropObject compositor.wlid
   runEvent _ _ = pass
 
 instance Interface' Wl_compositor Server where
@@ -460,8 +463,8 @@ instance Interface' Wl_shm_pool Client where
     void $ newObject bufId buffer
     sendMessage' request shm_pool.wlid
   runRequest shm_pool request@Request_wl_shm_pool_destroy = do
-    dropObject shm_pool.wlid
     sendMessage' request shm_pool.wlid
+    dropObject shm_pool.wlid
   runRequest shm_pool request@(Request_wl_shm_pool_resize size') = do
     writeIORef shm_pool.size size'
     sendMessage' request shm_pool.wlid
@@ -477,8 +480,8 @@ instance Interface' Wl_shm_pool Server where
     let buffer = Wl_buffer{wlid = bufId, offset = offset', width = width', height = height', stride = stride', format = format', pool = shm_pool.wlid}
     void $ newObject bufId buffer
   runRequest shm_pool request@Request_wl_shm_pool_destroy = do
-    dropObject shm_pool.wlid
     sendMessage' request shm_pool.wlid
+    dropObject shm_pool.wlid
   runRequest shm_pool (Request_wl_shm_pool_resize size') = do
     liftIO . setFdSize shm_pool.fd $ fromIntegral size'
     oldsize <- readIORef shm_pool.size
@@ -513,8 +516,8 @@ instance Interface' Wl_shm Client where
     void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd', size = sizeRef, ptr = ptrRef}
     sendMessageWithFds' request [fd'] shm.wlid
   runRequest shm request@(Request_wl_shm_release{}) = do
-    dropObject shm.wlid
     sendMessage' request shm.wlid
+    dropObject shm.wlid
 
   runEvent shm (Event_wl_shm_format format) = modifyIORef shm.formats (format :)
 
@@ -552,8 +555,8 @@ instance Interface' Wl_buffer Client where
   type Event Wl_buffer = Event_wl_buffer
   type Request Wl_buffer = Request_wl_buffer
   runRequest buffer request@Request_wl_buffer_destroy = do
-    dropObject buffer.wlid
     sendMessage' request buffer.wlid
+    dropObject buffer.wlid
   runEvent _buffer Event_wl_buffer_release = pass
 
 instance Interface' Wl_buffer Server where
@@ -572,8 +575,8 @@ instance Interface' Wl_data_offer Client where
   runRequest _ (Request_wl_data_offer_accept{}) = pass
   runRequest _ (Request_wl_data_offer_receive{}) = pass
   runRequest data_offer request@(Request_wl_data_offer_destroy{}) = do
-    dropObject data_offer.wlid
     sendMessage' request data_offer.wlid
+    dropObject data_offer.wlid
   runRequest _ (Request_wl_data_offer_finish{}) = pass
   runRequest _ (Request_wl_data_offer_set_actions{}) = pass
   runEvent _ (Event_wl_data_offer_offer{}) = pass
@@ -590,8 +593,8 @@ instance Interface' Wl_data_source Client where
   type Request Wl_data_source = Request_wl_data_source
   runRequest _ (Request_wl_data_source_offer{}) = pass
   runRequest data_source request@(Request_wl_data_source_destroy{}) = do
-    dropObject data_source.wlid
     sendMessage' request data_source.wlid
+    dropObject data_source.wlid
   runRequest _ (Request_wl_data_source_set_actions{}) = pass
   runEvent _ (Event_wl_data_source_target{}) = pass
   runEvent _ (Event_wl_data_source_send{}) = pass
@@ -671,8 +674,8 @@ instance Interface' Wl_surface Client where
   type Event Wl_surface = Event_wl_surface
   type Request Wl_surface = Request_wl_surface
   runRequest surface' request@(Request_wl_surface_destroy{}) = do
-    dropObject surface'.wlid
     sendMessage' request surface'.wlid
+    dropObject surface'.wlid
   runRequest surface' request@(Request_wl_surface_attach bufferId x y) = do
     atomicModifyIORef surface'.pendingState $ \s -> (s{cuBuffer = Just bufferId, cuOffset = Just (x, y)}, ())
     sendMessage' request surface'.wlid
@@ -873,8 +876,8 @@ instance Interface' Wl_subcompositor Client where
   type Event Wl_subcompositor = Event_wl_subcompositor
   type Request Wl_subcompositor = Request_wl_subcompositor
   runRequest subcompositor request@Request_wl_subcompositor_destroy = do
-    dropObject subcompositor.wlid
     sendMessage' request subcompositor.wlid
+    dropObject subcompositor.wlid
   runRequest subcompositor request@(Request_wl_subcompositor_get_subsurface subsurface surface parent) = do
     surfaceObj' <- getInterface surface
     case surfaceObj' of
@@ -936,8 +939,8 @@ instance Interface' Wl_subsurface Client where
                   }
             }
       Nothing -> pass
-    dropObject subsurface.wlid
     sendMessage' request subsurface.wlid
+    dropObject subsurface.wlid
   runRequest subsurface request@(Request_wl_subsurface_set_position x y) = do
     atomicWriteIORef subsurface.position (x, y)
     sendMessage' request subsurface.wlid

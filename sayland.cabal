@@ -63,6 +63,7 @@ library
     Protocol
     Sayland
     Sayland.Internal.Utils
+    Sayland.Protocols.Fifo
     Sayland.Protocols.Wayland
     Sayland.Protocols.WlrLayerShell
     Sayland.Protocols.XdgShell
