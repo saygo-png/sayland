@@ -28,8 +28,8 @@ main = bracket env cleanup program
           listen socket' 5
 
           clients <- newTVarIO Map.empty
-          interfaceTable <- newIORef $ Map.fromList waylandInterfaceServerTable
-          versionTable <- newIORef $ Map.fromList waylandVersionTable
+          interfaceTable <- newIORef $ Map.fromList $ waylandInterfaceServerTable <> xdg_shellInterfaceServerTable
+          versionTable <- newIORef $ Map.fromList $ waylandVersionTable <> xdg_shellVersionTable
           eventHandlers <- newIORef []
           clientSerial <- newTVarIO 0
           pure
