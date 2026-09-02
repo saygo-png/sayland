@@ -1,5 +1,5 @@
 cabal-version:      2.4
-name:               saywayland
+name:               sayland
 version:            0.0.0
 license:            GPL-3.0-or-later
 license-file:       LICENSE.txt
@@ -7,10 +7,10 @@ author:             saygo-png
 maintainer:         saygo-png <saygo.mail@proton.me>
 category:           Graphics
 synopsis:           Generic, simple Wayland library without C bindings
-homepage:           https://github.com/saygo-png/saywayland
-bug-reports:        https://github.com/saygo-png/saywayland/issues
+homepage:           https://github.com/saygo-png/sayland
+bug-reports:        https://github.com/saygo-png/sayland/issues
 description:
-  Saywayland is a WIP, simple Wayland library that doesn't use C bindings.
+  Sayland is a WIP, simple Wayland library that doesn't use C bindings.
   Neither does it provide abstractions, it's a fairly raw and incomplete implementation of some Wayland protocols.
 
 extra-source-files: protocols/*.xml
@@ -61,14 +61,14 @@ library
   hs-source-dirs:  lib
   exposed-modules:
     Protocol
-    Saywayland
-    Saywayland.Internal.Utils
-    Saywayland.Protocols.Wayland
-    Saywayland.Protocols.WlrLayerShell
-    Saywayland.Protocols.XdgShell
-    Saywayland.Types
-    Saywayland.Utils
-    Saywayland.WaylandSocket
+    Sayland
+    Sayland.Internal.Utils
+    Sayland.Protocols.Wayland
+    Sayland.Protocols.WlrLayerShell
+    Sayland.Protocols.XdgShell
+    Sayland.Types
+    Sayland.Utils
+    Sayland.WaylandSocket
 
 -- Test of a simple wallpaper daemon
 test-suite client-wallpaper-daemon
@@ -83,7 +83,7 @@ test-suite client-wallpaper-daemon
     , containers
     , network
     , relude
-    , saywayland
+    , sayland
     , stm
     , unix
 
@@ -99,7 +99,7 @@ test-suite client-basic-window
     , network
     , random
     , relude
-    , saywayland
+    , sayland
     , stm
     , unix
 
@@ -114,7 +114,7 @@ test-suite server-basic-compositor
     , directory
     , network
     , relude
-    , saywayland
+    , sayland
 
 test-suite template-haskell-protocol
   import:         common-options, executable-options
@@ -123,5 +123,5 @@ test-suite template-haskell-protocol
   main-is:        Main.hs
   build-depends:
     , base
-    , saywayland
+    , sayland
     , template-haskell

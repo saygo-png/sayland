@@ -5,7 +5,7 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Saywayland.Protocols.Wayland (module Saywayland.Protocols.Wayland) where
+module Sayland.Protocols.Wayland (module Sayland.Protocols.Wayland) where
 
 -- Module implementing some interfaces using classes defined by the `Protocol` module.
 
@@ -26,9 +26,9 @@ import MMAP (mapShared, mkMmapFlags, mmap, munmap, protRead, protWrite)
 import Protocol
 import Relude hiding (get)
 import Relude.Extra.Tuple (dup)
-import Saywayland.Internal.Utils
-import Saywayland.Types
-import Saywayland.Utils
+import Sayland.Internal.Utils
+import Sayland.Types
+import Sayland.Utils
 import System.Posix (Fd, setFdSize)
 
 $(loadProtocolFileEnums False "protocols/wayland.xml")

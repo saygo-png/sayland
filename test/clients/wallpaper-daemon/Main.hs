@@ -11,7 +11,7 @@ import Data.Map qualified as Map
 import Data.Maybe (fromJust)
 import Network.Socket hiding (openSocket)
 import Relude hiding (ByteString, get, isPrefixOf, put)
-import Saywayland
+import Sayland
 import System.Posix (ownerReadMode, ownerWriteMode, setFdSize, unionFileModes)
 import System.Posix.IO
 import System.Posix.SharedMem

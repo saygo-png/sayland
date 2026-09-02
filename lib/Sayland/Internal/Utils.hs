@@ -1,4 +1,4 @@
-module Saywayland.Internal.Utils (wlFormatter, getColorize, newNumbered) where
+module Sayland.Internal.Utils (wlFormatter, getColorize, newNumbered) where
 
 import Data.Char (toUpper)
 import Relude

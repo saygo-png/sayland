@@ -1,4 +1,4 @@
-module Saywayland.Utils (getClientEnv, headerSize, waylandNull, wlDisplayID, newObjectId, newObject, sendMessage', sendMessageWithFds', interfaceFromName, getInterface, getInterface') where
+module Sayland.Utils (getClientEnv, headerSize, waylandNull, wlDisplayID, newObjectId, newObject, sendMessage', sendMessageWithFds', interfaceFromName, getInterface, getInterface') where
 
 import Data.Bimap qualified as BM
 import Data.Binary.Put
@@ -11,8 +11,8 @@ import Network.Socket.ByteString (sendManyWithFds)
 import Network.Socket.ByteString.Lazy (sendAll)
 import Relude
 import Relude.Extra (dup)
-import Saywayland.Internal.Utils
-import Saywayland.Types
+import Sayland.Internal.Utils
+import Sayland.Types
 import System.Console.ANSI (Color (..), ColorIntensity (..))
 import System.Posix (Fd)
 

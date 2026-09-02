@@ -17,7 +17,7 @@ import Language.Haskell.TH.Syntax
 import Relude hiding (Type, get, put)
 import Relude.Extra (Elem)
 import Relude.Unsafe qualified as Unsafe
-import Saywayland.Types
+import Sayland.Types
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
 import System.Posix (Fd)

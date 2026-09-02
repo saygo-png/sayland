@@ -2,7 +2,7 @@ module Main (main) where
 
 import Language.Haskell.TH
 import Protocol
-import Saywayland.Internal.Utils (wlFormatter)
+import Sayland.Internal.Utils (wlFormatter)
 import Prelude
 
 main :: IO ()

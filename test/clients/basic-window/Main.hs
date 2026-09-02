@@ -10,7 +10,7 @@ import Data.Maybe (fromJust)
 import GHC.IO.Handle
 import Network.Socket (Family (AF_UNIX), SockAddr (SockAddrUnix), SocketType (Stream), close, connect, defaultProtocol, socket)
 import Relude hiding (hFlush)
-import Saywayland
+import Sayland
 import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import System.Random (randomIO)
 

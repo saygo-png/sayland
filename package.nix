@@ -2,6 +2,6 @@
 niceHaskell.mkPackage {
   flags = niceHaskell.mkFlags {doCheck = false;};
   packageRoot = ./.;
-  cabalName = "saywayland";
+  cabalName = "sayland";
   compiler = "ghc912";
 }

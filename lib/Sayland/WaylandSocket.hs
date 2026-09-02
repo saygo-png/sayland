@@ -1,4 +1,4 @@
-module Saywayland.WaylandSocket (module Saywayland.WaylandSocket) where
+module Sayland.WaylandSocket (module Sayland.WaylandSocket) where
 
 import Control.Concurrent.Async (async)
 import Control.Concurrent.STM (modifyTVar, newTQueue, writeTQueue)
@@ -15,10 +15,10 @@ import GHC.IO (unsafePerformIO)
 import Network.Socket
 import Network.Socket.ByteString (recvMsg)
 import Relude
-import Saywayland.Internal.Utils
-import Saywayland.Protocols.Wayland
-import Saywayland.Types
-import Saywayland.Utils
+import Sayland.Internal.Utils
+import Sayland.Protocols.Wayland
+import Sayland.Types
+import Sayland.Utils
 import System.Console.ANSI (Color (Magenta), ColorIntensity (Vivid))
 import System.Directory (doesFileExist)
 import System.Environment.Blank (getEnv)

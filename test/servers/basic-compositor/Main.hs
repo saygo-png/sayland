@@ -6,7 +6,7 @@ import Control.Exception (bracket)
 import Data.Map qualified as Map
 import Network.Socket
 import Relude
-import Saywayland
+import Sayland
 import System.Directory (removeFile)
 
 main :: IO ()

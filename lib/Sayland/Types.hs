@@ -1,7 +1,7 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module Saywayland.Types (module Saywayland.Types) where
+module Sayland.Types (module Sayland.Types) where
 
 import Control.Concurrent.STM (TQueue)
 import Control.Lens (Lens')

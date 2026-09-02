@@ -5,17 +5,17 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Saywayland.Protocols.XdgShell (module Saywayland.Protocols.XdgShell) where
+module Sayland.Protocols.XdgShell (module Sayland.Protocols.XdgShell) where
 
 import Control.Lens (makeFieldsId)
 import Data.Data (cast)
 import Data.Map qualified as Map
 import Protocol
 import Relude
-import Saywayland.Internal.Utils
-import Saywayland.Protocols.Wayland
-import Saywayland.Types
-import Saywayland.Utils
+import Sayland.Internal.Utils
+import Sayland.Protocols.Wayland
+import Sayland.Types
+import Sayland.Utils
 
 -- Interfaces {{{
 $(loadProtocolFileEnums False "protocols/xdg-shell.xml")

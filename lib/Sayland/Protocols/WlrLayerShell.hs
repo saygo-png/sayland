@@ -3,16 +3,16 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
-module Saywayland.Protocols.WlrLayerShell (module Saywayland.Protocols.WlrLayerShell) where
+module Sayland.Protocols.WlrLayerShell (module Sayland.Protocols.WlrLayerShell) where
 
 import Control.Lens
 import Protocol
 import Relude
-import Saywayland.Internal.Utils
-import Saywayland.Protocols.Wayland
-import Saywayland.Protocols.XdgShell
-import Saywayland.Types
-import Saywayland.Utils
+import Sayland.Internal.Utils
+import Sayland.Protocols.Wayland
+import Sayland.Protocols.XdgShell
+import Sayland.Types
+import Sayland.Utils
 
 $(loadProtocolFileEnums False "protocols/wlr-layer-shell-unstable-v1.xml")
 
