@@ -31,7 +31,7 @@ data Rectangle = Rectangle
 
 -- | HasWlid, a lens defined globally due to ID being a part of every wayland interface.
 class HasWlid s a | s -> a where
-  wlid :: Lens' s a
+  lWlid :: Lens' s a
 
 -- | A Default-like structure, but using IO
 class DefaultIO a where

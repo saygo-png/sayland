@@ -7,7 +7,6 @@
 
 module Sayland.Protocols.XdgShell (module Sayland.Protocols.XdgShell) where
 
-import Control.Lens (makeFieldsId)
 import Data.Data (cast)
 import Data.Map qualified as Map
 import Protocol
@@ -41,13 +40,13 @@ instance DefaultIO Xdg_surface where defM = newIORef Nothing <&> Xdg_surface 0 0
 
 instance DefaultIO Xdg_toplevel where
   defM = do
-    size <- newIORef (0, 0)
-    parent <- newIORef Nothing
-    pure Xdg_toplevel{wlid = 0, toplevel_xdg_surface = 0, ..}
+    size' <- newIORef (0, 0)
+    parent' <- newIORef Nothing
+    pure Xdg_toplevel{wlid = 0, toplevel_xdg_surface = 0, size = size', parent = parent'}
 
 instance DefaultIO Xdg_popup where defM = pure $ Xdg_popup{popup_xdg_surface = 0, wlid = 0, parent = 0, positioner = 0}
 
-$(concat <$> mapM makeFieldsId [''Xdg_wm_base, ''Xdg_positioner, ''Xdg_surface, ''Xdg_toplevel, ''Xdg_popup])
+$(concat <$> mapM makeFieldsWithPrefix [''Xdg_wm_base, ''Xdg_positioner, ''Xdg_surface, ''Xdg_toplevel, ''Xdg_popup])
 
 $(loadProtocolFile wlFormatter False "protocols/xdg-shell.xml")
 $(generateTables False wlFormatter "protocols/xdg-shell.xml")

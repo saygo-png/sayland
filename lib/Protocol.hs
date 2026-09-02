@@ -11,12 +11,11 @@ import Data.Binary.Get
 import Data.Binary.Put (putByteString, putInt32le, putWord32le)
 import Data.ByteString qualified as BS
 import Data.Maybe (fromJust)
-import Data.Traversable (for)
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
 import Relude hiding (Type, get, put)
-import Relude.Extra (Elem)
 import Relude.Unsafe qualified as Unsafe
+import Sayland.Internal.Utils
 import Sayland.Types
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
@@ -139,22 +138,7 @@ putForType t = case t of
 
 -- }}}
 
--- Utils {{{
-qname :: String -> QName
-qname x = QName x Nothing Nothing
-
--- }}}
-
 -- TemplateHaskell Utils {{{
-adata :: Name
-adata = mkName "_additionalData"
-
--- | Defines an integer variable with name `name` and value `x`.
-mkIntVariable :: String -> Integer -> [Dec]
-mkIntVariable name x =
-  [ SigD (mkName name) (ConT ''Int)
-  , ValD (VarP (mkName name)) (NormalB (LitE $ IntegerL x)) []
-  ]
 
 -- | Returns a declaration of the `Function`s opcode as an integer variable.
 mkOpcode :: String -> String -> Word16 -> [Dec]
@@ -240,22 +224,6 @@ generateTables isIO formatter path = do
     $ concatMap (`generateInterfaceTable` formatter) protocols
     <> concatMap generateVersionTable protocols
 
-{-
-mkEvents :: (String -> String) -> String -> String -> [Element] -> [Dec]
-mkEvents formatter interfaceName prefix events = DataD [] (mkName prefix') [] Nothing constructors []:datatypes
-  where
-    prefix' = prefix <> "_" <> interfaceName
-    buildBang x = (mkName . fromJust $ findAttr (qname "name") x, Bang NoSourceUnpackedness NoSourceStrictness, argType formatter interfaceName x)
-    buildRecord x = RecC (mkName $ prefix' <> "_" <> fromJust (findAttr (qname "name") x)) $ buildBang <$> findChildren (qname "arg") x
-    buildDT x = DataD [] (mkName name) [] Nothing [buildRecord x] []
-      where
-        name = prefix' <> "_" <> fromJust (findAttr (qname "name") x)
-    datatypes = fmap buildDT events
-    buildCon x = NormalC (mkName $ name <> "'") [(Bang NoSourceUnpackedness NoSourceStrictness, ConT $ mkName name)]
-      where
-        name = prefix' <> "_" <> fromJust (findAttr (qname "name") x)
-    constructors = fmap buildCon events
--}
 mkEvents :: (String -> String) -> String -> String -> [Element] -> [Dec]
 mkEvents formatter interfaceName prefix events = [DataD [] (mkName prefix') [] Nothing constructors []]
   where
@@ -440,24 +408,24 @@ loadEnum e' = (fromJust $ findAttr (qname "name") e', f <$> findChildren (qname 
     f e = (fromJust $ findAttr (qname "name") e, Unsafe.read $ fromJust $ findAttr (qname "value") e)
 
 argType :: (String -> String) -> String -> Element -> Type
-argType formatter intName x = case findAttr (qname "enum") x of
-  Just x' ->
+argType formatter intName element = case findAttr (qname "enum") element of
+  Just enumName ->
     ConT
       $ mkName
       $ "Enum_"
-      <> case span (/= '.') x' of
+      <> case span (/= '.') enumName of
         (a, "") -> intName <> "_" <> a
         (a, _ : b) -> a <> "_" <> b
-  Nothing -> case findAttr (qname "type") x of
-    Nothing -> error $ "arg without a type discovered" <> show x
-    Just "new_id" -> case findAttr (qname "interface") x of
+  Nothing -> case findAttr (qname "type") element of
+    Nothing -> error $ "arg without a type discovered" <> show element
+    Just "new_id" -> case findAttr (qname "interface") element of
       Just x -> AppT (ConT ''TObjectID) . ConT . mkName $ formatter x
       Nothing -> ConT ''NewID
     Just "int" -> ConT ''Int
     Just "uint" -> ConT ''Word32
     Just "fixed" -> ConT ''Double
     Just "string" -> ConT ''BS.ByteString
-    Just "object" -> case findAttr (qname "interface") x of
+    Just "object" -> case findAttr (qname "interface") element of
       Just x -> AppT (ConT ''TObjectID) . ConT . mkName $ formatter x
       Nothing -> ConT ''ObjectID
     Just "array" -> ConT ''BS.ByteString

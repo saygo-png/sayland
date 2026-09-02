@@ -5,7 +5,6 @@
 
 module Sayland.Protocols.WlrLayerShell (module Sayland.Protocols.WlrLayerShell) where
 
-import Control.Lens
 import Protocol
 import Relude
 import Sayland.Internal.Utils
@@ -20,7 +19,7 @@ newtype Zwlr_layer_shell_v1 = Zwlr_layer_shell_v1 {wlid :: TObjectID Zwlr_layer_
 
 newtype Zwlr_layer_surface_v1 = Zwlr_layer_surface_v1 {wlid :: TObjectID Zwlr_layer_surface_v1}
 
-$(concat <$> mapM makeFieldsId [''Zwlr_layer_shell_v1, ''Zwlr_layer_surface_v1])
+$(concat <$> mapM makeFieldsWithPrefix [''Zwlr_layer_shell_v1, ''Zwlr_layer_surface_v1])
 
 instance DefaultIO Zwlr_layer_shell_v1 where
   defM = pure $ Zwlr_layer_shell_v1 0
@@ -49,7 +48,7 @@ instance Interface' Zwlr_layer_surface_v1 Client where
   type Event Zwlr_layer_surface_v1 = Event_zwlr_layer_surface_v1
   type Request Zwlr_layer_surface_v1 = Request_zwlr_layer_surface_v1
   runEvent _ls Event_zwlr_layer_surface_v1_closed = pass
-  runEvent _ls (Event_zwlr_layer_surface_v1_configure _ _ _) = pass
+  runEvent _ls (Event_zwlr_layer_surface_v1_configure{}) = pass
   runRequest ls request@(Request_zwlr_layer_surface_v1_ack_configure _serial) = do
     sendMessage' request ls.wlid
   runRequest ls request@(Request_zwlr_layer_surface_v1_set_anchor _anchor) = do
@@ -62,7 +61,7 @@ instance Interface' Zwlr_layer_surface_v1 Client where
   runRequest _ls (Request_zwlr_layer_surface_v1_get_popup _) = pass
   runRequest _ls (Request_zwlr_layer_surface_v1_set_keyboard_interactivity _) = pass
   runRequest _ls (Request_zwlr_layer_surface_v1_set_layer _) = pass
-  runRequest _ls (Request_zwlr_layer_surface_v1_set_margin _ _ _ _) = pass
+  runRequest _ls (Request_zwlr_layer_surface_v1_set_margin{}) = pass
 
 instance Interface' Zwlr_layer_surface_v1 Server
 
