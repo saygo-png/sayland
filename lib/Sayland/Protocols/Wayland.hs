@@ -338,10 +338,9 @@ instance Interface' Wl_display Server where
   runRequest _display (Request_wl_display_sync callback) = do
     mvar <- newEmptyMVar
     callbackObject <- newObject callback Wl_callback{wlid = callback, done = mvar}
-    -- TODO: synchronize there... somehow
-    putMVar mvar ()
-    let event = Event_wl_callback_done 0
-    runEvent callbackObject event
+    -- before calling this event, the compositor must process all previous requests. In a single-threaded compositor it is a no-op.
+    -- in a multi-threaded compositor this becomes a problem.
+    runEvent callbackObject $ Event_wl_callback_done 0
   runRequest _display (Request_wl_display_get_registry registry) = do
     ClientServerEnv _ env _ <- ask
     versions <- zip [0 ..] . Map.toList <$> readIORef env.versionTable
