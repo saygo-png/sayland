@@ -9,7 +9,8 @@ don't
 
 == Documentation
 
-You can build the docs using `cabal haddock` and view the html files in a browser.
+View online at https://saygo-png.github.io/sayland/
+or build locally using `cabal haddock` and view the html files in a browser/put on a webserver.
 
 == Building
 
