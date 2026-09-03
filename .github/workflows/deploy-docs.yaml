@@ -28,12 +28,16 @@ jobs:
       - uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Build website
-        run: nix build .#sayland-with-docs.doc --accept-flake-config --print-build-logs
+        run: |
+          nix build .#sayland-with-docs.doc --accept-flake-config --print-build-logs
+          mkdir -p publish
+          cp -rvL result-doc/share/doc/*/html/* publish/
+          chmod -R +w publish
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./result-doc/share/doc/sayland-*/html
+          path: ./publish
 
   deploy:
     environment:
