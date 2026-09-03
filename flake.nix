@@ -32,10 +32,11 @@
     homeManagerModules.drugtracker2 = (import ./home-manager.nix) niceHaskell;
 
     packages = eachSystem (system: pkgs: let
-      program = pkgs.callPackage ./package.nix {niceHaskell = niceHaskell.outputs.niceHaskell.${system};};
+      sayland = pkgs.callPackage ./package.nix {niceHaskell = niceHaskell.outputs.niceHaskell.${system};};
     in {
-      "sayland" = program;
-      default = program;
+      inherit sayland;
+      sayland-with-docs = sayland.override {doHaddock = true;};
+      default = sayland;
     });
 
     formatter = eachSystem (_system: pkgs: (treefmt-nix.lib.evalModule pkgs ./treefmt.nix).config.build.wrapper);
