@@ -1,5 +1,5 @@
 {-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeFamilyDependencies #-}
 
 module Sayland.Types (module Sayland.Types) where
 
@@ -93,8 +93,8 @@ class
   ) =>
   Interface' a (p :: Perspective)
   where
-  type Event a
-  type Request a
+  type Event a = r | r -> a
+  type Request a = r | r -> a
   runEvent :: a -> Event a -> Wayland p ()
   runRequest :: a -> Request a -> Wayland p ()
 

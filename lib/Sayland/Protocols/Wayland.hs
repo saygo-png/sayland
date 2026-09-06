@@ -33,6 +33,10 @@ import System.Posix (Fd, setFdSize)
 
 $(loadProtocolFileEnums False "protocols/wayland.xml")
 
+-- | Constant representing the wl_display ID which is always 1 in Wayland.
+wlDisplayId :: TObjectID Wl_display
+wlDisplayId = 1
+
 -- Nothing or empty list means no change. In order to "reset" values, set them to the defaults - ObjectID `0`, normal transform, etc.
 data ContentUpdate = ContentUpdate
   { cuSurface :: TObjectID Wl_surface
@@ -189,7 +193,7 @@ $( concat
 
 -- DefaultIO instances {{{
 instance DefaultIO Wl_display where
-  defM = pure Wl_display{wlid = TObjectID wlDisplayID}
+  defM = pure Wl_display{wlid = wlDisplayId}
 
 instance DefaultIO Wl_registry where
   defM = pure Wl_registry{wlid = 0}
@@ -299,13 +303,13 @@ dropObject (TObjectID i) =
     ClientEnv env -> modifyIORef env.objects $ Map.delete i
     ClientServerEnv _ env _ -> do
       void $ atomicModifyIORef' env.objects (dup . Map.delete i)
-      Just wldisplay <- getInterface' @Wl_display 1
+      Just wldisplay <- getInterface wlDisplayId
       runEvent wldisplay $ Event_wl_display_delete_id i
 
 -- | send an error message to the client.
 sendError :: TObjectID a -> Word32 -> BS.ByteString -> Wayland Server ()
 sendError (TObjectID i) code msg = do
-  Just wldisplay <- getInterface' @Wl_display 1
+  Just wldisplay <- getInterface wlDisplayId
   runEvent wldisplay $ Event_wl_display_error i code msg
 
 -- Interface Implementations {{{

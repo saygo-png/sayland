@@ -1,4 +1,6 @@
-module Sayland.Utils (getClientEnv, headerSize, waylandNull, wlDisplayID, newObjectId, newObject, sendMessage', sendMessageWithFds', interfaceFromName, getInterface, getInterface') where
+{-# LANGUAGE RequiredTypeArguments #-}
+
+module Sayland.Utils (getClientEnv, headerSize, waylandNull, newObjectId, newObject, sendMessage', sendMessageWithFds', interfaceFromName, getInterface, getInterface') where
 
 import Data.Bimap qualified as BM
 import Data.Binary.Put
@@ -23,10 +25,6 @@ headerSize = 8
 -- | Constant representing the Wayland null, which is just 0.
 waylandNull :: Word32
 waylandNull = 0
-
--- | Constant representing the wl_display ID which is always 1 in Wayland.
-wlDisplayID :: Word32
-wlDisplayID = 1
 
 -- | Increases the counter by 1 and returns it's new value.
 newObjectId :: Wayland p Word32

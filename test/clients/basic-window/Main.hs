@@ -25,14 +25,14 @@ main = do
   runReaderT program =<< waylandSetup
   where
     waylandSetup = do
-      let display :: Interface Client = Interface $ Wl_display $ TObjectID wlDisplayID
+      let display :: Interface Client = Interface $ Wl_display wlDisplayId
       getSocketPath openSocket >>= \case
         Just path -> do
           putStrLn $ "using socket path: " <> show path
           sock <- socket AF_UNIX Stream defaultProtocol
           connect sock $ SockAddrUnix path
-          counter <- newIORef wlDisplayID
-          objects <- newIORef $ Map.fromList [(wlDisplayID, display)]
+          counter <- newIORef (coerce wlDisplayId)
+          objects <- newIORef $ Map.fromList [(coerce wlDisplayId, display)]
           globals <- newIORef BM.empty
           handlers <- newIORef mempty
           interfaceTable' <- newIORef $ Map.fromList interfaceTable
@@ -46,8 +46,8 @@ program = do
   ClientEnv env <- ask
   running :: MVar () <- newEmptyMVar
 
-  display <- fromJust <$> getInterface' @Wl_display 1
-  registryId :: TObjectID Wl_registry <- TObjectID <$> newObjectId
+  display <- fromJust <$> getInterface wlDisplayId
+  registryId <- TObjectID <$> newObjectId
   runRequest display $ Request_wl_display_get_registry registryId
   registry <- fromJust <$> getInterface registryId
 
