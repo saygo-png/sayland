@@ -23,4 +23,5 @@ Build using Cabal: `cabal build`
 The project provides a Nix dev shell with Haskell tooling.
 You can use it with `nix develop`.
 
-You can format the entire project using `nix fmt`.
+You can format the entire project using `treefmt` or `nix fmt`.
+There also is a githook that formats using `treefmt` on each commit.
