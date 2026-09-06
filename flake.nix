@@ -1,7 +1,6 @@
 {
   inputs = {
     treefmt-nix.url = "github:numtide/treefmt-nix";
-    # nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     niceHaskell = {
       url = "github:saygo-png/nice-nixpkgs-haskell";
@@ -22,15 +21,11 @@
     systems,
     niceHaskell,
     treefmt-nix,
-    self,
     ...
   }: let
     pkgsFor = nixpkgs.lib.genAttrs (import systems) (system: import nixpkgs {inherit system;});
     eachSystem = f: nixpkgs.lib.genAttrs (import systems) (system: f system pkgsFor.${system});
   in {
-    homeManagerModules.default = self.homeManagerModules.drugtracker2;
-    homeManagerModules.drugtracker2 = (import ./home-manager.nix) niceHaskell;
-
     packages = eachSystem (system: pkgs: let
       sayland = pkgs.callPackage ./package.nix {niceHaskell = niceHaskell.outputs.niceHaskell.${system};};
     in {
