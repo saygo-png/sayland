@@ -1,4 +1,4 @@
-module Sayland.Internal.Utils (wlFormatter, getColorize, newNumbered, adata, qname, dumpDecs, makeFieldsWithPrefix) where
+module Sayland.Internal.Utils (wlFormatter, getColorize, newNumbered, adata, qname, makeFieldsWithPrefix) where
 
 import Control.Lens (DefName (..), FieldNamer, classIdFields, classIdNamer, lensField, makeLensesWith, (.~))
 import Data.Char (toUpper)
@@ -29,11 +29,6 @@ adata = mkName "_additionalData"
 
 qname :: String -> QName
 qname x = QName x Nothing Nothing
-
-dumpDecs :: DecsQ -> IO ()
-dumpDecs q = do
-  ds <- runQ q
-  mapM_ print ds
 
 makeFieldsWithPrefix :: Name -> DecsQ
 makeFieldsWithPrefix = makeLensesWith (classIdFields & lensField .~ lPrefixNamer)
