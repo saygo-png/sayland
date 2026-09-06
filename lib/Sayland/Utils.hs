@@ -1,6 +1,6 @@
 {-# LANGUAGE RequiredTypeArguments #-}
 
-module Sayland.Utils (getClientEnv, headerSize, waylandNull, newObjectId, newObject, sendMessage', sendMessageWithFds', interfaceFromName, getInterface, getInterface') where
+module Sayland.Utils (getClientEnv, headerSize, waylandNull, newObjectId, newObject, runNewObjReq, sendMessage', sendMessageWithFds', interfaceFromName, getInterface, getInterface') where
 
 import Data.Bimap qualified as BM
 import Data.Binary.Put
@@ -38,6 +38,16 @@ newObject (TObjectID intId) int = do
   objs <- (.objects) <$> getClientEnv
   _ <- atomicModifyIORef' objs $ dup . Map.insert intId (Interface int)
   pure int
+
+-- | like `runRequest` but meant for use with creation requests. Returns the created interface.
+runNewObjReq :: forall a b. (Interface' a Client, Typeable b) => a -> (TObjectID b -> Request a) -> Wayland Client b
+runNewObjReq i mkReq = do
+  newId <- TObjectID <$> newObjectId
+  runRequest i $ mkReq newId
+  getInterface newId >>= \case
+    Just child -> pure child
+    Nothing ->
+      error "runNewObjReq: runRequest did not register the expected object (library bug)"
 
 -- | Send a Wayland message using the wire protocol.
 sendMessage' :: (WaylandEvent e) => e -> TObjectID i -> Wayland p ()

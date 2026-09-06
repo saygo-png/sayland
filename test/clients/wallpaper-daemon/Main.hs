@@ -50,9 +50,7 @@ program = do
   running :: MVar () <- newEmptyMVar
 
   display <- fromJust <$> getInterface wlDisplayId
-  registryId <- TObjectID <$> newObjectId
-  runRequest display $ Request_wl_display_get_registry registryId
-  registry <- fromJust <$> getInterface registryId
+  registry <- runNewObjReq display Request_wl_display_get_registry
 
   liftIO
     . void
@@ -63,31 +61,29 @@ program = do
 
   putStrLn "Binding to required interfaces..."
   wlShmId <- fromJust <$> bindToInterface registry "wl_shm"
-  wl_shm <- fromJust <$> getInterface' @Wl_shm wlShmId
+  wl_shm <- fromJust <$> getInterface (TObjectID wlShmId)
 
   wlCompositorId <- TObjectID . fromJust <$> bindToInterface registry "wl_compositor"
-  wl_compositor :: Wl_compositor <- fromJust <$> getInterface wlCompositorId
+  wl_compositor <- fromJust <$> getInterface wlCompositorId
 
   zwlrLayerShellV1Id <- TObjectID . fromJust <$> bindToInterface registry "zwlr_layer_shell_v1"
-  zwlr_layer_shell_V1 :: Zwlr_layer_shell_v1 <- fromJust <$> getInterface zwlrLayerShellV1Id
+  zwlr_layer_shell_V1 <- fromJust <$> getInterface zwlrLayerShellV1Id
 
   modifyIORef env.eventHandlers $ (:) $ EventHandler $ \_oid -> \case
     (Event_zwlr_layer_surface_v1_configure receivedSerial _ _) -> do
       atomically $ putTMVar serial receivedSerial
     _ -> pass
 
-  wlSurfaceId <- TObjectID <$> newObjectId
-  runRequest wl_compositor $ Request_wl_compositor_create_surface wlSurfaceId
-  surface' <- fromJust <$> getInterface wlSurfaceId
+  surface <- runNewObjReq wl_compositor Request_wl_compositor_create_surface
 
   layerSurfaceId <- TObjectID <$> newObjectId
-  runRequest zwlr_layer_shell_V1 $ Request_zwlr_layer_shell_v1_get_layer_surface layerSurfaceId wlSurfaceId 0 Enum_zwlr_layer_shell_v1_layer_background "wallpaper"
+  runRequest zwlr_layer_shell_V1 $ Request_zwlr_layer_shell_v1_get_layer_surface layerSurfaceId surface.wlid 0 Enum_zwlr_layer_shell_v1_layer_background "wallpaper"
 
   zwlrLayerSurfaceV1 <- fromJust <$> getInterface layerSurfaceId
   runRequest zwlrLayerSurfaceV1 $ Request_zwlr_layer_surface_v1_set_size (fromIntegral bufferWidth) (fromIntegral bufferHeight)
   runRequest zwlrLayerSurfaceV1 $ Request_zwlr_layer_surface_v1_set_exclusive_zone $ -1
 
-  runRequest surface' Request_wl_surface_commit
+  runRequest surface Request_wl_surface_commit
   atomically (takeTMVar serial) >>= runRequest zwlrLayerSurfaceV1 . Request_zwlr_layer_surface_v1_ack_configure
 
   let makeSharedMemoryObject = shmOpen poolName (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
@@ -104,8 +100,8 @@ program = do
           fileHandle <- liftIO $ fdToHandle fileDescriptor
 
           liftIO $ hPut fileHandle image
-          runRequest surface' $ Request_wl_surface_attach wlBufferId 0 0
-          runRequest surface' Request_wl_surface_commit
+          runRequest surface $ Request_wl_surface_attach wlBufferId 0 0
+          runRequest surface Request_wl_surface_commit
 
           -- Wait for exit
           takeMVar running
