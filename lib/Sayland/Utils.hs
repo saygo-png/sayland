@@ -28,7 +28,7 @@ waylandNull = 0
 wlDisplayID :: Word32
 wlDisplayID = 1
 
--- | Increase the counter by 1 and returns it's new value.
+-- | Increases the counter by 1 and returns it's new value.
 newObjectId :: Wayland p Word32
 newObjectId = do
   ClientEnv env <- ask
@@ -40,10 +40,6 @@ newObject (TObjectID intId) int = do
   objs <- (.objects) <$> getClientEnv
   _ <- atomicModifyIORef' objs $ dup . Map.insert intId (Interface int)
   pure int
-
-{- | Convenience function for sending a Wayland message.
-See 'sendMessage'.
--}
 
 -- | Send a Wayland message using the wire protocol.
 sendMessage' :: (WaylandEvent e) => e -> TObjectID i -> Wayland p ()
