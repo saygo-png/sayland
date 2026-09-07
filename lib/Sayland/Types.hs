@@ -39,7 +39,7 @@ class DefaultIO a where
   defM :: (MonadIO m) => m a
 
 -- | Perspective of the current Wayland Environment
-data Perspective = Client | Server
+type data Perspective = Client | Server
 
 type role EventHandler nominal
 
@@ -53,8 +53,8 @@ type role WaylandEnv nominal
 type ClientID = Int
 
 data WaylandEnv (p :: Perspective) where
-  ClientEnv :: ClientEnvironment Client -> WaylandEnv 'Client
-  ClientServerEnv :: ServerEnvironment -> ClientEnvironment Server -> ClientID -> WaylandEnv 'Server
+  ClientEnv :: ClientEnvironment Client -> WaylandEnv Client
+  ClientServerEnv :: ServerEnvironment -> ClientEnvironment Server -> ClientID -> WaylandEnv Server
 
 data ServerEnvironment = ServerEnvironment
   { socket :: Socket
