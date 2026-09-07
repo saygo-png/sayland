@@ -51,8 +51,6 @@ Finally, implement `Interface'` to all your interface data types:
 ```hs
 
 instance Interface' Wp_fifo_manager_v1 Client where
-  type Request Wp_fifo_manager_v1 = Request_wp_fifo_manager_v1
-  type Event Wp_fifo_manager_v1 = Event_wp_fifo_manager_v1
   runEvent _ _ = pass
   runRequest manager request@Request_wp_fifo_manager_v1_destroy = do
     sendMessage' request manager.wlid
@@ -66,8 +64,6 @@ instance Interface' Wp_fifo_manager_v1 Client where
       Nothing -> error "non-existent surface provided to Request_wp_fifo_amanger_v1_get_fifo"
 
 instance Interface' Wp_fifo_manager_v1 Server where
-  type Request Wp_fifo_manager_v1 = Request_wp_fifo_manager_v1
-  type Event Wp_fifo_manager_v1 = Event_wp_fifo_manager_v1
   runEvent _ _ = pass
   runRequest manager Request_wp_fifo_manager_v1_destroy = dropObject manager.wlid
   runRequest manager (Request_wp_fifo_manager_v1_get_fifo fifoId surfaceId) = do
@@ -79,8 +75,6 @@ instance Interface' Wp_fifo_manager_v1 Server where
 
 
 instance Interface' Wp_fifo_v1 Client where
-  type Request Wp_fifo_v1 = Request_wp_fifo_v1
-  type Event Wp_fifo_v1 = Event_wp_fifo_v1
   runEvent _ _ = pass
   runRequest fifo request@Request_wp_fifo_v1_set_barrier = do
     getInterface fifo.fifoSurface >>= \case
@@ -99,8 +93,6 @@ instance Interface' Wp_fifo_v1 Client where
     dropObject fifo.wlid
 
 instance Interface' Wp_fifo_v1 Server where
-  type Request Wp_fifo_v1 = Request_wp_fifo_v1
-  type Event Wp_fifo_v1 = Event_wp_fifo_v1
   runEvent _ _ = pass
   runRequest fifo Request_wp_fifo_v1_destroy = dropObject fifo.wlid
   runRequest fifo Request_wp_fifo_v1_set_barrier = do
