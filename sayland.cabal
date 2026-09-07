@@ -34,7 +34,6 @@ common common-options
     OverloadedRecordDot
     OverloadedStrings
     PartialTypeSignatures
-    TypeData
 
 common executable-options
   ghc-options: -rtsopts -with-rtsopts=-N

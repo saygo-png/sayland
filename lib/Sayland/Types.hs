@@ -39,7 +39,7 @@ class DefaultIO a where
   defM :: (MonadIO m) => m a
 
 -- | Perspective of the current Wayland Environment
-type data Perspective = Client | Server
+data Perspective = Client | Server
 
 type role EventHandler nominal
 
