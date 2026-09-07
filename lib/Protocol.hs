@@ -1,9 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 
+-- | Description : Defines all requests and events that exist and should be implemented. Implementations under `Protocols`
 module Protocol (module Protocol) where
-
--- This module's purpose is to define all requests and events that exist and should be implemented. Implementing them is handled in `Protocols/`
 
 import Control.Concurrent.STM (readTQueue)
 import Data.Binary

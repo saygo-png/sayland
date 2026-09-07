@@ -3,15 +3,13 @@ module Main (main) where
 
 import Config
 import Control.Concurrent (forkIO)
-import Control.Concurrent.STM (newTQueue)
 import Control.Exception
-import Data.Bimap qualified as BM
 import Data.ByteString.Lazy hiding (singleton)
-import Data.Map qualified as Map
 import Data.Maybe (fromJust)
 import Network.Socket hiding (openSocket)
 import Relude hiding (ByteString, get, isPrefixOf, put)
 import Sayland
+import Sayland.WaylandUtils
 import System.Posix (ownerReadMode, ownerWriteMode, setFdSize, unionFileModes)
 import System.Posix.IO
 import System.Posix.SharedMem
@@ -23,25 +21,7 @@ versionTable :: VersionTable
 versionTable = waylandVersionTable <> wlr_layer_shell_unstable_v1VersionTable
 
 main :: IO ()
-main = do
-  runReaderT program =<< waylandSetup
-  where
-    waylandSetup = do
-      let display :: Interface Client = Interface $ Wl_display wlDisplayId
-      getSocketPath openSocket >>= \case
-        Just path -> do
-          putStrLn $ "using socket path: " <> show path
-          sock <- socket AF_UNIX Stream defaultProtocol
-          connect sock $ SockAddrUnix path
-          counter <- newIORef $ coerce wlDisplayId
-          objects <- newIORef $ Map.fromList [(coerce wlDisplayId, display)]
-          globals <- newIORef BM.empty
-          handlers <- newIORef mempty
-          interfaceTable' <- newIORef $ Map.fromList interfaceTable
-          versionTable' <- newIORef $ Map.fromList versionTable
-          fdqueue <- atomically newTQueue
-          pure $ ClientEnv $ ClientEnvironment sock counter objects globals interfaceTable' versionTable' handlers fdqueue
-        Nothing -> error "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."
+main = runReaderT program =<< waylandSetup interfaceTable versionTable
 
 program :: Wayland Client ()
 program = do

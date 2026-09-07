@@ -1,16 +1,15 @@
 module Main (main) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.STM (newTQueue, writeTMVar)
+import Control.Concurrent.STM (writeTMVar)
 import Control.Exception (bracket, finally)
-import Data.Bimap qualified as BM
 import Data.ByteString (hPut, pack)
-import Data.Map qualified as Map
 import Data.Maybe (fromJust)
 import GHC.IO.Handle
-import Network.Socket (Family (AF_UNIX), SockAddr (SockAddrUnix), SocketType (Stream), close, connect, defaultProtocol, socket)
+import Network.Socket (close)
 import Relude hiding (hFlush)
 import Sayland
+import Sayland.WaylandUtils
 import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import System.Random (randomIO)
 
@@ -21,25 +20,7 @@ versionTable :: VersionTable
 versionTable = waylandVersionTable <> xdg_shellVersionTable
 
 main :: IO ()
-main = do
-  runReaderT program =<< waylandSetup
-  where
-    waylandSetup = do
-      let display :: Interface Client = Interface $ Wl_display wlDisplayId
-      getSocketPath openSocket >>= \case
-        Just path -> do
-          putStrLn $ "using socket path: " <> show path
-          sock <- socket AF_UNIX Stream defaultProtocol
-          connect sock $ SockAddrUnix path
-          counter <- newIORef (coerce wlDisplayId)
-          objects <- newIORef $ Map.fromList [(coerce wlDisplayId, display)]
-          globals <- newIORef BM.empty
-          handlers <- newIORef mempty
-          interfaceTable' <- newIORef $ Map.fromList interfaceTable
-          versionTable' <- newIORef $ Map.fromList versionTable
-          q <- atomically newTQueue
-          pure $ ClientEnv $ ClientEnvironment sock counter objects globals interfaceTable' versionTable' handlers q
-        Nothing -> error "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."
+main = runReaderT program =<< waylandSetup interfaceTable versionTable
 
 program :: Wayland Client ()
 program = do
