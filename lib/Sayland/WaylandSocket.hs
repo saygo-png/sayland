@@ -11,7 +11,6 @@ import Data.Map qualified as Map
 import Debug.Trace (traceIO)
 import Foreign (Storable (peek, sizeOf), castPtr)
 import Foreign.C
-import GHC.IO (unsafePerformIO)
 import Network.Socket
 import Network.Socket.ByteString (recvMsg)
 import Relude
@@ -62,18 +61,16 @@ getHeader :: Get (Word32, Word16, Word16)
 getHeader = (,,) <$> getWord32le <*> getWord16le <*> getWord16le
 
 -- | a monstracity that gets a list of file descriptors from an ancillary data bytestring.
-decodeFds :: BS.ByteString -> [Fd]
-decodeFds bs =
-  Fd <$> go bs []
+decodeFds :: BS.ByteString -> IO [Fd]
+decodeFds bs = map Fd <$> go bs []
   where
+    intSize = sizeOf (0 :: CInt)
     go b acc
-      | BS.length b < sizeOf (0 :: CInt) = reverse acc
-      | otherwise =
-          let (x, rest) = BS.splitAt (sizeOf (0 :: CInt)) b
-              v =
-                unsafePerformIO
-                  $ BS.useAsCString x (peek . castPtr)
-           in go rest (v : acc)
+      | BS.length b < intSize = pure $ reverse acc
+      | otherwise = do
+          let (x, rest) = BS.splitAt intSize b
+          v <- BS.useAsCString x (peek . castPtr)
+          go rest (v : acc)
 
 -- | handle communication between a server and a client in provided socket, works both on the server and the client.
 clientLoop :: Socket -> Wayland p ()
@@ -83,7 +80,7 @@ clientLoop = clientLoop' ""
     clientLoop' bytes' sock = do
       queue <- (.fdQueue) <$> getClientEnv
       (_, bytes'', cmsgs, _flags) <- liftIO $ recvMsg sock 8 4096 mempty
-      let newFds = concatMap (decodeFds . cmsgData) $ filter (\x -> cmsgId x == CmsgIdFds) cmsgs
+      newFds <- liftIO $ concat <$> traverse (decodeFds . cmsgData) (filter (\x -> cmsgId x == CmsgIdFds) cmsgs)
       liftIO . atomically $ mapM_ (writeTQueue queue) newFds
       let bytes = bytes' <> bytes''
       bool
