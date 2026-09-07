@@ -32,8 +32,6 @@ $(generateTables False wlFormatter "protocols/wlr-layer-shell-unstable-v1.xml")
 
 -- zwlr_layer_shell_v1 {{{
 instance Interface' Zwlr_layer_shell_v1 Client where
-  type Event Zwlr_layer_shell_v1 = Event_zwlr_layer_shell_v1
-  type Request Zwlr_layer_shell_v1 = Request_zwlr_layer_shell_v1
   runEvent _shell _ = pass
   runRequest shell request@(Request_zwlr_layer_shell_v1_get_layer_surface layerSurfaceId _surfaceId _outputId _layer _namespace) = do
     sendMessage' request shell.wlid
@@ -45,8 +43,6 @@ instance Interface' Zwlr_layer_shell_v1 Server
 -- }}}
 -- zwlr_layer_surface_v1 {{{
 instance Interface' Zwlr_layer_surface_v1 Client where
-  type Event Zwlr_layer_surface_v1 = Event_zwlr_layer_surface_v1
-  type Request Zwlr_layer_surface_v1 = Request_zwlr_layer_surface_v1
   runEvent _ls Event_zwlr_layer_surface_v1_closed = pass
   runEvent _ls (Event_zwlr_layer_surface_v1_configure{}) = pass
   runRequest ls request@(Request_zwlr_layer_surface_v1_ack_configure _serial) = do

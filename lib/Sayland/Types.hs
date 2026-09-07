@@ -8,6 +8,7 @@ import Control.Lens (Lens')
 import Data.Bimap qualified as BM
 import Data.Binary
 import Data.ByteString qualified as BS
+import Data.Data (typeOf)
 import Network.Socket (Socket)
 import Relude hiding (ByteString, get, put)
 import System.Posix (Fd)
@@ -91,12 +92,21 @@ class
   , HasWlid a (TObjectID a)
   , Typeable a
   ) =>
-  Interface' a (p :: Perspective)
+  IsInterface a
   where
   type Event a = r | r -> a
   type Request a = r | r -> a
+
+class (IsInterface a) => Interface' a (p :: Perspective) where
   runEvent :: a -> Event a -> Wayland p ()
+  runEvent = unimplementedFor "runEvent"
   runRequest :: a -> Request a -> Wayland p ()
+  runRequest = unimplementedFor "runRequest"
+
+-- | Filler "implementation" for unimplemented methods.
+unimplementedFor :: (Typeable a) => Text -> a -> b -> Wayland p ()
+unimplementedFor meth x _ =
+  error $ "sayland: " <> meth <> " is not implemented for " <> show (typeOf x)
 
 type role Interface nominal
 

@@ -55,8 +55,6 @@ $(generateTables False wlFormatter "protocols/xdg-shell.xml")
 
 -- Implementations {{{
 instance Interface' Xdg_wm_base Client where
-  type Event Xdg_wm_base = Event_xdg_wm_base
-  type Request Xdg_wm_base = Request_xdg_wm_base
   runRequest wm_base request@Request_xdg_wm_base_destroy = do
     dropObject wm_base.wlid
     sendMessage' request wm_base.wlid
@@ -77,9 +75,6 @@ instance Interface' Xdg_wm_base Client where
   runEvent wm_base (Event_xdg_wm_base_ping serial) = runRequest wm_base $ Request_xdg_wm_base_pong serial
 
 instance Interface' Xdg_wm_base Server where
-  type Event Xdg_wm_base = Event_xdg_wm_base
-  type Request Xdg_wm_base = Request_xdg_wm_base
-
   runRequest _ (Request_xdg_wm_base_create_positioner positionerId) = void $ newObject positionerId Xdg_positioner{wlid = positionerId}
   runRequest wm_base Request_xdg_wm_base_destroy = dropObject wm_base.wlid
   runRequest _ (Request_xdg_wm_base_get_xdg_surface xdgSurfaceId surfaceId) = do
@@ -92,9 +87,6 @@ instance Interface' Xdg_wm_base Server where
   runEvent wm_base event@(Event_xdg_wm_base_ping{}) = sendMessage' event wm_base.wlid
 
 instance Interface' Xdg_positioner Client where
-  type Event Xdg_positioner = Event_xdg_positioner
-  type Request Xdg_positioner = Request_xdg_positioner
-
   runRequest positioner' request@Request_xdg_positioner_destroy = do
     dropObject positioner'.wlid
     sendMessage' request positioner'.wlid
@@ -102,14 +94,10 @@ instance Interface' Xdg_positioner Client where
   runEvent _ _ = pass
 
 instance Interface' Xdg_positioner Server where
-  type Event Xdg_positioner = Event_xdg_positioner
-  type Request Xdg_positioner = Request_xdg_positioner
   runRequest _ _ = pass
   runEvent _ _ = pass
 
 instance Interface' Xdg_surface Client where
-  type Event Xdg_surface = Event_xdg_surface
-  type Request Xdg_surface = Request_xdg_surface
   runRequest xdg_surface request@Request_xdg_surface_destroy = do
     ClientEnv env <- ask
     readIORef xdg_surface.xdgRole >>= \case
@@ -162,8 +150,6 @@ instance Interface' Xdg_surface Client where
     runRequest xdg_surface (Request_xdg_surface_ack_configure serial)
 
 instance Interface' Xdg_surface Server where
-  type Event Xdg_surface = Event_xdg_surface
-  type Request Xdg_surface = Request_xdg_surface
   runRequest xdg_surface Request_xdg_surface_destroy = do
     ClientServerEnv _ env _ <- ask
     readIORef xdg_surface.xdgRole >>= \case
@@ -203,8 +189,6 @@ instance Interface' Xdg_surface Server where
   runEvent xdg_surface event@(Event_xdg_surface_configure _) = sendMessage' event xdg_surface.wlid
 
 instance Interface' Xdg_toplevel Client where
-  type Event Xdg_toplevel = Event_xdg_toplevel
-  type Request Xdg_toplevel = Request_xdg_toplevel
   runRequest _ _ = pass
   runEvent toplevel (Event_xdg_toplevel_configure w h _) = do
     writeIORef toplevel.size (w, h)
@@ -212,8 +196,6 @@ instance Interface' Xdg_toplevel Client where
   runEvent _ _ = pass
 
 instance Interface' Xdg_toplevel Server where
-  type Event Xdg_toplevel = Event_xdg_toplevel
-  type Request Xdg_toplevel = Request_xdg_toplevel
   runRequest _ _ = pass
   runEvent toplevel event@(Event_xdg_toplevel_configure w h _) = do
     writeIORef toplevel.size (w, h)
@@ -222,14 +204,10 @@ instance Interface' Xdg_toplevel Server where
   runEvent _ _ = pass
 
 instance Interface' Xdg_popup Client where
-  type Event Xdg_popup = Event_xdg_popup
-  type Request Xdg_popup = Request_xdg_popup
   runRequest _ _ = pass
   runEvent _ _ = pass
 
 instance Interface' Xdg_popup Server where
-  type Event Xdg_popup = Event_xdg_popup
-  type Request Xdg_popup = Request_xdg_popup
   runRequest _ _ = pass
   runEvent _ _ = pass
 

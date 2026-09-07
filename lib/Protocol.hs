@@ -384,13 +384,23 @@ loadInterface formatter int = do
           , -- Name
             SigD (mkName $ name' <> "Name") $ ConT ''String
           , ValD (VarP nameName) (NormalB . LitE . StringL $ name') []
-          -- Class definition
+          ]
+      , -- IsInterface instance
+        pure
+          [ InstanceD
+              Nothing
+              []
+              (AppT (ConT ''IsInterface) ifaceT)
+              [ TySynInstD $ TySynEqn Nothing (AppT (ConT ''Event) ifaceT) (ConT $ mkName $ "Event_" <> name')
+              , TySynInstD $ TySynEqn Nothing (AppT (ConT ''Request) ifaceT) (ConT $ mkName $ "Request_" <> name')
+              ]
           ]
       , -- Opcodes
         pure opcodes
       ]
   where
     name' = fromJust $ findAttr (qname "name") int
+    ifaceT = ConT . mkName $ formatter name'
     verName = mkName $ name' <> "Version"
     nameName = mkName $ name' <> "Name"
     version' = Unsafe.read . fromJust $ findAttr (qname "version") int
