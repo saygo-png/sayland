@@ -1,6 +1,6 @@
 module Sayland.WaylandSocket (module Sayland.WaylandSocket) where
 
-import Control.Concurrent.Async (async)
+import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (modifyTVar, newTQueue, writeTQueue)
 import Data.Bimap qualified as BM
 import Data.Binary.Get
@@ -55,7 +55,7 @@ handleIncomingClient env socket' = do
     modifyTVar env.clientSerial (+ 1)
     readTVar env.clientSerial
   atomically . modifyTVar env.clients $ Map.insert serial' clientenv
-  void . liftIO . async $ runReaderT (clientLoop socket') $ ClientServerEnv env clientenv serial'
+  void . liftIO . forkIO $ runReaderT (clientLoop socket') $ ClientServerEnv env clientenv serial'
 
 getHeader :: Get (Word32, Word16, Word16)
 getHeader = (,,) <$> getWord32le <*> getWord16le <*> getWord16le
