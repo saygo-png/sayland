@@ -48,7 +48,6 @@ library
     , containers
     , directory
     , filepath
-    , lens
     , network
     , relude
     , shared-memory

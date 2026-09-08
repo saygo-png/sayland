@@ -32,21 +32,15 @@ data Xdg_popup = Xdg_popup {popup_xdg_surface :: TObjectID Xdg_surface, wlid :: 
 
 data XDGRole = XDGToplevel Xdg_toplevel | XDGPopup Xdg_popup
 
-instance DefaultIO Xdg_wm_base where defM = pure $ Xdg_wm_base 0
+instance NewInterface Xdg_surface where newInterface i = newIORef Nothing <&> Xdg_surface i 0
 
-instance DefaultIO Xdg_positioner where defM = pure $ Xdg_positioner 0
-
-instance DefaultIO Xdg_surface where defM = newIORef Nothing <&> Xdg_surface 0 0
-
-instance DefaultIO Xdg_toplevel where
-  defM = do
+instance NewInterface Xdg_toplevel where
+  newInterface i = do
     size' <- newIORef (0, 0)
     parent' <- newIORef Nothing
-    pure Xdg_toplevel{wlid = 0, toplevel_xdg_surface = 0, size = size', parent = parent'}
+    pure Xdg_toplevel{wlid = i, toplevel_xdg_surface = 0, size = size', parent = parent'}
 
-instance DefaultIO Xdg_popup where defM = pure $ Xdg_popup{popup_xdg_surface = 0, wlid = 0, parent = 0, positioner = 0}
-
-$(concat <$> mapM makeFieldsWithPrefix [''Xdg_wm_base, ''Xdg_positioner, ''Xdg_surface, ''Xdg_toplevel, ''Xdg_popup])
+instance NewInterface Xdg_popup where newInterface i = pure $ Xdg_popup{wlid = i, popup_xdg_surface = 0, parent = 0, positioner = 0}
 
 $(loadProtocolFile wlFormatter False "protocols/xdg-shell.xml")
 $(generateTables False wlFormatter "protocols/xdg-shell.xml")
@@ -123,8 +117,8 @@ instance Interface' Xdg_surface Client where
         SurfaceRole role' <- readIORef surfaceObj.role
         case cast role' of
           Just () -> do
-            toplevel <- defM
-            toplevelObject <- newObject toplevelId (toplevel{wlid = toplevelId, toplevel_xdg_surface = xdg_surface.wlid} :: Xdg_toplevel)
+            toplevel <- newInterface toplevelId
+            toplevelObject <- newObject toplevelId (toplevel{toplevel_xdg_surface = xdg_surface.wlid})
             writeIORef xdg_surface.xdgRole $ Just $ XDGToplevel toplevelObject
             sendMessage' request xdg_surface.wlid
             writeIORef surfaceObj.role $ SurfaceRole toplevelObject
@@ -171,8 +165,8 @@ instance Interface' Xdg_surface Server where
     surfaceObject' <- getInterface xdg_surface.wl_surface
     case surfaceObject' of
       Just surfaceObject -> do
-        toplevel <- defM
-        toplevelObject <- newObject toplevelId (toplevel{wlid = toplevelId, toplevel_xdg_surface = xdg_surface.wlid} :: Xdg_toplevel)
+        toplevel <- newInterface toplevelId
+        toplevelObject <- newObject toplevelId (toplevel{toplevel_xdg_surface = xdg_surface.wlid})
         writeIORef xdg_surface.xdgRole $ Just $ XDGToplevel toplevelObject
         writeIORef surfaceObject.role $ SurfaceRole toplevelObject
       Nothing -> sendError xdg_surface.wlid 1 "not_constructed" -- ?

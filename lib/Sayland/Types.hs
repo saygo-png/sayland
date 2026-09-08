@@ -4,11 +4,11 @@
 module Sayland.Types (module Sayland.Types) where
 
 import Control.Concurrent.STM (TQueue)
-import Control.Lens (Lens')
 import Data.Bimap qualified as BM
 import Data.Binary
 import Data.ByteString qualified as BS
 import Data.Data (typeOf)
+import GHC.Records (HasField)
 import Network.Socket (Socket)
 import Relude hiding (ByteString, get, put)
 import System.Posix (Fd)
@@ -30,13 +30,9 @@ data Rectangle = Rectangle
   }
   deriving stock (Eq, Ord)
 
--- | HasWlid, a lens defined globally due to ID being a part of every wayland interface.
-class HasWlid s a | s -> a where
-  lWlid :: Lens' s a
-
--- | A Default-like structure, but using IO
-class DefaultIO a where
-  defM :: (MonadIO m) => m a
+-- | Class that allows to create an interface in IO with a wlid.
+class NewInterface a where
+  newInterface :: (MonadIO m) => TObjectID a -> m a
 
 -- | Perspective of the current Wayland Environment
 data Perspective = Client | Server
@@ -64,7 +60,7 @@ data ServerEnvironment = ServerEnvironment
   -- ^ currently connected clients
   , clientSerial :: TVar ClientID
   -- ^ client counter, for identifying individual clients.
-  , interfaceTable :: IORef (Map String (IO (Interface Server)))
+  , interfaceTable :: IORef (Map String (ObjectID -> IO (Interface Server)))
   -- ^ interfaces supported by the server
   , versionTable :: IORef (Map String Word32)
   -- ^ versions of interfaces
@@ -79,7 +75,7 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
   , counter :: IORef Word32
   , objects :: IORef (Map Word32 (Interface p))
   , globals :: IORef (BM.Bimap {-string name-} BS.ByteString {-global name-} Word32)
-  , interfaceTable :: IORef (Map String (IO (Interface p)))
+  , interfaceTable :: IORef (Map String (ObjectID -> IO (Interface p)))
   , versionTable :: IORef (Map String Word32)
   , eventHandlers :: IORef [EventHandler p]
   , fdQueue :: TQueue Fd
@@ -89,7 +85,7 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
 class
   ( WaylandEvent (Event a)
   , WaylandEvent (Request a)
-  , HasWlid a (TObjectID a)
+  , HasField "wlid" a (TObjectID a)
   , Typeable a
   ) =>
   IsInterface a

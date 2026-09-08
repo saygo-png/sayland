@@ -11,7 +11,6 @@ module Sayland.Protocols.Wayland (module Sayland.Protocols.Wayland) where
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (try)
-import Control.Lens ((.~))
 import Data.Bimap qualified as BM
 import Data.ByteString qualified as BS
 import Data.ByteString.Char8 qualified as BS8
@@ -160,71 +159,34 @@ data Wl_subsurface = Wl_subsurface {wlid :: TObjectID Wl_subsurface, surface :: 
 
 newtype Wl_fixes = Wl_fixes {wlid :: TObjectID Wl_fixes}
 
-$( concat
-     <$> mapM
-       makeFieldsWithPrefix
-       [ ''Wl_display
-       , ''Wl_registry
-       , ''Wl_callback
-       , ''Wl_compositor
-       , ''Wl_shm
-       , ''Wl_shm_pool
-       , ''Wl_buffer
-       , ''Wl_data_offer
-       , ''Wl_data_source
-       , ''Wl_data_device
-       , ''Wl_data_device_manager
-       , ''Wl_shell
-       , ''Wl_shell_surface
-       , ''Wl_region
-       , ''Wl_surface
-       , ''Wl_seat
-       , ''Wl_pointer
-       , ''Wl_keyboard
-       , ''Wl_touch
-       , ''Wl_output
-       , ''Wl_subcompositor
-       , ''Wl_subsurface
-       , ''Wl_fixes
-       ]
- )
-
 $(loadProtocolFile wlFormatter False "protocols/wayland.xml")
 
--- DefaultIO instances {{{
-instance DefaultIO Wl_display where
-  defM = pure Wl_display{wlid = wlDisplayId}
+-- NewInterface instances {{{
 
-instance DefaultIO Wl_registry where
-  defM = pure Wl_registry{wlid = 0}
+instance NewInterface Wl_buffer where
+  newInterface i = pure Wl_buffer{wlid = i, offset = 0, width = 0, height = 0, stride = 0, format = Enum_wl_shm_format_argb8888, pool = 0}
 
-instance DefaultIO Wl_buffer where
-  defM = pure Wl_buffer{wlid = 0, offset = 0, width = 0, height = 0, stride = 0, format = Enum_wl_shm_format_argb8888, pool = 0}
-
-instance DefaultIO Wl_region where
-  defM = do
+instance NewInterface Wl_region where
+  newInterface i = do
     included <- newIORef []
     excluded <- newIORef []
-    pure Wl_region{wlid = 0, included, excluded}
+    pure Wl_region{wlid = i, included, excluded}
 
-instance DefaultIO Wl_callback where
-  defM = newEmptyMVar <&> Wl_callback 0
+instance NewInterface Wl_callback where
+  newInterface _i = newEmptyMVar <&> Wl_callback 0
 
-instance DefaultIO Wl_compositor where
-  defM = pure Wl_compositor{wlid = 0}
-
-instance DefaultIO Wl_shm_pool where
-  defM = do
+instance NewInterface Wl_shm_pool where
+  newInterface i = do
     ref <- newIORef 0
     ptrRef <- newIORef nullPtr
-    pure $ Wl_shm_pool 0 0 ref ptrRef
+    pure $ Wl_shm_pool i 0 ref ptrRef
 
-instance DefaultIO Wl_shm where
-  defM = newIORef [] <&> Wl_shm 0
+instance NewInterface Wl_shm where
+  newInterface i = newIORef [] <&> Wl_shm i
 
-instance DefaultIO Wl_surface where
-  defM = do
-    let wlid :: TObjectID Wl_surface = 0
+instance NewInterface Wl_surface where
+  newInterface i = do
+    let wlid :: TObjectID Wl_surface = i
     role <- newIORef $ SurfaceRole ()
     pendingState <- newIORef emptyContentUpdate
     cuQueue <- newIORef Seq.Empty
@@ -244,50 +206,11 @@ instance DefaultIO Wl_surface where
           }
     pure Wl_surface{..}
 
-instance DefaultIO Wl_data_offer where
-  defM = pure Wl_data_offer{wlid = 0}
-
-instance DefaultIO Wl_data_device where
-  defM = pure Wl_data_device{wlid = 0}
-
-instance DefaultIO Wl_data_device_manager where
-  defM = pure Wl_data_device_manager{wlid = 0}
-
-instance DefaultIO Wl_data_source where
-  defM = pure Wl_data_source{wlid = 0}
-
-instance DefaultIO Wl_shell where
-  defM = pure Wl_shell{wlid = 0}
-
-instance DefaultIO Wl_shell_surface where
-  defM = pure Wl_shell_surface{wlid = 0}
-
-instance DefaultIO Wl_seat where
-  defM = pure Wl_seat{wlid = 0}
-
-instance DefaultIO Wl_pointer where
-  defM = pure Wl_pointer{wlid = 0}
-
-instance DefaultIO Wl_keyboard where
-  defM = pure Wl_keyboard{wlid = 0}
-
-instance DefaultIO Wl_touch where
-  defM = pure Wl_touch{wlid = 0}
-
-instance DefaultIO Wl_output where
-  defM = pure Wl_output{wlid = 0}
-
-instance DefaultIO Wl_subcompositor where
-  defM = pure Wl_subcompositor{wlid = 0}
-
-instance DefaultIO Wl_subsurface where
-  defM = do
+instance NewInterface Wl_subsurface where
+  newInterface i = do
     position <- newIORef (0, 0)
     synchronized <- newIORef True
-    pure Wl_subsurface{wlid = 0, surface = 0, parent = 0, position, synchronized}
-
-instance DefaultIO Wl_fixes where
-  defM = pure Wl_fixes{wlid = 0}
+    pure Wl_subsurface{wlid = i, surface = 0, parent = 0, position, synchronized}
 
 -- }}}
 -- Tables {{{
@@ -395,8 +318,8 @@ instance Interface' Wl_registry Client where
     interfaceFromName name >>= \case
       Just x -> do
         y' <- fromJust . Map.lookup (BS8.unpack x) <$> readIORef env.interfaceTable
-        Interface y <- liftIO y'
-        void $ newObject (TObjectID newId) $ y & lWlid .~ TObjectID newId
+        Interface y <- liftIO (y' newId)
+        void $ newObject (TObjectID newId) y
       Nothing -> error $ "interface with name `" <> show name <> "` not found."
     sendMessage' request registry.wlid
 
@@ -414,8 +337,8 @@ instance Interface' Wl_registry Server where
     interfaceFromName name >>= \case
       Just x -> do
         y' <- fromJust . Map.lookup (BS8.unpack x) <$> readIORef env.interfaceTable
-        Interface y <- liftIO y'
-        void $ newObject (TObjectID newId) $ y & lWlid .~ TObjectID newId
+        Interface y <- liftIO (y' newId)
+        void $ newObject (TObjectID newId) y
       Nothing -> error $ "interface with name `" <> show name <> "` not found."
 
 -- }}}
@@ -423,10 +346,10 @@ instance Interface' Wl_registry Server where
 -- Wl_compositor {{{
 instance Interface' Wl_compositor Client where
   runRequest compositor request@(Request_wl_compositor_create_surface surfaceId) = do
-    void $ newObject surfaceId . (lWlid .~ surfaceId) =<< (defM :: Wayland Client Wl_surface)
+    void $ newObject surfaceId =<< (newInterface surfaceId :: Wayland Client Wl_surface)
     sendMessage' request compositor.wlid
   runRequest compositor request@(Request_wl_compositor_create_region regionId) = do
-    void $ newObject regionId . (lWlid .~ regionId) =<< (defM :: Wayland Client Wl_region)
+    void $ newObject regionId =<< (newInterface regionId :: Wayland Client Wl_region)
     sendMessage' request compositor.wlid
   runRequest compositor request@Request_wl_compositor_release = do
     sendMessage' request compositor.wlid
@@ -435,8 +358,8 @@ instance Interface' Wl_compositor Client where
 
 instance Interface' Wl_compositor Server where
   runEvent _ _ = pass
-  runRequest _compositor (Request_wl_compositor_create_surface surfaceId) = void $ newObject surfaceId . (lWlid .~ surfaceId) =<< (defM :: Wayland Server Wl_surface)
-  runRequest _compositor (Request_wl_compositor_create_region regionId) = void $ newObject regionId . (lWlid .~ regionId) =<< (defM :: Wayland Server Wl_region)
+  runRequest _compositor (Request_wl_compositor_create_surface surfaceId) = void $ newObject surfaceId =<< newInterface surfaceId
+  runRequest _compositor (Request_wl_compositor_create_region regionId) = void $ newObject regionId =<< newInterface regionId
   runRequest compositor Request_wl_compositor_release = dropObject compositor.wlid
 
 -- }}}
@@ -828,8 +751,8 @@ instance Interface' Wl_subcompositor Client where
         SurfaceRole role' <- readIORef surfaceObj.role
         case cast role' of
           Just () -> do
-            obj <- (lWlid .~ subsurface) . (lSurface .~ surface) . (lParent .~ parent) <$> (defM :: Wayland Client Wl_subsurface)
-            void $ newObject subsurface obj
+            obj <- newInterface subsurface :: Wayland Client Wl_subsurface
+            void $ newObject subsurface obj{surface = surface, parent = parent}
             writeIORef surfaceObj.role $ SurfaceRole subsurface
             sendMessage' request subcompositor.wlid
           _ -> error "surface already has a role assigned"
@@ -846,12 +769,10 @@ instance Interface' Wl_subcompositor Server where
         SurfaceRole role' <- readIORef surfaceObj.role
         case cast role' of
           Just () -> do
-            obj <- (lWlid .~ subsurface) . (lSurface .~ surface) . (lParent .~ parent) <$> (defM :: Wayland Server Wl_subsurface)
-            void $ newObject subsurface obj
+            obj <- newInterface subsurface :: Wayland Server Wl_subsurface
+            void $ newObject subsurface obj{surface = surface, parent = parent}
             writeIORef surfaceObj.role $ SurfaceRole subsurface
           _ -> sendError subcompositor.wlid 0 "bad_surface"
-    obj <- (lWlid .~ subsurface) . (lSurface .~ surface) . (lParent .~ parent) <$> (defM :: Wayland Server Wl_subsurface)
-    void $ newObject subsurface obj
 
 -- }}}
 

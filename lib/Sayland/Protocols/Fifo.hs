@@ -17,11 +17,7 @@ newtype Wp_fifo_manager_v1 = Wp_fifo_manager_v1 {wlid :: TObjectID Wp_fifo_manag
 
 data Wp_fifo_v1 = Wp_fifo_v1 {wlid :: TObjectID Wp_fifo_v1, fifoSurface :: TObjectID Wl_surface}
 
-instance DefaultIO Wp_fifo_manager_v1 where defM = pure $ Wp_fifo_manager_v1 0
-
-instance DefaultIO Wp_fifo_v1 where defM = pure $ Wp_fifo_v1 0 0
-
-$(concat <$> mapM makeFieldsWithPrefix [''Wp_fifo_manager_v1, ''Wp_fifo_v1])
+instance NewInterface Wp_fifo_v1 where newInterface i = pure $ Wp_fifo_v1 i 0
 
 $(loadProtocolFile wlFormatter False "protocols/fifo-v1.xml")
 $(generateTables False wlFormatter "protocols/fifo-v1.xml")
@@ -34,7 +30,7 @@ instance Interface' Wp_fifo_manager_v1 Client where
   runRequest manager request@(Request_wp_fifo_manager_v1_get_fifo fifoId surfaceId) = do
     getInterface surfaceId >>= \case
       Just _ -> do
-        fifoObj :: Wp_fifo_v1 <- defM
+        fifoObj :: Wp_fifo_v1 <- newInterface fifoId
         void $ newObject fifoId fifoObj{fifoSurface = surfaceId}
         sendMessage' request manager.wlid
       Nothing -> error "non-existent surface provided to Request_wp_fifo_amanger_v1_get_fifo"
@@ -45,7 +41,7 @@ instance Interface' Wp_fifo_manager_v1 Server where
   runRequest manager (Request_wp_fifo_manager_v1_get_fifo fifoId surfaceId) = do
     getInterface surfaceId >>= \case
       Just _ -> do
-        fifoObj :: Wp_fifo_v1 <- defM
+        fifoObj :: Wp_fifo_v1 <- newInterface fifoId
         void $ newObject fifoId fifoObj{fifoSurface = surfaceId}
       Nothing -> sendError manager.wlid 0 $ "surface `" <> show surfaceId <> "` does not exist"
 

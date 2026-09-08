@@ -36,9 +36,9 @@ generateVersionTable e =
     tuple x = TupE [Just $ VarE $ mkName $ x <> "Name", Just $ VarE $ mkName $ x <> "Version"]
     defs = tuple . fromJust . findAttr (qname "name") <$> findChildren (qname "interface") e
 
-type InterfaceClientTable = [(String, IO (Interface Client))]
+type InterfaceClientTable = [(String, ObjectID -> IO (Interface Client))]
 
-type InterfaceServerTable = [(String, IO (Interface Server))]
+type InterfaceServerTable = [(String, ObjectID -> IO (Interface Server))]
 
 -- | Generates an InterfaceTable, using formatter to format classes names - as they are to be defined by the user.
 generateInterfaceTable :: Element -> (String -> String) -> [Dec]
@@ -52,8 +52,62 @@ generateInterfaceTable e formatter =
     protocol = fromJust $ findAttr (qname "name") e
     cname = mkName $ protocol <> "InterfaceClientTable"
     sname = mkName $ protocol <> "InterfaceServerTable"
-    tuple x = TupE [Just $ VarE $ mkName $ x <> "Name", Just $ AppE (AppE (VarE $ mkName "<$>") $ ConE 'Interface) $ SigE (VarE $ mkName "defM") (AppT (ConT ''IO) $ ConT $ mkName $ formatter x)]
+    tuple x =
+      TupE
+        [ Just $ VarE $ mkName $ x <> "Name"
+        , Just
+            $ LamE [VarP oid]
+            $ AppE (AppE (VarE '(<$>)) (ConE 'Interface))
+            $ SigE
+              (AppE (VarE 'newInterface) (AppE (ConE 'TObjectID) (VarE oid)))
+              (AppT (ConT ''IO) (ConT . mkName $ formatter x))
+        ]
+      where
+        oid = mkName "objectId"
     defs = tuple . fromJust . findAttr (qname "name") <$> findChildren (qname "interface") e
+
+{- | @instance NewInterface T where newInterface = pure . T@, for interfaces whose
+only field is @wlid@. Yields no declarations when there are further fields: their
+initial values are not derivable, so those instances stay hand-written.
+-}
+deriveNewInterface :: Name -> Q [Dec]
+deriveNewInterface ty = do
+  (cn, fields) <- soleRecordCon ty
+  case fields of
+    [("wlid", _)] ->
+      pure
+        [ InstanceD
+            Nothing
+            []
+            (AppT (ConT ''NewInterface) (ConT ty))
+            [ FunD
+                'newInterface
+                [Clause [] (NormalB $ InfixE (Just $ VarE 'pure) (VarE '(.)) (Just $ ConE cn)) []]
+            ]
+        ]
+    fs
+      | "wlid" `notElem` fmap fst fs -> fail $ "sayland: " <> nameBase ty <> " has no `wlid` field"
+      | otherwise -> pure []
+  where
+    -- Strip the @$sel:wlid:Wl_seat@ mangling DuplicateRecordFields can introduce.
+    fieldBase :: Name -> String
+    fieldBase n = case nameBase n of
+      '$' : 's' : 'e' : 'l' : ':' : rest -> takeWhile (/= ':') rest
+      b -> b
+
+    -- Constructor of a record with its fields.
+    soleRecordCon :: Name -> Q (Name, [(String, Type)])
+    soleRecordCon typ = do
+      con <-
+        reify typ >>= \case
+          TyConI (NewtypeD _ _ _ _ c _) -> pure c
+          TyConI (DataD _ _ _ _ [c] _) -> pure c
+          TyConI (DataD _ _ _ _ cs _) ->
+            fail $ "sayland: " <> nameBase typ <> " has " <> show (length cs) <> " constructors, expected 1"
+          _ -> fail $ "sayland: " <> nameBase typ <> " is not a data or newtype declaration"
+      case con of
+        RecC cn fields -> pure (cn, [(fieldBase f, t) | (f, _, t) <- fields])
+        _ -> fail $ "sayland: " <> nameBase typ <> " is not a record"
 
 -- Getters/Putters {{{
 
@@ -369,6 +423,12 @@ loadInterface formatter int = do
   let requests = findChildren (qname "request") int
   let opcodes = concatMap (\(x, y) -> mkOpcode name' (fromJust $ findAttr (qname "name") y) x) $ zip [1 ..] $ findChildren (qname "event") int
 
+  ifaceName <-
+    lookupTypeName (formatter name') >>= \case
+      Just n -> pure n
+      Nothing -> fail $ "sayland: protocol declares interface `" <> name' <> "` but no type `" <> formatter name' <> "` is in scope."
+  newInterfaceInstance <- deriveNewInterface ifaceName
+
   concat
     <$> sequence
       [ -- WaylandEvent
@@ -394,6 +454,7 @@ loadInterface formatter int = do
               , TySynInstD $ TySynEqn Nothing (AppT (ConT ''Request) ifaceT) (ConT $ mkName $ "Request_" <> name')
               ]
           ]
+      , pure newInterfaceInstance
       , -- Opcodes
         pure opcodes
       ]

@@ -19,14 +19,6 @@ newtype Zwlr_layer_shell_v1 = Zwlr_layer_shell_v1 {wlid :: TObjectID Zwlr_layer_
 
 newtype Zwlr_layer_surface_v1 = Zwlr_layer_surface_v1 {wlid :: TObjectID Zwlr_layer_surface_v1}
 
-$(concat <$> mapM makeFieldsWithPrefix [''Zwlr_layer_shell_v1, ''Zwlr_layer_surface_v1])
-
-instance DefaultIO Zwlr_layer_shell_v1 where
-  defM = pure $ Zwlr_layer_shell_v1 0
-
-instance DefaultIO Zwlr_layer_surface_v1 where
-  defM = pure $ Zwlr_layer_surface_v1 0
-
 $(loadProtocolFile wlFormatter False "protocols/wlr-layer-shell-unstable-v1.xml")
 $(generateTables False wlFormatter "protocols/wlr-layer-shell-unstable-v1.xml")
 

@@ -1,6 +1,5 @@
-module Sayland.Internal.Utils (wlFormatter, getColorize, newNumbered, adata, qname, makeFieldsWithPrefix) where
+module Sayland.Internal.Utils (wlFormatter, getColorize, newNumbered, adata, qname) where
 
-import Control.Lens (DefName (..), FieldNamer, classIdFields, classIdNamer, lensField, makeLensesWith, (.~))
 import Data.Char (toUpper)
 import Language.Haskell.TH
 import Relude
@@ -29,18 +28,3 @@ adata = mkName "_additionalData"
 
 qname :: String -> QName
 qname x = QName x Nothing Nothing
-
-makeFieldsWithPrefix :: Name -> DecsQ
-makeFieldsWithPrefix = makeLensesWith (classIdFields & lensField .~ lPrefixNamer)
-  where
-    lPrefixNamer :: FieldNamer
-    lPrefixNamer tyName fieldNames fieldName =
-      [ case d of
-          MethodName cls m -> MethodName cls (prefixL m)
-          TopName m -> TopName (prefixL m)
-      | d <- classIdNamer tyName fieldNames fieldName
-      ]
-      where
-        prefixL n = case nameBase n of
-          (c : cs) -> mkName ('l' : toUpper c : cs)
-          [] -> n
