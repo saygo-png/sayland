@@ -9,8 +9,8 @@ module Sayland.Protocols.XdgShell (module Sayland.Protocols.XdgShell) where
 
 import Data.Data (cast)
 import Data.Map qualified as Map
-import Protocol
 import Relude
+import Sayland.Codegen
 import Sayland.Internal.Utils
 import Sayland.Protocols.Wayland
 import Sayland.Types

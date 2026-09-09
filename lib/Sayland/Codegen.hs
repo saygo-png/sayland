@@ -2,7 +2,7 @@
 {-# LANGUAGE TemplateHaskellQuotes #-}
 
 -- | Description : Defines all requests and events that exist and should be implemented. Implementations under `Protocols`
-module Protocol (module Protocol) where
+module Sayland.Codegen (module Sayland.Codegen) where
 
 import Data.Binary
 import Data.Maybe (fromJust)
@@ -18,8 +18,6 @@ import System.FilePath (takeExtension, (</>))
 import Text.Show qualified
 import Text.XML.Light
 
-type VersionTable = [(String, Word32)]
-
 -- | Generates a VersionTable for the given protocol.
 generateVersionTable :: Element -> [Dec]
 generateVersionTable e =
@@ -31,10 +29,6 @@ generateVersionTable e =
     name = mkName $ protocol <> "VersionTable"
     tuple x = TupE [Just $ VarE $ mkName $ x <> "Name", Just $ VarE $ mkName $ x <> "Version"]
     defs = tuple . fromJust . findAttr (qname "name") <$> findChildren (qname "interface") e
-
-type InterfaceClientTable = [(String, ObjectID -> IO (Interface Client))]
-
-type InterfaceServerTable = [(String, ObjectID -> IO (Interface Server))]
 
 -- | Generates an InterfaceTable, using formatter to format classes names - as they are to be defined by the user.
 generateInterfaceTable :: Element -> (String -> String) -> [Dec]

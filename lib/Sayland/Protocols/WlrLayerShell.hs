@@ -5,8 +5,8 @@
 
 module Sayland.Protocols.WlrLayerShell (module Sayland.Protocols.WlrLayerShell) where
 
-import Protocol
 import Relude
+import Sayland.Codegen
 import Sayland.Internal.Utils
 import Sayland.Protocols.Wayland
 import Sayland.Protocols.XdgShell

@@ -4,8 +4,8 @@
 
 module Sayland.Protocols.Fifo where
 
-import Protocol
 import Relude
+import Sayland.Codegen
 import Sayland.Internal.Utils
 import Sayland.Protocols.Wayland
 import Sayland.Types

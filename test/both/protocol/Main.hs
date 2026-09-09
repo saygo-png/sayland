@@ -1,7 +1,7 @@
 module Main (main) where
 
 import Language.Haskell.TH
-import Protocol
+import Sayland.Codegen
 import Sayland.Internal.Utils (wlFormatter)
 import Prelude
 

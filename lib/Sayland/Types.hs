@@ -122,4 +122,10 @@ class (Typeable e) => WaylandEvent e where
   getOpcode :: e -> Word16
   showEvent :: ObjectID -> e -> String
 
+type VersionTable = [(String, Word32)]
+
+type InterfaceClientTable = [(String, ObjectID -> IO (Interface Client))]
+
+type InterfaceServerTable = [(String, ObjectID -> IO (Interface Server))]
+
 -- vim: foldmethod=marker

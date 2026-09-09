@@ -58,8 +58,8 @@ library
 
   hs-source-dirs:  lib
   exposed-modules:
-    Protocol
     Sayland
+    Sayland.Codegen
     Sayland.Internal.Utils
     Sayland.Protocols.Fifo
     Sayland.Protocols.Wayland

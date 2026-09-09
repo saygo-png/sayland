@@ -14,7 +14,7 @@ Let's assume your protocol is [Fifo Protocol](https://wayland.app/protocols/fifo
 First, define all enums:
 
 ```hs
-import Protocol
+import Sayland.Codegen
 import Sayland.Types
 import Sayland.Utils
 import Sayland.Protocols.Wayland -- you might not need to import this one, it depends on the protocol.

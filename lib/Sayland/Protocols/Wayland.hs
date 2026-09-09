@@ -20,9 +20,9 @@ import Debug.Trace (traceIO)
 import Foreign (Ptr, nullPtr)
 import GHC.IORef (atomicSwapIORef)
 import MMAP (mapShared, mkMmapFlags, mmap, munmap, protRead, protWrite)
-import Protocol
 import Relude hiding (get, state)
 import Relude.Extra.Tuple (dup)
+import Sayland.Codegen
 import Sayland.Internal.Utils
 import Sayland.Types
 import Sayland.Utils

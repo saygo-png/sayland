@@ -5,7 +5,6 @@ import Control.Concurrent.STM (newTQueue)
 import Data.Bimap qualified as BM
 import Data.ByteString.Char8 qualified as BS8
 import Network.Socket hiding (openSocket)
-import Protocol (InterfaceClientTable, VersionTable)
 import Relude
 import Sayland.Protocols.Wayland
 import Sayland.Types
