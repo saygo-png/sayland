@@ -5,6 +5,8 @@
 module Sayland.Codegen (module Sayland.Codegen) where
 
 import Data.Binary
+import Data.Char (isSpace)
+import Data.List qualified as L
 import Data.Maybe (fromJust)
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
@@ -55,6 +57,48 @@ generateInterfaceTable e formatter =
       where
         oid = mkName "objectId"
     defs = tuple . fromJust . findAttr (qname "name") <$> findChildren (qname "interface") e
+
+-- Haddock {{{
+
+{- | Haddock text for an XML element. its @\<description\>@ and the
+@summary@ attribute as the first paragraph and the body as the rest. Fallback
+to just @summary@ attribute.
+-}
+elemDoc :: Element -> Maybe String
+elemDoc el = escapeHaddock <$> (descDoc <|> summaryAttr el)
+  where
+    descDoc = do
+      d <- findChild (qname "description") el
+      case catMaybes [summaryAttr d, nonBlank . dedent $ strContent d] of
+        [] -> Nothing
+        ps -> Just $ intercalate "\n\n" ps
+    summaryAttr e = L.unwords . L.words <$> findAttr (qname "summary") e
+    nonBlank s = if all isSpace s then Nothing else Just s
+
+-- | Strip the common indentation the description body inherits from the XML file.
+dedent :: String -> String
+dedent s = intercalate "\n" $ strip <$> body
+  where
+    body = L.dropWhileEnd blank . dropWhile blank $ L.lines s
+    blank :: [Char] -> Bool = all isSpace
+    indent = case filter (not . blank) body of
+      [] -> 0
+      ls -> L.minimum $ length . takeWhile (== ' ') <$> ls
+    strip l = if blank l then "" else drop indent l
+
+-- | Escape Haddock markup. Wayland descriptions are full of bs.
+escapeHaddock :: String -> String
+escapeHaddock = concatMap $ \c -> if c `elem` ("\\/'\"@<>[]#" :: String) then ['\\', c] else [c]
+
+-- | Attach a Haddock comment to a name defined by the current splice.
+docDecl :: Name -> Maybe String -> Q ()
+docDecl n = traverse_ (addModFinalizer . putDoc (DeclDoc n))
+
+-- | Attach a Haddock comment to the @i@th argument of a function or constructor.
+docArg :: Name -> Int -> Maybe String -> Q ()
+docArg n i = traverse_ (addModFinalizer . putDoc (ArgDoc n i))
+
+-- }}}
 
 {- | @instance NewInterface T where newInterface = pure . T@, for interfaces whose
 only field is @wlid@. Yields no declarations when there are further fields: their
@@ -113,32 +157,40 @@ example output:
 data EnumName = A | B | C | D ... deriving Eq
 enumName' A = 1 ...
 -}
-mkEnum :: String -> String -> [(String, Int)] -> [Dec]
-mkEnum interfaceName enumName enumKV =
-  [ DataD [] (mkName enumName') [] Nothing constructors [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord]]
-  , InstanceD
-      Nothing
-      []
-      (AppT (ConT ''WireFormat) $ ConT $ mkName enumName')
-      [ FunD 'wirePut clauses
-      , FunD 'wireGet clauses'
-      ]
-  , InstanceD
-      Nothing
-      []
-      (AppT (ConT ''Show) $ ConT $ mkName enumName')
-      [FunD 'Text.Show.showsPrec show_clauses]
-  ]
+mkEnum :: String -> Element -> Q [Dec]
+mkEnum interfaceName enumEl = do
+  docDecl (mkName enumName') (elemDoc enumEl)
+  for_ entries $ \e -> docDecl (mkName $ enumName'' <> entryName e) (elemDoc e)
+  pure
+    [ DataD [] (mkName enumName') [] Nothing constructors [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord]]
+    , InstanceD
+        Nothing
+        []
+        (AppT (ConT ''WireFormat) $ ConT $ mkName enumName')
+        [ FunD 'wirePut clauses
+        , FunD 'wireGet clauses'
+        ]
+    , InstanceD
+        Nothing
+        []
+        (AppT (ConT ''Show) $ ConT $ mkName enumName')
+        [FunD 'Text.Show.showsPrec show_clauses]
+    ]
   where
+    enumName = fromJust $ findAttr (qname "name") enumEl
+    entries = findChildren (qname "entry") enumEl
+    entryName e = fromJust $ findAttr (qname "name") e
+    enumKV = [(entryName e, Unsafe.read . fromJust $ findAttr (qname "value") e) | e <- entries]
+
     enumName' = "Enum_" <> interfaceName <> "_" <> enumName
     enumName'' = enumName' <> "_"
     constructors = (`NormalC` []) . mkName . (enumName'' <>) <$> fmap fst enumKV
-    clauses = [Clause [ConP (mkName $ enumName'' <> k) [] []] (NormalB (AppE (VarE 'wirePut) $ AppE (ConE 'WlUInt) $ LitE (IntegerL (fromIntegral v)))) [] | (k, v) <- enumKV]
+    clauses = [Clause [ConP (mkName $ enumName'' <> k) [] []] (NormalB (AppE (VarE 'wirePut) $ AppE (ConE 'WlUInt) $ LitE (IntegerL v))) [] | (k, v) <- enumKV]
 
     clauses' =
       [Clause [] (NormalB . DoE Nothing $ [BindS (VarP $ mkName "variant") getUInt, NoBindS $ CaseE (VarE $ mkName "variant") matches]) []]
     getUInt = SigE (VarE 'wireGet) (AppT (ConT ''WireGet) (ConT ''WlUInt))
-    matches = [Match (LitP (IntegerL (fromIntegral v))) (NormalB (AppE (VarE 'pure) (ConE (mkName $ enumName'' <> k)))) [] | (k, v) <- enumKV]
+    matches = [Match (LitP (IntegerL v)) (NormalB (AppE (VarE 'pure) (ConE (mkName $ enumName'' <> k)))) [] | (k, v) <- enumKV]
 
     show_clauses =
       [ Clause
@@ -176,7 +228,7 @@ loadProtocolFileEnums :: Bool -> FilePath -> Q [Dec]
 loadProtocolFileEnums isIO path = do
   unless isIO $ addDependentFile path
   protocols <- filter ((== qname "protocol") . elName) . onlyElems . parseXML <$> runIO (readFileBS path)
-  pure $ concat $ concatMap (fmap loadInterfaceEnums . findInterfaces) protocols
+  concat . concat <$> mapM (mapM loadInterfaceEnums . findInterfaces) protocols
 
 generateTables :: Bool -> (String -> String) -> FilePath -> Q [Dec]
 generateTables isIO formatter path = do
@@ -186,12 +238,19 @@ generateTables isIO formatter path = do
     $ concatMap (`generateInterfaceTable` formatter) protocols
     <> concatMap generateVersionTable protocols
 
-mkEvents :: (String -> String) -> String -> String -> [Element] -> [Dec]
-mkEvents formatter interfaceName prefix events = [DataD [] (mkName prefix') [] Nothing constructors []]
+mkEvents :: (String -> String) -> String -> String -> [Element] -> Q [Dec]
+mkEvents formatter interfaceName prefix events = do
+  docDecl (mkName prefix') . Just $ prefix <> "s of the t'" <> formatter interfaceName <> "' interface."
+  for_ events $ \e -> do
+    docDecl (conName e) (elemDoc e)
+    for_ (zip [0 ..] $ findChildren (qname "arg") e) $ \(i, a) ->
+      docArg (conName e) i (elemDoc a)
+  pure [DataD [] (mkName prefix') [] Nothing constructors []]
   where
     prefix' = prefix <> "_" <> interfaceName
+    conName x = mkName $ prefix' <> "_" <> fromJust (findAttr (qname "name") x)
     buildBang x = (Bang NoSourceUnpackedness NoSourceStrictness, argType formatter interfaceName x)
-    buildRecord x = NormalC (mkName $ prefix' <> "_" <> fromJust (findAttr (qname "name") x)) $ buildBang <$> findChildren (qname "arg") x
+    buildRecord x = NormalC (conName x) $ buildBang <$> findChildren (qname "arg") x
     constructors = fmap buildRecord events
 
 mkShow :: String -> String -> String -> [(Word16, Element)] -> Q [Dec]
@@ -328,13 +387,15 @@ loadInterface formatter isIO int = do
         lookupTypeName (formatter name') >>= \case
           Just n -> pure n
           Nothing -> fail $ "sayland: protocol declares interface `" <> name' <> "` but no type `" <> formatter name' <> "` is in scope."
+
+  unless isIO $ docDecl ifaceName (elemDoc int)
   newInterfaceInstance <- if isIO then pure [] else deriveNewInterface ifaceName
 
   concat
     <$> sequence
       [ -- WaylandEvent
-        pure $ mkEvents formatter name' "Request" requests
-      , pure $ mkEvents formatter name' "Event" events
+        mkEvents formatter name' "Request" requests
+      , mkEvents formatter name' "Event" events
       , mkWlEvent name' "Event_" $ zip [0 ..] events
       , mkWlEvent name' "Request_" $ zip [0 ..] requests
       , pure
@@ -366,11 +427,12 @@ loadInterface formatter isIO int = do
     nameName = mkName $ name' <> "Name"
     version' = Unsafe.read . fromJust $ findAttr (qname "version") int
 
-loadInterfaceEnums :: Element -> [Dec]
-loadInterfaceEnums int = concatMap (uncurry $ mkEnum name') enums'
+loadInterfaceEnums :: Element -> Q [Dec]
+loadInterfaceEnums int =
+  concat <$> mapM (mkEnum name) enums
   where
-    name' = fromJust $ findAttr (qname "name") int
-    enums' = loadEnum <$> findChildren (qname "enum") int
+    name = fromJust $ findAttr (qname "name") int
+    enums = findChildren (qname "enum") int
 
 -- | Load enum data from XML spec.
 loadEnum :: Element -> (String, [(String, Int)])
