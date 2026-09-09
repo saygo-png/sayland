@@ -1,7 +1,7 @@
 module Sayland.WaylandSocket (module Sayland.WaylandSocket) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.STM (modifyTVar, newTQueue, writeTQueue)
+import Control.Concurrent.STM (flushTQueue, modifyTVar, newTQueue, unGetTQueue, writeTQueue)
 import Data.Bimap qualified as BM
 import Data.Binary.Get
 import Data.ByteString qualified as BS
@@ -18,6 +18,7 @@ import Sayland.Internal.Utils
 import Sayland.Protocols.Wayland
 import Sayland.Types
 import Sayland.Utils
+import Sayland.Wire.Types
 import System.Console.ANSI (Color (Magenta), ColorIntensity (Vivid))
 import System.Directory (doesFileExist)
 import System.Environment.Blank (getEnv)
@@ -57,8 +58,8 @@ handleIncomingClient env socket' = do
   atomically . modifyTVar env.clients $ Map.insert serial' clientenv
   void . liftIO . forkIO $ runReaderT (clientLoop socket') $ ClientServerEnv env clientenv serial'
 
-getHeader :: Get (Word32, Word16, Word16)
-getHeader = (,,) <$> getWord32le <*> getWord16le <*> getWord16le
+getHeader :: Get (ObjectID, Word16, Word16)
+getHeader = (,,) . WlUInt <$> getWord32le <*> getWord16le <*> getWord16le
 
 -- | a monstracity that gets a list of file descriptors from an ancillary data bytestring.
 decodeFds :: BS.ByteString -> IO [Fd]
@@ -98,7 +99,7 @@ isPartial s = case runGetOrFail getHeader (fromStrict s) of
   Left (_, _, _) -> True
   Right (rest, _, (_, _, size')) -> fromIntegral (size' - headerSize) > BL.length rest
 
-extractMessage :: BS.ByteString -> Maybe (Word32, Word16, BS.ByteString, BS.ByteString)
+extractMessage :: BS.ByteString -> Maybe (ObjectID, Word16, BS.ByteString, BS.ByteString)
 extractMessage s = case runGetOrFail getHeader (fromStrict s) of
   Left (_, _, _) -> Nothing
   Right (rest', _, (oid, opcode, size')) -> Just (oid, opcode, BS.take payload rest, BS.drop payload rest)
@@ -126,10 +127,11 @@ class Dispatch (p :: Perspective) where
 instance Dispatch Client where
   dispatchMessage x oid opcode msg = do
     ClientEnv env <- ask
-    getter <- liftIO $ getEvent opcode $ AdditionalParserData env.fdQueue
-    case runGetOrFail getter (toLazy msg) of
+    fds <- atomically $ flushTQueue env.fdQueue
+    case runGetOrFail (runStateT (getEvent opcode) fds) (toLazy msg) of
       Left (_, _, err) -> fail err
-      Right (_, _, event) -> do
+      Right (_, _, (event, leftover)) -> do
+        atomically $ traverse_ (unGetTQueue env.fdQueue) (reverse leftover)
         colorize <- liftIO getColorize
         liftIO . traceIO . colorize Vivid Magenta $ ("  <- " <>) $ showEvent oid event
         runEvent x event
@@ -139,10 +141,11 @@ instance Dispatch Client where
 instance Dispatch Server where
   dispatchMessage x oid opcode msg = do
     ClientServerEnv _ env _ <- ask
-    getter <- liftIO $ getEvent opcode $ AdditionalParserData env.fdQueue
-    case runGetOrFail getter (toLazy msg) of
+    fds <- atomically $ flushTQueue env.fdQueue
+    case runGetOrFail (runStateT (getEvent opcode) fds) (toLazy msg) of
       Left (_, _, err) -> fail err
-      Right (_, _, event) -> do
+      Right (_, _, (event, leftover)) -> do
+        atomically $ traverse_ (unGetTQueue env.fdQueue) (reverse leftover)
         colorize <- liftIO getColorize
         liftIO . traceIO . colorize Vivid Magenta $ ("  <- " <>) $ showEvent oid event
         runRequest x event

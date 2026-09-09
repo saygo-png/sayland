@@ -3,12 +3,14 @@ module Sayland.WaylandUtils (waylandSetup) where
 
 import Control.Concurrent.STM (newTQueue)
 import Data.Bimap qualified as BM
+import Data.ByteString.Char8 qualified as BS8
 import Network.Socket hiding (openSocket)
 import Protocol (InterfaceClientTable, VersionTable)
 import Relude
 import Sayland.Protocols.Wayland
 import Sayland.Types
 import Sayland.WaylandSocket
+import Sayland.Wire.Types
 
 waylandSetup :: InterfaceClientTable -> VersionTable -> IO (WaylandEnv Client)
 waylandSetup interfaceTable versionTable = do
@@ -22,8 +24,8 @@ waylandSetup interfaceTable versionTable = do
       objects <- newIORef $ fromList [(coerce wlDisplayId, display)]
       globals <- newIORef BM.empty
       handlers <- newIORef mempty
-      interfaceTable' <- newIORef $ fromList interfaceTable
-      versionTable' <- newIORef $ fromList versionTable
+      interfaceTable' <- newIORef $ fromList $ first (WlString . BS8.pack) <$> interfaceTable
+      versionTable' <- newIORef $ fromList $ (\(x, y) -> (WlString $ BS8.pack x, coerce y)) <$> versionTable
       fdqueue <- atomically newTQueue
       pure $ ClientEnv $ ClientEnvironment sock counter objects globals interfaceTable' versionTable' handlers fdqueue
     Nothing -> error "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."

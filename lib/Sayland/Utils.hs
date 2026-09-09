@@ -1,7 +1,7 @@
 {-# LANGUAGE RequiredTypeArguments #-}
 
 -- | Description : Utilities that do not depend on any protocol
-module Sayland.Utils (getClientEnv, headerSize, waylandNull, newObjectId, newObject, runNewObjReq, sendMessage', sendMessageWithFds', interfaceFromName, getInterface, getInterface') where
+module Sayland.Utils (getClientEnv, headerSize, waylandNull, newObjectId, newObject, runNewObjReq, sendMessage', interfaceFromName, getInterface, getInterface') where
 
 import Data.Bimap qualified as BM
 import Data.Binary.Put
@@ -16,8 +16,8 @@ import Relude
 import Relude.Extra (dup)
 import Sayland.Internal.Utils
 import Sayland.Types
+import Sayland.Wire.Types
 import System.Console.ANSI (Color (..), ColorIntensity (..))
-import System.Posix (Fd)
 
 -- | The header size is always 8 in Wayland.
 headerSize :: Word16
@@ -28,7 +28,7 @@ waylandNull :: Word32
 waylandNull = 0
 
 -- | Increases the counter by 1 and returns it's new value.
-newObjectId :: Wayland p Word32
+newObjectId :: Wayland p ObjectID
 newObjectId = do
   ClientEnv env <- ask
   liftIO $ atomicModifyIORef' env.counter $ dup . (+) 1
@@ -50,40 +50,26 @@ runNewObjReq i mkReq = do
     Nothing ->
       error "runNewObjReq: runRequest did not register the expected object (library bug)"
 
--- | Send a Wayland message using the wire protocol.
+-- | Send a message over the wire.
 sendMessage' :: (WaylandEvent e) => e -> TObjectID i -> Wayland p ()
 sendMessage' e (TObjectID o) = do
   colorize <- liftIO getColorize
   liftIO (traceIO $ colorize Vivid Yellow $ ("    -> " <>) $ showEvent o e)
-  q <- (.fdQueue) <$> getClientEnv
-  let dat = AdditionalParserData q
-  sendMessage o (getOpcode e) $ runPut $ putEvent dat e
-  where
-    sendMessage objectID opcode messageBody = do
-      socket' <- (.socket) <$> getClientEnv
-      liftIO $ sendAll socket' (mkMessage objectID opcode messageBody)
-
--- | Like `sendMessage` but also sends file descriptors.
-sendMessageWithFds' :: (WaylandEvent e) => e -> [Fd] -> TObjectID i -> Wayland p ()
-sendMessageWithFds' e fd (TObjectID o) = do
-  colorize <- liftIO getColorize
-  liftIO (traceIO $ colorize Vivid Yellow $ ("    -> " <>) $ showEvent o e)
-  q <- (.fdQueue) <$> getClientEnv
-  let dat = AdditionalParserData q
-  sendMessageWithFds fd o (getOpcode e) $ runPut $ putEvent dat e
-  where
-    sendMessageWithFds fds objectID opcode messageBody = do
-      socket' <- (.socket) <$> getClientEnv
-      liftIO $ sendManyWithFds socket' [BS.toStrict $ mkMessage objectID opcode messageBody] fds
+  socket' <- (.socket) <$> getClientEnv
+  let (fds, body) = runPutM (execStateT (putEvent e) [])
+      msg = mkMessage o (getOpcode e) body
+  liftIO $ case reverse fds of
+    [] -> sendAll socket' msg
+    fds' -> sendManyWithFds socket' [BS.toStrict msg] fds'
 
 {- | Convenience function for formatting a Wayland message.
 It takes an objectID, operation code and a message body.
 The header is generated based on this, the size is derived automatically.
 -}
-mkMessage :: Word32 -> Word16 -> BSL.ByteString -> BSL.ByteString
+mkMessage :: ObjectID -> Word16 -> BSL.ByteString -> BSL.ByteString
 mkMessage objectID opcode messageBody =
   runPut $ do
-    putWord32le objectID
+    putWord32le $ coerce objectID
     putWord16le opcode
     putWord16le $ 8 + fromIntegral (BSL.length messageBody)
     putLazyByteString messageBody
@@ -96,11 +82,11 @@ getClientEnv =
     ClientServerEnv _ env _ -> env
 
 -- | Helper function for getting an object from a global.
-interfaceFromName :: Word32 -> Wayland p (Maybe BS.ByteString)
+interfaceFromName :: GlobalName -> Wayland p (Maybe WlString)
 interfaceFromName n = do
   env <- getClientEnv
-  glob <- readIORef env.globals
-  pure $ BM.lookupR n glob
+  globals <- readIORef env.globals
+  pure $ BM.lookupR n globals
 
 -- | Get an Interface using its id.
 getInterface :: (Typeable i) => TObjectID i -> Wayland p (Maybe i)
@@ -109,7 +95,7 @@ getInterface (TObjectID objectID) = do
   (proxyInterface <=< Map.lookup objectID) <$> readIORef env.objects
 
 -- | Get an Interface by @TypeApplication
-getInterface' :: forall i p. (Typeable i) => Word32 -> Wayland p (Maybe i)
+getInterface' :: forall i p. (Typeable i) => ObjectID -> Wayland p (Maybe i)
 getInterface' objectID = do
   env <- getClientEnv
   (proxyInterface <=< Map.lookup objectID) <$> readIORef env.objects

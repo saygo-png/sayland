@@ -4,11 +4,7 @@
 -- | Description : Defines all requests and events that exist and should be implemented. Implementations under `Protocols`
 module Protocol (module Protocol) where
 
-import Control.Concurrent.STM (readTQueue)
 import Data.Binary
-import Data.Binary.Get
-import Data.Binary.Put (putByteString, putInt32le, putWord32le)
-import Data.ByteString qualified as BS
 import Data.Maybe (fromJust)
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
@@ -16,9 +12,9 @@ import Relude hiding (Type, get, put)
 import Relude.Unsafe qualified as Unsafe
 import Sayland.Internal.Utils
 import Sayland.Types
+import Sayland.Wire.Types
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
-import System.Posix (Fd)
 import Text.Show qualified
 import Text.XML.Light
 
@@ -109,88 +105,6 @@ deriveNewInterface ty = do
         RecC cn fields -> pure (cn, [(fieldBase f, t) | (f, _, t) <- fields])
         _ -> fail $ "sayland: " <> nameBase typ <> " is not a record"
 
--- Getters/Putters {{{
-
--- | Get a Wire-encoded String.
-getString :: Get BS.ByteString
-getString = do
-  len <- getWord32le
-  str <- getByteString $ fromIntegral len
-  let padding = (4 - (len `mod` 4)) `mod` 4
-  _ <- getByteString $ fromIntegral padding
-  pure str
-
--- | Put a Wire-encoded String
-putString :: BS.ByteString -> Put
-putString s' =
-  putWord32le (fromIntegral $ BS.length s)
-    >> putByteString s
-    >> putByteString (BS.replicate padding 0)
-  where
-    s = s' <> BS.pack [0]
-    padding = (4 - BS.length s `mod` 4) `mod` 4
-
--- | Get a Wire-encoded Fixed
-getFixed24_8 :: Get Double
-getFixed24_8 = getInt32le <&> (/ 256.0) . fromIntegral
-
--- | Put a Wire-encoded Fixed
-putFixed24_8 :: Double -> Put
-putFixed24_8 d = putInt32le $ fromIntegral @Integer $ round $ d * 256
-
--- | Get an Fd from previously obtained ancillary data
-getFd :: AdditionalParserData -> IO (Get Fd)
-getFd dat = pure <$> atomically (readTQueue dat.fdqueue)
-
--- todo: the following 2 can and should be replaced by Binary instances (?)
-
--- | Return a TH getter expression for a given Type.
-getForType :: Type -> Q Exp
-getForType t = case t of
-  ConT name
-    | name == ''Int -> [|const (pure $ fromIntegral <$> getWord32le)|]
-    | name == ''Word32 -> [|const (pure getWord32le)|]
-    | name == ''BS.ByteString -> [|const (pure getString)|]
-    | name == ''Double -> [|const (pure getFixed24_8)|]
-    | name == ''ObjectID -> [|const (pure getWord32le)|]
-    | name == ''NewID ->
-        [|
-          ( const
-              $ pure
-                ( do
-                    strname <- getString
-                    name' <- getWord32le
-                    id' <- getWord32le
-                    pure (strname, name', id')
-                )
-          )
-          |]
-    | name == ''Fd -> [|getFd|]
-    | otherwise -> [|const (pure get)|]
-  AppT (ConT name) _
-    | name == ''TObjectID -> [|const (pure $ TObjectID <$> getWord32le)|]
-    | otherwise -> [|(const put)|]
-  _ -> error $ "[getForType] unsupported type: " <> show t
-
--- | Return a TH putter expression for a given Type.
-putForType :: Type -> Q Exp
-putForType t = case t of
-  ConT name
-    | name == ''Int -> [|(const $ putWord32le . fromIntegral)|]
-    | name == ''Word32 -> [|(const putWord32le)|]
-    | name == ''BS.ByteString -> [|(const putString)|]
-    | name == ''Double -> [|(const putFixed24_8)|]
-    | name == ''ObjectID -> [|(const putWord32le)|]
-    | name == ''NewID -> [|(const (\(x, y, z) -> putString x >> putWord32le y >> putWord32le z))|]
-    | name == ''Fd -> [|const (const pass)|]
-    | otherwise -> [|(const put)|]
-  AppT (ConT name) _
-    | name == ''TObjectID -> [|const $ \(TObjectID x) -> putWord32le x|]
-    | otherwise -> [|(const put)|]
-  _ -> error $ "[putForType] unsupported type: " <> show t
-
--- }}}
-
 -- TemplateHaskell Utils {{{
 
 -- | Returns a declaration of the `Function`s opcode as an integer variable.
@@ -211,9 +125,9 @@ mkEnum interfaceName enumName enumKV =
   , InstanceD
       Nothing
       []
-      (AppT (ConT ''Binary) $ ConT $ mkName enumName')
-      [ FunD 'put clauses
-      , FunD 'get clauses'
+      (AppT (ConT ''WireFormat) $ ConT $ mkName enumName')
+      [ FunD 'wirePut clauses
+      , FunD 'wireGet clauses'
       ]
   , InstanceD
       Nothing
@@ -225,10 +139,11 @@ mkEnum interfaceName enumName enumKV =
     enumName' = "Enum_" <> interfaceName <> "_" <> enumName
     enumName'' = enumName' <> "_"
     constructors = (`NormalC` []) . mkName . (enumName'' <>) <$> fmap fst enumKV
-    clauses = [Clause [ConP (mkName $ enumName'' <> k) [] []] (NormalB (AppE (VarE 'putWord32le) $ LitE (IntegerL (fromIntegral v)))) [] | (k, v) <- enumKV]
+    clauses = [Clause [ConP (mkName $ enumName'' <> k) [] []] (NormalB (AppE (VarE 'wirePut) $ AppE (ConE 'WlUInt) $ LitE (IntegerL (fromIntegral v)))) [] | (k, v) <- enumKV]
 
     clauses' =
-      [Clause [] (NormalB . DoE Nothing $ [BindS (VarP $ mkName "variant") $ VarE 'getWord32le, NoBindS $ CaseE (VarE $ mkName "variant") matches]) []]
+      [Clause [] (NormalB . DoE Nothing $ [BindS (VarP $ mkName "variant") getUInt, NoBindS $ CaseE (VarE $ mkName "variant") matches]) []]
+    getUInt = SigE (VarE 'wireGet) (AppT (ConT ''WireGet) (ConT ''WlUInt))
     matches = [Match (LitP (IntegerL (fromIntegral v))) (NormalB (AppE (VarE 'pure) (ConE (mkName $ enumName'' <> k)))) [] | (k, v) <- enumKV]
 
     show_clauses =
@@ -260,7 +175,7 @@ loadProtocolFile formatter isIO path = do
   protocols <- filter ((== qname "protocol") . elName) . onlyElems . parseXML <$> runIO (readFileBS path)
   concat
     <$> mapM
-      ((<&> concat) . mapM (loadInterface formatter) . findInterfaces)
+      ((<&> concat) . mapM (loadInterface formatter isIO) . findInterfaces)
       protocols
 
 loadProtocolFileEnums :: Bool -> FilePath -> Q [Dec]
@@ -338,104 +253,96 @@ mkOpcodeGetter interfaceName prefix prefix2 events =
         eventName = fromJust $ findAttr (qname "name") element
         args = findChildren (qname "arg") element
 
-mkPut :: (String -> String) -> String -> String -> String -> [(Word16, Element)] -> Q [Dec]
-mkPut formatter interfaceName prefix prefix2 events =
-  mapM mkClause events <&> \m ->
-    bool
-      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''AdditionalParserData) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''Put)
-      , FunD (mkName prefix) m
-      ]
-      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''AdditionalParserData) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''Put)
-      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]
-      ]
-      (null m)
+mkPut :: String -> String -> String -> [(Word16, Element)] -> [Dec]
+mkPut interfaceName prefix prefix2 events =
+  ( \m ->
+      bool
+        [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ AppT (ConT ''WirePut) (TupleT 0))
+        , FunD (mkName prefix) m
+        ]
+        [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ AppT (ConT ''WirePut) (TupleT 0))
+        , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]
+        ]
+        (null m)
+  )
+    $ mkClause
+    <$> events
   where
     nestPutters [] = AppE (VarE 'pure) $ ConE '()
     nestPutters [x] = x
     nestPutters (x : xs) = InfixE (Just $ nestPutters xs) (VarE '(>>)) (Just x)
-    mkClause :: (Word16, Element) -> Q Clause
+    mkClause :: (Word16, Element) -> Clause
     mkClause (_opcode, element) =
-      mapM (\(a, b) -> putForType b <&> (`AppE` (VarE $ mkName $ "arg_" <> fromJust (findAttr (qname "name") a))) . (`AppE` VarE adata)) (zip args argTypes)
-        <&> \x ->
-          ( Clause
-              [ VarP adata
-              , ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [] $ fmap (VarP . mkName . ("arg_" <>)) argNames
-              ]
-              $ NormalB
-              $ nestPutters (reverse x)
-          )
-            []
+      Clause
+        [ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [] $ fmap (VarP . mkName . ("arg_" <>)) argNames]
+        (NormalB $ nestPutters $ reverse $ (\n -> AppE (VarE 'wirePut) (VarE $ mkName $ "arg_" <> n)) <$> argNames)
+        []
       where
         args = findChildren (qname "arg") element
-        argTypes = fmap (argType formatter interfaceName) args
         argNames = fromJust . findAttr (qname "name") <$> args
         eventName = fromJust $ findAttr (qname "name") element
 
-mkParser :: (String -> String) -> String -> String -> String -> [(Word16, Element)] -> Q [Dec]
-mkParser formatter interfaceName prefix prefix2 events =
-  mapM mkClause events <&> \m ->
-    bool
-      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''Word16) $ AppT (AppT ArrowT $ ConT ''AdditionalParserData) (AppT (ConT ''IO) $ AppT (ConT ''Get) $ ConT $ mkName $ prefix2 <> interfaceName))
-      , FunD (mkName prefix) m
-      ]
-      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''Word16) $ AppT (AppT ArrowT $ ConT ''AdditionalParserData) (AppT (ConT ''IO) $ AppT (ConT ''Get) $ ConT $ mkName $ prefix2 <> interfaceName))
-      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]
-      ]
-      (null m)
+mkParser :: String -> String -> String -> [(Word16, Element)] -> [Dec]
+mkParser interfaceName prefix prefix2 events =
+  ( \m ->
+      bool
+        [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''Word16) $ AppT (ConT ''WireGet) $ ConT $ mkName $ prefix2 <> interfaceName)
+        , FunD (mkName prefix) m
+        ]
+        [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''Word16) $ AppT (ConT ''WireGet) $ ConT $ mkName $ prefix2 <> interfaceName)
+        , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]
+        ]
+        (null m)
+  )
+    $ mkClause
+    <$> events
   where
-    mkClause :: (Word16, Element) -> Q Clause
+    mkClause :: (Word16, Element) -> Clause
     mkClause (opcode, element) =
-      mapM getForType argTypes <&> \getters ->
-        Clause
-          [LitP $ IntegerL $ fromIntegral opcode, VarP adata]
-          ( NormalB
-              $ DoE Nothing
-              $ [BindS (VarP $ mkBinding a) (AppE getter $ VarE adata) | (a, getter) <- zip args getters]
-              <> [NoBindS $ AppE (VarE 'pure) $ nestGetters $ reverse $ ConE (mkName $ prefix2 <> interfaceName <> "_" <> eventName) : fmap mkexpr args]
-          )
-          []
+      Clause
+        [LitP $ IntegerL $ fromIntegral opcode]
+        (NormalB $ nestGetters $ reverse $ ConE (mkName $ prefix2 <> interfaceName <> "_" <> eventName) : (VarE 'wireGet <$ args))
+        []
       where
         args = findChildren (qname "arg") element
-        argTypes = fmap (argType formatter interfaceName) args
         eventName = fromJust $ findAttr (qname "name") element
-
-        -- Adding "bound_" prefix to avoid shadowing with names such as "id".
-        mkBinding x = mkName $ "bound_" <> fromJust (findAttr (qname "name") x)
-        mkexpr = VarE . mkBinding
 
     nestGetters [] = undefined
     nestGetters [x] = AppE (VarE 'pure) x
     nestGetters [x, y] = InfixE (Just y) (VarE '(<$>)) (Just x)
     nestGetters (x : xs) = InfixE (Just $ nestGetters xs) (VarE '(<*>)) (Just x)
 
-mkWLEvent :: (String -> String) -> String -> String -> [(Word16, Element)] -> Q [Dec]
-mkWLEvent formatter interfaceName prefix2 events = do
-  put' <- mkPut formatter interfaceName "putEvent" prefix2 events
-  get' <- mkParser formatter interfaceName "getEvent" prefix2 events
+mkWlEvent :: String -> String -> [(Word16, Element)] -> Q [Dec]
+mkWlEvent interfaceName prefix2 events = do
+  let put' = mkPut interfaceName "putEvent" prefix2 events
+      get' = mkParser interfaceName "getEvent" prefix2 events
   opc' <- mkOpcodeGetter interfaceName "getOpcode" prefix2 events
   show' <- mkShow interfaceName "showEvent" prefix2 events
   pure [InstanceD Nothing [] (AppT (ConT ''WaylandEvent) $ ConT . mkName $ prefix2 <> interfaceName) $ put' <> get' <> opc' <> show']
 
 -- | Create all definitions for a single interface - version, the class, parsers, builders, enums, opcodes,
-loadInterface :: (String -> String) -> Element -> Q [Dec]
-loadInterface formatter int = do
+loadInterface :: (String -> String) -> Bool -> Element -> Q [Dec]
+loadInterface formatter isIO int = do
   let events = findChildren (qname "event") int
   let requests = findChildren (qname "request") int
   let opcodes = concatMap (\(x, y) -> mkOpcode name' (fromJust $ findAttr (qname "name") y) x) $ zip [1 ..] $ findChildren (qname "event") int
 
   ifaceName <-
-    lookupTypeName (formatter name') >>= \case
-      Just n -> pure n
-      Nothing -> fail $ "sayland: protocol declares interface `" <> name' <> "` but no type `" <> formatter name' <> "` is in scope."
-  newInterfaceInstance <- deriveNewInterface ifaceName
+    if isIO
+      then pure . mkName $ formatter name'
+      else
+        lookupTypeName (formatter name') >>= \case
+          Just n -> pure n
+          Nothing -> fail $ "sayland: protocol declares interface `" <> name' <> "` but no type `" <> formatter name' <> "` is in scope."
+  newInterfaceInstance <- if isIO then pure [] else deriveNewInterface ifaceName
 
   concat
     <$> sequence
       [ -- WaylandEvent
         pure $ mkEvents formatter name' "Request" requests
       , pure $ mkEvents formatter name' "Event" events
-      , mkWLEvent formatter name' "Event_" $ zip [0 ..] events
-      , mkWLEvent formatter name' "Request_" $ zip [0 ..] requests
+      , mkWlEvent name' "Event_" $ zip [0 ..] events
+      , mkWlEvent name' "Request_" $ zip [0 ..] requests
       , pure
           [ -- Version
             SigD (mkName $ name' <> "Version") $ ConT ''Word32
@@ -490,16 +397,16 @@ argType formatter intName element = case findAttr (qname "enum") element of
     Nothing -> error $ "arg without a type discovered" <> show element
     Just "new_id" -> case findAttr (qname "interface") element of
       Just x -> AppT (ConT ''TObjectID) . ConT . mkName $ formatter x
-      Nothing -> ConT ''NewID
-    Just "int" -> ConT ''Int
-    Just "uint" -> ConT ''Word32
-    Just "fixed" -> ConT ''Double
-    Just "string" -> ConT ''BS.ByteString
+      Nothing -> ConT ''WlNewId
+    Just "int" -> ConT ''WlInt
+    Just "uint" -> ConT ''WlUInt
+    Just "fixed" -> ConT ''WlFixed
+    Just "string" -> ConT ''WlString
+    Just "array" -> ConT ''WlArray
+    Just "fd" -> ConT ''WlFd
     Just "object" -> case findAttr (qname "interface") element of
       Just x -> AppT (ConT ''TObjectID) . ConT . mkName $ formatter x
       Nothing -> ConT ''ObjectID
-    Just "array" -> ConT ''BS.ByteString
-    Just "fd" -> ConT ''Fd
     Just y -> error $ "unknown type: " <> fromString y
 
 -- }}}

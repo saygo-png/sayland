@@ -12,8 +12,6 @@ module Sayland.Protocols.Wayland (module Sayland.Protocols.Wayland) where
 import Control.Concurrent (threadDelay)
 import Control.Exception (try)
 import Data.Bimap qualified as BM
-import Data.ByteString qualified as BS
-import Data.ByteString.Char8 qualified as BS8
 import Data.Data (cast)
 import Data.Map qualified as Map
 import Data.Maybe (fromJust)
@@ -28,6 +26,7 @@ import Relude.Extra.Tuple (dup)
 import Sayland.Internal.Utils
 import Sayland.Types
 import Sayland.Utils
+import Sayland.Wire.Types
 import System.Posix (Fd, setFdSize)
 
 $(loadProtocolFileEnums False "protocols/wayland.xml")
@@ -40,13 +39,13 @@ wlDisplayId = 1
 data ContentUpdate = ContentUpdate
   { cuSurface :: TObjectID Wl_surface
   , cuBuffer :: Maybe (TObjectID Wl_buffer)
-  , cuOffset :: Maybe (Int, Int)
+  , cuOffset :: Maybe (Int32, Int32)
   , cuDamage :: [Rectangle]
   , cuDamageBuffer :: [Rectangle]
   , cuFrameCallbacks :: [TObjectID Wl_callback]
   , cuOpaqueRegion :: Maybe (TObjectID Wl_region)
   , cuInputRegion :: Maybe (TObjectID Wl_region)
-  , cuBufferScale :: Maybe Int
+  , cuBufferScale :: Maybe Int32
   , cuBufferTransform :: Maybe Enum_wl_output_transform
   , cuBufferRelease :: Maybe (TObjectID Wl_callback)
   , cuSubsurfaces :: Maybe SubsurfaceStack
@@ -88,16 +87,16 @@ data Wl_callback = Wl_callback {wlid :: TObjectID Wl_callback, done :: MVar ()}
 
 newtype Wl_compositor = Wl_compositor {wlid :: TObjectID Wl_compositor}
 
-data Wl_shm_pool = Wl_shm_pool {wlid :: TObjectID Wl_shm_pool, fd :: Fd, size :: IORef Int, ptr :: IORef (Ptr ())}
+data Wl_shm_pool = Wl_shm_pool {wlid :: TObjectID Wl_shm_pool, fd :: Fd, size :: IORef WlInt, ptr :: IORef (Ptr ())}
 
 data Wl_shm = Wl_shm {wlid :: TObjectID Wl_shm, formats :: IORef [Enum_wl_shm_format]}
 
 data Wl_buffer = Wl_buffer
   { wlid :: TObjectID Wl_buffer
-  , offset :: Int
-  , width :: Int
-  , height :: Int
-  , stride :: Int
+  , offset :: WlInt
+  , width :: WlInt
+  , height :: WlInt
+  , stride :: WlInt
   , pool :: TObjectID Wl_shm_pool
   , format :: Enum_wl_shm_format
   }
@@ -143,6 +142,14 @@ data Wl_surface = Wl_surface
   , state :: IORef SurfaceState
   }
 
+data Wl_subsurface = Wl_subsurface
+  { wlid :: TObjectID Wl_subsurface
+  , surface :: TObjectID Wl_surface
+  , parent :: TObjectID Wl_surface
+  , position :: IORef (Int32, Int32)
+  , synchronized :: IORef Bool
+  }
+
 newtype Wl_seat = Wl_seat {wlid :: TObjectID Wl_seat}
 
 newtype Wl_pointer = Wl_pointer {wlid :: TObjectID Wl_pointer}
@@ -154,8 +161,6 @@ newtype Wl_touch = Wl_touch {wlid :: TObjectID Wl_touch}
 newtype Wl_output = Wl_output {wlid :: TObjectID Wl_output}
 
 newtype Wl_subcompositor = Wl_subcompositor {wlid :: TObjectID Wl_subcompositor}
-
-data Wl_subsurface = Wl_subsurface {wlid :: TObjectID Wl_subsurface, surface :: TObjectID Wl_surface, parent :: TObjectID Wl_surface, position :: IORef (Int, Int), synchronized :: IORef Bool}
 
 newtype Wl_fixes = Wl_fixes {wlid :: TObjectID Wl_fixes}
 
@@ -230,7 +235,7 @@ dropObject (TObjectID i) =
       runEvent wldisplay $ Event_wl_display_delete_id i
 
 -- | send an error message to the client.
-sendError :: TObjectID a -> Word32 -> BS.ByteString -> Wayland Server ()
+sendError :: TObjectID a -> ObjectID -> WlString -> Wayland Server ()
 sendError (TObjectID i) code msg = do
   Just wldisplay <- getInterface wlDisplayId
   runEvent wldisplay $ Event_wl_display_error i code msg
@@ -270,11 +275,11 @@ instance Interface' Wl_display Server where
     ClientServerEnv _ env _ <- ask
     versions <- zip [0 ..] . Map.toList <$> readIORef env.versionTable
     _registry <- newObject registry Wl_registry{wlid = registry}
-    forM_ versions $ \(name, (interface', version)) -> do
-      let interface = encodeUtf8 interface'
+    forM_ versions $ \(name', (interface, version)) -> do
+      let name = WlUInt name'
           event = Event_wl_registry_global name interface version
       sendMessage' event registry
-      modifyIORef env.globals $ BM.insert interface name
+      modifyIORef env.globals $ BM.insert interface (coerce name)
 
 -- }}}
 
@@ -300,24 +305,23 @@ instance Interface' Wl_callback Server where
 instance Interface' Wl_registry Client where
   runEvent _registry (Event_wl_registry_global name interface version) = do
     ClientEnv env <- ask
-    let interface' = BS.init interface
-    modifyIORef env.globals $ BM.insert interface' name
+    modifyIORef env.globals $ BM.insert interface (coerce name)
     vertable <- readIORef env.versionTable
-    case Map.lookup (BS8.unpack interface') vertable of
+    case Map.lookup interface vertable of
       Just clientVer -> do
         when (clientVer > version)
           $ modifyIORef env.versionTable
-          $ Map.insert (BS8.unpack interface') version
+          $ Map.insert interface version
       Nothing -> pass
   runEvent _registry (Event_wl_registry_global_remove name) = do
     ClientEnv env <- ask
-    modifyIORef env.globals $ BM.deleteR name
+    modifyIORef env.globals $ BM.deleteR (coerce name)
 
-  runRequest registry request@(Request_wl_registry_bind name (_interfaceName, _interfaceVersion, newId)) = do
+  runRequest registry request@(Request_wl_registry_bind name (WlNewId _ _ newId)) = do
     ClientEnv env <- ask
-    interfaceFromName name >>= \case
+    interfaceFromName (coerce name) >>= \case
       Just x -> do
-        y' <- fromJust . Map.lookup (BS8.unpack x) <$> readIORef env.interfaceTable
+        y' <- fromJust . Map.lookup x <$> readIORef env.interfaceTable
         Interface y <- liftIO (y' newId)
         void $ newObject (TObjectID newId) y
       Nothing -> error $ "interface with name `" <> show name <> "` not found."
@@ -326,17 +330,17 @@ instance Interface' Wl_registry Client where
 instance Interface' Wl_registry Server where
   runEvent registry event@(Event_wl_registry_global name interface _version) = do
     ClientServerEnv _ env _ <- ask
-    modifyIORef env.globals $ BM.insert interface name
+    modifyIORef env.globals $ BM.insert interface (coerce name)
     sendMessage' event registry.wlid
   runEvent registry event@(Event_wl_registry_global_remove name) = do
     ClientServerEnv _ env _ <- ask
-    modifyIORef env.globals $ BM.deleteR name
+    modifyIORef env.globals $ BM.deleteR (coerce name)
     sendMessage' event registry.wlid
-  runRequest _registry (Request_wl_registry_bind name (_interface, _version, newId)) = do
+  runRequest _registry (Request_wl_registry_bind name (WlNewId _ _ newId)) = do
     ClientServerEnv _ env _ <- ask
-    interfaceFromName name >>= \case
+    interfaceFromName (coerce name) >>= \case
       Just x -> do
-        y' <- fromJust . Map.lookup (BS8.unpack x) <$> readIORef env.interfaceTable
+        y' <- fromJust . Map.lookup x <$> readIORef env.interfaceTable
         Interface y <- liftIO (y' newId)
         void $ newObject (TObjectID newId) y
       Nothing -> error $ "interface with name `" <> show name <> "` not found."
@@ -380,9 +384,9 @@ instance Interface' Wl_shm_pool Client where
   runEvent _ _ = pass
 
 instance Interface' Wl_shm_pool Server where
-  runRequest shm_pool (Request_wl_shm_pool_create_buffer bufId offset' width' height' stride' format') = do
+  runRequest shm_pool (Request_wl_shm_pool_create_buffer bufId offset width height stride format) = do
     ClientServerEnv{} <- ask
-    let buffer = Wl_buffer{wlid = bufId, offset = offset', width = width', height = height', stride = stride', format = format', pool = shm_pool.wlid}
+    let buffer = Wl_buffer{wlid = bufId, offset = offset, width = width, height = height, stride = stride, format = format, pool = shm_pool.wlid}
     void $ newObject bufId buffer
   runRequest shm_pool request@Request_wl_shm_pool_destroy = do
     sendMessage' request shm_pool.wlid
@@ -413,11 +417,11 @@ instance Interface' Wl_shm_pool Server where
 
 -- Wl_shm {{{
 instance Interface' Wl_shm Client where
-  runRequest shm request@(Request_wl_shm_create_pool poolId fd' size') = do
-    sizeRef <- newIORef size'
+  runRequest shm request@(Request_wl_shm_create_pool poolId (WlFd fd) size) = do
+    sizeRef <- newIORef size
     ptrRef <- newIORef nullPtr {-IIRC client doesn't need exposed -}
-    void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd', size = sizeRef, ptr = ptrRef}
-    sendMessageWithFds' request [fd'] shm.wlid
+    void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd, size = sizeRef, ptr = ptrRef}
+    sendMessage' request shm.wlid
   runRequest shm request@(Request_wl_shm_release{}) = do
     sendMessage' request shm.wlid
     dropObject shm.wlid
@@ -425,7 +429,7 @@ instance Interface' Wl_shm Client where
   runEvent shm (Event_wl_shm_format format) = modifyIORef shm.formats (format :)
 
 instance Interface' Wl_shm Server where
-  runRequest _shm (Request_wl_shm_create_pool poolId fd' size') = do
+  runRequest _shm (Request_wl_shm_create_pool poolId (WlFd fd) size') = do
     ClientServerEnv{} <- ask
     result <-
       liftIO
@@ -435,14 +439,14 @@ instance Interface' Wl_shm Server where
           (fromIntegral size')
           (protRead <> protWrite)
           (mkMmapFlags mapShared mempty)
-          fd'
+          fd
           0
     ptr' <- case result of
       Left (e :: SomeException) -> liftIO (traceIO $ "mmap failed: " ++ show e) >> undefined
       Right ptr' -> liftIO (traceIO $ "mmap OK, ptr = " ++ show ptr') $> ptr'
     sizeRef <- newIORef size'
     ptrRef <- newIORef ptr'
-    void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd', size = sizeRef, ptr = ptrRef}
+    void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd, size = sizeRef, ptr = ptrRef}
   runRequest shm Request_wl_shm_release = do
     ClientServerEnv{} <- ask
     dropObject shm.wlid
@@ -559,10 +563,10 @@ instance Interface' Wl_surface Client where
   runRequest surface' request@(Request_wl_surface_destroy{}) = do
     sendMessage' request surface'.wlid
     dropObject surface'.wlid
-  runRequest surface' request@(Request_wl_surface_attach bufferId x y) = do
+  runRequest surface' request@(Request_wl_surface_attach bufferId (WlInt x) (WlInt y)) = do
     atomicModifyIORef surface'.pendingState $ \s -> (s{cuBuffer = Just bufferId, cuOffset = Just (x, y)}, ())
     sendMessage' request surface'.wlid
-  runRequest surface' request@(Request_wl_surface_damage x y w h) = do
+  runRequest surface' request@(Request_wl_surface_damage (WlInt x) (WlInt y) (WlInt w) (WlInt h)) = do
     liftIO $ traceIO "New clients should not use this request (wl_surface.damage). Instead damage can be posted with wl_surface.damage_buffer which uses buffer coordinates instead of surface' coordinates."
     atomicModifyIORef surface'.pendingState $ \s -> (s{cuDamage = Rectangle{position = (x, y), size = (w, h)} : s.cuDamage}, ())
     sendMessage' request surface'.wlid
@@ -578,13 +582,13 @@ instance Interface' Wl_surface Client where
   runRequest surface' request@(Request_wl_surface_set_buffer_transform transform) = do
     atomicModifyIORef surface'.pendingState $ \s -> (s{cuBufferTransform = Just transform}, ())
     sendMessage' request surface'.wlid
-  runRequest surface' request@(Request_wl_surface_set_buffer_scale scale) = do
+  runRequest surface' request@(Request_wl_surface_set_buffer_scale (WlInt scale)) = do
     atomicModifyIORef surface'.pendingState $ \s -> (s{cuBufferScale = Just scale}, ())
     sendMessage' request surface'.wlid
-  runRequest surface' request@(Request_wl_surface_damage_buffer x y w h) = do
+  runRequest surface' request@(Request_wl_surface_damage_buffer (WlInt x) (WlInt y) (WlInt w) (WlInt h)) = do
     atomicModifyIORef surface'.pendingState $ \s -> (s{cuDamageBuffer = Rectangle{position = (x, y), size = (w, h)} : s.cuDamageBuffer}, ())
     sendMessage' request surface'.wlid
-  runRequest surface' request@(Request_wl_surface_offset x y) = do
+  runRequest surface' request@(Request_wl_surface_offset (WlInt x) (WlInt y)) = do
     atomicModifyIORef surface'.pendingState $ \s -> (s{cuOffset = Just (x, y)}, ())
     sendMessage' request surface'.wlid
   runRequest surface' request@(Request_wl_surface_get_release release) = do
@@ -608,12 +612,12 @@ instance Interface' Wl_surface Client where
   runEvent _ (Event_wl_surface_preferred_buffer_transform _) = pass
 
 instance Interface' Wl_surface Server where
-  runRequest surface (Request_wl_surface_attach bufferId x y) =
+  runRequest surface (Request_wl_surface_attach bufferId (WlInt x) (WlInt y)) =
     atomicModifyIORef surface.pendingState $ \s -> (s{cuBuffer = Just bufferId, cuOffset = Just (x, y)}, ())
   runRequest surface Request_wl_surface_destroy = dropObject surface.wlid
-  runRequest surface (Request_wl_surface_damage x y w h) =
+  runRequest surface (Request_wl_surface_damage (WlInt x) (WlInt y) (WlInt w) (WlInt h)) =
     atomicModifyIORef surface.pendingState $ \s -> (s{cuDamage = Rectangle{position = (x, y), size = (w, h)} : s.cuDamage}, ())
-  runRequest surface (Request_wl_surface_damage_buffer x y w h) =
+  runRequest surface (Request_wl_surface_damage_buffer (WlInt x) (WlInt y) (WlInt w) (WlInt h)) =
     atomicModifyIORef surface.pendingState $ \s -> (s{cuDamageBuffer = Rectangle{position = (x, y), size = (w, h)} : s.cuDamageBuffer}, ())
   runRequest surface (Request_wl_surface_frame cb) =
     atomicModifyIORef surface.pendingState $ \s -> (s{cuFrameCallbacks = cb : s.cuFrameCallbacks}, ())
@@ -621,11 +625,11 @@ instance Interface' Wl_surface Server where
     atomicModifyIORef surface.pendingState $ \s -> (s{cuOpaqueRegion = Just region}, ())
   runRequest surface (Request_wl_surface_set_input_region region) =
     atomicModifyIORef surface.pendingState $ \s -> (s{cuInputRegion = Just region}, ())
-  runRequest surface (Request_wl_surface_set_buffer_scale scale) =
+  runRequest surface (Request_wl_surface_set_buffer_scale (WlInt scale)) =
     atomicModifyIORef surface.pendingState $ \s -> (s{cuBufferScale = Just scale}, ())
   runRequest surface (Request_wl_surface_set_buffer_transform transform') =
     atomicModifyIORef surface.pendingState $ \s -> (s{cuBufferTransform = Just transform'}, ())
-  runRequest surface (Request_wl_surface_offset x y) =
+  runRequest surface (Request_wl_surface_offset (WlInt x) (WlInt y)) =
     atomicModifyIORef surface.pendingState $ \s -> (s{cuOffset = Just (x, y)}, ())
   runRequest surface (Request_wl_surface_get_release release) =
     atomicModifyIORef surface.pendingState $ \s -> ((s :: ContentUpdate){cuBufferRelease = Just release}, ())
@@ -800,7 +804,7 @@ instance Interface' Wl_subsurface Client where
       Nothing -> pass
     sendMessage' request subsurface.wlid
     dropObject subsurface.wlid
-  runRequest subsurface request@(Request_wl_subsurface_set_position x y) = do
+  runRequest subsurface request@(Request_wl_subsurface_set_position (WlInt x) (WlInt y)) = do
     atomicWriteIORef subsurface.position (x, y)
     sendMessage' request subsurface.wlid
   runRequest subsurface request@(Request_wl_subsurface_place_below sibling) = do
@@ -862,7 +866,7 @@ instance Interface' Wl_subsurface Server where
             }
       Nothing -> pass
     dropObject subsurface.wlid
-  runRequest subsurface (Request_wl_subsurface_set_position x y) = atomicWriteIORef subsurface.position (x, y)
+  runRequest subsurface (Request_wl_subsurface_set_position (WlInt x) (WlInt y)) = atomicWriteIORef subsurface.position (x, y)
   runRequest subsurface (Request_wl_subsurface_place_below sibling) = do
     parentSurface' <- getInterface subsurface.parent
     case parentSurface' of
@@ -906,25 +910,26 @@ instance Interface' Wl_fixes Server
 
 -- }}}
 
--- }}}
-
 -- Wrapper Functions, for QoL {{{
-bindToInterface :: Wl_registry -> BS.ByteString -> Wayland Client (Maybe Word32)
-bindToInterface registry intName = go 1
+
+-- Bind to global
+bindToInterface :: Wl_registry -> WlString -> Wayland Client (Maybe ObjectID)
+bindToInterface registry name = go 1
   where
-    go :: Int -> Wayland Client (Maybe Word32)
+    go :: Int -> Wayland Client (Maybe ObjectID)
     go count = do
       when
         (count >= 10)
-        (putTextLn ("ERROR: the wayland global " <> show intName <> " not found") >> exitFailure) -- maybe return Nothing here?
-      putTextLn $ mconcat ["Trying to bind to ", show intName, "... (", show count, ")"]
+        (putTextLn ("ERROR: the wayland global " <> show name <> " not found") >> exitFailure) -- maybe return Nothing here?
+      putTextLn $ mconcat ["Trying to bind to ", show name, "... (", show count, ")"]
       ClientEnv env <- ask
-      glob <- BM.lookup intName <$> readIORef env.globals
+      glob :: Maybe GlobalName <- BM.lookup name <$> readIORef env.globals
       case glob of
         Just x -> do
           new_id <- newObjectId
-          ver <- fromJust . Map.lookup (BS8.unpack intName) <$> readIORef env.versionTable
-          runRequest registry (Request_wl_registry_bind x (intName, ver, new_id))
+          ver <- fromJust . Map.lookup name <$> readIORef env.versionTable
+          let wlNewId = WlNewId name ver new_id
+          runRequest registry (Request_wl_registry_bind (coerce x) wlNewId)
           pure $ Just new_id
         Nothing -> liftIO (threadDelay $ 100 * 1000) >> go (count + 1)
 

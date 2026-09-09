@@ -12,6 +12,7 @@ import Sayland.Protocols.Wayland
 import Sayland.Protocols.XdgShell
 import Sayland.Types
 import Sayland.Utils
+import Sayland.Wire.Types
 
 $(loadProtocolFileEnums False "protocols/wlr-layer-shell-unstable-v1.xml")
 

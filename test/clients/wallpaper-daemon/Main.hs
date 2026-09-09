@@ -10,9 +10,13 @@ import Network.Socket hiding (openSocket)
 import Relude hiding (ByteString, get, isPrefixOf, put)
 import Sayland
 import Sayland.WaylandUtils
+import Sayland.Wire.Types
 import System.Posix (ownerReadMode, ownerWriteMode, setFdSize, unionFileModes)
 import System.Posix.IO
 import System.Posix.SharedMem
+
+c :: (Coercible a b) => a -> b
+c = coerce
 
 interfaceTable :: InterfaceClientTable
 interfaceTable = waylandInterfaceClientTable <> wlr_layer_shell_unstable_v1InterfaceClientTable
@@ -26,7 +30,7 @@ main = runReaderT program =<< waylandSetup interfaceTable versionTable
 program :: Wayland Client ()
 program = do
   ClientEnv env <- ask
-  serial :: TMVar Word32 <- newEmptyTMVarIO
+  serial :: TMVar WlUInt <- newEmptyTMVarIO
   running :: MVar () <- newEmptyMVar
 
   display <- fromJust <$> getInterface wlDisplayId
@@ -72,10 +76,10 @@ program = do
           let frameSize = bufferWidth * bufferHeight * colorChannels
           liftIO . setFdSize fileDescriptor $ fromIntegral frameSize
           wlShmPoolId <- TObjectID <$> newObjectId
-          runRequest wl_shm $ Request_wl_shm_create_pool wlShmPoolId fileDescriptor frameSize
+          runRequest wl_shm $ Request_wl_shm_create_pool wlShmPoolId (c fileDescriptor) (c frameSize)
           wl_shm_pool <- fromJust <$> getInterface wlShmPoolId
           wlBufferId <- TObjectID <$> newObjectId
-          runRequest wl_shm_pool $ Request_wl_shm_pool_create_buffer wlBufferId 0 bufferWidth bufferHeight (bufferWidth * colorChannels) colorFormat
+          runRequest wl_shm_pool $ Request_wl_shm_pool_create_buffer wlBufferId 0 (c bufferWidth) (c bufferHeight) (c (bufferWidth * colorChannels)) (c colorFormat)
 
           fileHandle <- liftIO $ fdToHandle fileDescriptor
 

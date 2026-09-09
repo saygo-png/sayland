@@ -10,8 +10,12 @@ import Network.Socket (close)
 import Relude hiding (hFlush)
 import Sayland
 import Sayland.WaylandUtils
+import Sayland.Wire.Types
 import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import System.Random (randomIO)
+
+c :: (Coercible a b) => a -> b
+c = coerce
 
 interfaceTable :: InterfaceClientTable
 interfaceTable = waylandInterfaceClientTable <> xdg_shellInterfaceClientTable
@@ -69,7 +73,7 @@ program = do
   bufferWidth <- liftIO $ newIORef 512
   bufferHeight <- liftIO $ newIORef 512
   shm_pool_rand :: Int <- randomIO
-  let colorChannels :: Int = 4
+  let colorChannels :: Int32 = 4
   let
     makeSharedMemoryObject = shmOpen ("basic-window" <> show shm_pool_rand) (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
     useSharedMemoryObject fileDescriptor =
@@ -79,10 +83,10 @@ program = do
         let frameSize = bw * bh * colorChannels
         liftIO . setFdSize fileDescriptor $ fromIntegral frameSize
         wlShmPoolId :: TObjectID Wl_shm_pool <- TObjectID <$> newObjectId
-        runRequest wl_shm $ Request_wl_shm_create_pool wlShmPoolId fileDescriptor frameSize
+        runRequest wl_shm $ Request_wl_shm_create_pool wlShmPoolId (c fileDescriptor) (c frameSize)
         wl_shm_pool <- fromJust <$> getInterface wlShmPoolId
         wlBufferId :: TObjectID Wl_buffer <- TObjectID <$> newObjectId
-        runRequest wl_shm_pool $ Request_wl_shm_pool_create_buffer wlBufferId 0 bw bh (bw * colorChannels) Enum_wl_shm_format_argb8888
+        runRequest wl_shm_pool $ Request_wl_shm_pool_create_buffer wlBufferId 0 (c bw) (c bh) (c (bw * colorChannels)) Enum_wl_shm_format_argb8888
         fileHandle <- liftIO $ fdToHandle fileDescriptor
 
         liftIO $ hPut fileHandle $ image bw bh
@@ -95,11 +99,11 @@ program = do
   liftIO . void $ bracket makeSharedMemoryObject (const $ shmUnlink $ "basic-window" <> show shm_pool_rand) useSharedMemoryObject
 
 -- | Rainbow image :D
-image :: Int -> Int -> ByteString
+image :: Int32 -> Int32 -> ByteString
 image bufferWidth bufferHeight =
   generateBGRA8 $ \x y ->
-    let tx = fi x / fi @Int (fi bufferWidth - 1) :: Double
-        ty = fi y / fi @Int (fi bufferHeight - 1) :: Double
+    let tx = fi x / fi @Int32 (fi bufferWidth - 1) :: Double
+        ty = fi y / fi @Int32 (fi bufferHeight - 1) :: Double
         b = round $ tx * 255 -- left -> right
         g = round $ ty * 255 -- top -> bottom
         r = round $ (1 - tx) * 255 -- right -> left
@@ -108,7 +112,7 @@ image bufferWidth bufferHeight =
   where
     fi :: forall a b. (Integral a, Num b) => a -> b
     fi = fromIntegral
-    generateBGRA8 :: (Int -> Int -> (Word8, Word8, Word8, Word8)) -> ByteString
+    generateBGRA8 :: (Int32 -> Int32 -> (Word8, Word8, Word8, Word8)) -> ByteString
     generateBGRA8 pixelFn =
       pack
         [ byte

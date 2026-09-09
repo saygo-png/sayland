@@ -69,6 +69,7 @@ library
     Sayland.Utils
     Sayland.WaylandSocket
     Sayland.WaylandUtils
+    Sayland.Wire.Types
 
 -- Test of a simple wallpaper daemon
 test-suite client-wallpaper-daemon
@@ -105,6 +106,7 @@ test-suite server-basic-compositor
   main-is:        Main.hs
   build-depends:
     , base
+    , bytestring
     , containers
     , directory
     , network

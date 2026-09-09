@@ -1,4 +1,3 @@
-{-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE TypeFamilyDependencies #-}
 
 module Sayland.Types (module Sayland.Types) where
@@ -6,14 +5,20 @@ module Sayland.Types (module Sayland.Types) where
 import Control.Concurrent.STM (TQueue)
 import Data.Bimap qualified as BM
 import Data.Binary
-import Data.ByteString qualified as BS
 import Data.Data (typeOf)
 import GHC.Records (HasField)
 import Network.Socket (Socket)
 import Relude hiding (ByteString, get, put)
+import Sayland.Wire.Types
 import System.Posix (Fd)
 
-type ObjectID = Word32
+-- | The Wayland monad. Allows easy access to the Wayland environment state without threading repetitive arguments.
+type Wayland p = ReaderT (WaylandEnv p) IO
+
+type ObjectID = WlUInt
+
+newtype GlobalName = GlobalName WlUInt
+  deriving newtype (Show, Eq, Ord, Num)
 
 type TObjectID :: forall k. k -> Type
 
@@ -21,12 +26,14 @@ type role TObjectID phantom
 
 newtype TObjectID a = TObjectID ObjectID deriving newtype (Show, Eq, Ord, Num)
 
-type NewID = (BS.ByteString, Word32, ObjectID)
+instance WireFormat (TObjectID a) where
+  wireGet = TObjectID <$> wireGet
+  wirePut (TObjectID o) = wirePut o
 
 -- a rectangle, described in pixels
 data Rectangle = Rectangle
-  { position :: (Int, Int)
-  , size :: (Int, Int)
+  { position :: (Int32, Int32)
+  , size :: (Int32, Int32)
   }
   deriving stock (Eq, Ord)
 
@@ -60,9 +67,9 @@ data ServerEnvironment = ServerEnvironment
   -- ^ currently connected clients
   , clientSerial :: TVar ClientID
   -- ^ client counter, for identifying individual clients.
-  , interfaceTable :: IORef (Map String (ObjectID -> IO (Interface Server)))
+  , interfaceTable :: IORef (Map WlString (ObjectID -> IO (Interface Server)))
   -- ^ interfaces supported by the server
-  , versionTable :: IORef (Map String Word32)
+  , versionTable :: IORef (Map WlString WlUInt)
   -- ^ versions of interfaces
   , eventHandlers :: IORef [EventHandler Server]
   -- ^ server-side event handlers
@@ -72,11 +79,11 @@ type role ClientEnvironment nominal
 
 data ClientEnvironment (p :: Perspective) = ClientEnvironment
   { socket :: Socket
-  , counter :: IORef Word32
-  , objects :: IORef (Map Word32 (Interface p))
-  , globals :: IORef (BM.Bimap {-string name-} BS.ByteString {-global name-} Word32)
-  , interfaceTable :: IORef (Map String (ObjectID -> IO (Interface p)))
-  , versionTable :: IORef (Map String Word32)
+  , counter :: IORef ObjectID
+  , objects :: IORef (Map ObjectID (Interface p))
+  , globals :: IORef (BM.Bimap {-interface name-} WlString GlobalName)
+  , interfaceTable :: IORef (Map WlString (ObjectID -> IO (Interface p)))
+  , versionTable :: IORef (Map WlString WlUInt)
   , eventHandlers :: IORef [EventHandler p]
   , fdQueue :: TQueue Fd
   }
@@ -110,17 +117,9 @@ data Interface (p :: Perspective) where
   Interface :: (Interface' i p, Typeable i) => i -> Interface p
 
 class (Typeable e) => WaylandEvent e where
-  getEvent :: Word16 -> AdditionalParserData -> IO (Get e)
-  putEvent :: AdditionalParserData -> e -> Put
+  getEvent :: Word16 -> WireGet e
+  putEvent :: e -> WirePut ()
   getOpcode :: e -> Word16
   showEvent :: ObjectID -> e -> String
-
--- | Additional data passed to the TemplateHaskell-generated `getEvent`.
-newtype AdditionalParserData = AdditionalParserData
-  { fdqueue :: TQueue Fd
-  }
-
--- | The Wayland monad. Allows easy access to the Wayland environment state without threading repetitive arguments.
-type Wayland p = ReaderT (WaylandEnv p) IO
 
 -- vim: foldmethod=marker

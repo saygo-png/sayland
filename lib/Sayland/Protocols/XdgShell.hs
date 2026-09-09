@@ -15,6 +15,7 @@ import Sayland.Internal.Utils
 import Sayland.Protocols.Wayland
 import Sayland.Types
 import Sayland.Utils
+import Sayland.Wire.Types
 
 -- Interfaces {{{
 $(loadProtocolFileEnums False "protocols/xdg-shell.xml")
@@ -26,9 +27,19 @@ newtype Xdg_positioner = Xdg_positioner {wlid :: TObjectID Xdg_positioner}
 -- todo: xdgRole might be unnecessary, instead Wl_surface.role should be used.
 data Xdg_surface = Xdg_surface {wlid :: TObjectID Xdg_surface, wl_surface :: TObjectID Wl_surface, xdgRole :: IORef (Maybe XDGRole)}
 
-data Xdg_toplevel = Xdg_toplevel {toplevel_xdg_surface :: TObjectID Xdg_surface, wlid :: TObjectID Xdg_toplevel, size :: IORef (Int, Int), parent :: IORef (Maybe (TObjectID Xdg_toplevel))}
+data Xdg_toplevel = Xdg_toplevel
+  { toplevel_xdg_surface :: TObjectID Xdg_surface
+  , wlid :: TObjectID Xdg_toplevel
+  , size :: IORef (Int32, Int32)
+  , parent :: IORef (Maybe (TObjectID Xdg_toplevel))
+  }
 
-data Xdg_popup = Xdg_popup {popup_xdg_surface :: TObjectID Xdg_surface, wlid :: TObjectID Xdg_popup, parent :: TObjectID Xdg_surface, positioner :: TObjectID Xdg_positioner}
+data Xdg_popup = Xdg_popup
+  { popup_xdg_surface :: TObjectID Xdg_surface
+  , wlid :: TObjectID Xdg_popup
+  , parent :: TObjectID Xdg_surface
+  , positioner :: TObjectID Xdg_positioner
+  }
 
 data XDGRole = XDGToplevel Xdg_toplevel | XDGPopup Xdg_popup
 
@@ -184,14 +195,14 @@ instance Interface' Xdg_surface Server where
 
 instance Interface' Xdg_toplevel Client where
   runRequest _ _ = pass
-  runEvent toplevel (Event_xdg_toplevel_configure w h _) = do
+  runEvent toplevel (Event_xdg_toplevel_configure (WlInt w) (WlInt h) _) = do
     writeIORef toplevel.size (w, h)
   runEvent _toplevel (Event_xdg_toplevel_configure_bounds _ _) = pass
   runEvent _ _ = pass
 
 instance Interface' Xdg_toplevel Server where
   runRequest _ _ = pass
-  runEvent toplevel event@(Event_xdg_toplevel_configure w h _) = do
+  runEvent toplevel event@(Event_xdg_toplevel_configure (WlInt w) (WlInt h) _) = do
     writeIORef toplevel.size (w, h)
     sendMessage' event toplevel.wlid
   runEvent toplevel event@(Event_xdg_toplevel_configure_bounds _ _) = sendMessage' event toplevel.wlid
