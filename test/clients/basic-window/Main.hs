@@ -17,14 +17,11 @@ import System.Random (randomIO)
 c :: (Coercible a b) => a -> b
 c = coerce
 
-interfaceTable :: InterfaceClientTable
-interfaceTable = waylandInterfaceClientTable <> xdg_shellInterfaceClientTable
-
-versionTable :: VersionTable
-versionTable = waylandVersionTable <> xdg_shellVersionTable
+table :: ProtocolTable Client
+table = waylandClientTable <> xdg_shellClientTable
 
 main :: IO ()
-main = runReaderT program =<< waylandSetup interfaceTable versionTable
+main = runReaderT program =<< waylandSetup table
 
 program :: Wayland Client ()
 program = do

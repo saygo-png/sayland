@@ -273,11 +273,11 @@ instance Interface' Wl_display Server where
     runEvent callbackObject $ Event_wl_callback_done 0
   runRequest _display (Request_wl_display_get_registry registry) = do
     ClientServerEnv _ env _ <- ask
-    versions <- zip [0 ..] . Map.toList <$> readIORef env.versionTable
+    entries <- zip [0 ..] . Map.toList <$> readIORef env.interfaceTable
     _registry <- newObject registry Wl_registry{wlid = registry}
-    forM_ versions $ \(name', (interface, version)) -> do
+    forM_ entries $ \(name', (interface, entry)) -> do
       let name = WlUInt name'
-          event = Event_wl_registry_global name interface version
+          event = Event_wl_registry_global name interface entry.version
       sendMessage' event registry
       modifyIORef env.globals $ BM.insert interface (coerce name)
 
@@ -306,12 +306,12 @@ instance Interface' Wl_registry Client where
   runEvent _registry (Event_wl_registry_global name interface version) = do
     ClientEnv env <- ask
     modifyIORef env.globals $ BM.insert interface (coerce name)
-    vertable <- readIORef env.versionTable
-    case Map.lookup interface vertable of
-      Just clientVer -> do
-        when (clientVer > version)
-          $ modifyIORef env.versionTable
-          $ Map.insert interface version
+    table <- readIORef env.interfaceTable
+    case Map.lookup interface table of
+      Just entry ->
+        when (entry.version > version)
+          $ modifyIORef env.interfaceTable
+          $ Map.insert interface entry{version = version}
       Nothing -> pass
   runEvent _registry (Event_wl_registry_global_remove name) = do
     ClientEnv env <- ask
@@ -321,8 +321,8 @@ instance Interface' Wl_registry Client where
     ClientEnv env <- ask
     interfaceFromName (coerce name) >>= \case
       Just x -> do
-        y' <- fromJust . Map.lookup x <$> readIORef env.interfaceTable
-        Interface y <- liftIO (y' newId)
+        entry <- fromJust . Map.lookup x <$> readIORef env.interfaceTable
+        Interface y <- liftIO (entry.construct newId)
         void $ newObject (TObjectID newId) y
       Nothing -> error $ "interface with name `" <> show name <> "` not found."
     sendMessage' request registry.wlid
@@ -340,8 +340,8 @@ instance Interface' Wl_registry Server where
     ClientServerEnv _ env _ <- ask
     interfaceFromName (coerce name) >>= \case
       Just x -> do
-        y' <- fromJust . Map.lookup x <$> readIORef env.interfaceTable
-        Interface y <- liftIO (y' newId)
+        entry <- fromJust . Map.lookup x <$> readIORef env.interfaceTable
+        Interface y <- liftIO (entry.construct newId)
         void $ newObject (TObjectID newId) y
       Nothing -> error $ "interface with name `" <> show name <> "` not found."
 
@@ -927,8 +927,8 @@ bindToInterface registry name = go 1
       case glob of
         Just x -> do
           new_id <- newObjectId
-          ver <- fromJust . Map.lookup name <$> readIORef env.versionTable
-          let wlNewId = WlNewId name ver new_id
+          entry <- fromJust . Map.lookup name <$> readIORef env.interfaceTable
+          let wlNewId = WlNewId name entry.version new_id
           runRequest registry (Request_wl_registry_bind (coerce x) wlNewId)
           pure $ Just new_id
         Nothing -> liftIO (threadDelay $ 100 * 1000) >> go (count + 1)

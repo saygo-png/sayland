@@ -3,19 +3,14 @@ module Main (main) where
 -- THIS IS JUST A SERVER. IT DOES NOT RENDER ANYTHING.
 
 import Control.Exception (bracket)
-import Data.ByteString.Char8 qualified as BS8
 import Data.Map qualified as Map
 import Network.Socket
 import Relude
 import Sayland
-import Sayland.Wire.Types
 import System.Directory (removeFile)
 
-interfaceTable' :: InterfaceServerTable
-interfaceTable' = waylandInterfaceServerTable <> xdg_shellInterfaceServerTable
-
-versionTable' :: VersionTable
-versionTable' = waylandVersionTable <> xdg_shellVersionTable
+table :: ProtocolTable Server
+table = waylandServerTable <> xdg_shellServerTable
 
 main :: IO ()
 main = bracket env cleanup program
@@ -36,8 +31,7 @@ main = bracket env cleanup program
           listen socket' 5
 
           clients <- newTVarIO Map.empty
-          interfaceTable <- newIORef $ fromList $ first (WlString . BS8.pack) <$> interfaceTable'
-          versionTable <- newIORef $ fromList $ (\(x, y) -> (WlString $ BS8.pack x, coerce y)) <$> versionTable'
+          interfaceTable <- newIORef $ fromList table
           eventHandlers <- newIORef []
           clientSerial <- newTVarIO 0
           pure
@@ -46,7 +40,6 @@ main = bracket env cleanup program
               , socketPath
               , clients
               , interfaceTable
-              , versionTable
               , eventHandlers
               , clientSerial
               }

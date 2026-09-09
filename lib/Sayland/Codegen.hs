@@ -20,34 +20,28 @@ import System.FilePath (takeExtension, (</>))
 import Text.Show qualified
 import Text.XML.Light
 
--- | Generates a VersionTable for the given protocol.
-generateVersionTable :: Element -> [Dec]
-generateVersionTable e =
-  [ SigD name $ ConT ''VersionTable
-  , ValD (VarP name) (NormalB $ ListE defs) []
-  ]
-  where
-    protocol = fromJust $ findAttr (qname "name") e
-    name = mkName $ protocol <> "VersionTable"
-    tuple x = TupE [Just $ VarE $ mkName $ x <> "Name", Just $ VarE $ mkName $ x <> "Version"]
-    defs = tuple . fromJust . findAttr (qname "name") <$> findChildren (qname "interface") e
-
--- | Generates an InterfaceTable, using formatter to format classes names - as they are to be defined by the user.
-generateInterfaceTable :: Element -> (String -> String) -> [Dec]
-generateInterfaceTable e formatter =
-  [ SigD cname $ ConT ''InterfaceClientTable
+{- | Generates the client and server tables for the given protocol, using
+formatter to format interface type names - as they are to be defined by the user.
+-}
+generateProtocolTable :: Element -> (String -> String) -> [Dec]
+generateProtocolTable e formatter =
+  [ SigD cname $ AppT (ConT ''ProtocolTable) (PromotedT 'Client)
   , ValD (VarP cname) (NormalB $ ListE defs) []
-  , SigD sname $ ConT ''InterfaceServerTable
+  , SigD sname $ AppT (ConT ''ProtocolTable) (PromotedT 'Server)
   , ValD (VarP sname) (NormalB $ ListE defs) []
   ]
   where
     protocol = fromJust $ findAttr (qname "name") e
-    cname = mkName $ protocol <> "InterfaceClientTable"
-    sname = mkName $ protocol <> "InterfaceServerTable"
-    tuple x =
+    cname = mkName $ protocol <> "ClientTable"
+    sname = mkName $ protocol <> "ServerTable"
+    oid = mkName "objectId"
+    entry x =
       TupE
-        [ Just $ VarE $ mkName $ x <> "Name"
-        , Just
+        [ Just $ AppE (VarE 'getInterfaceName) proxy
+        , -- InterfaceEntry <version> <constructor>
+          Just
+            $ AppE
+              (AppE (ConE 'InterfaceEntry) (AppE (VarE 'getInterfaceVersion) proxy))
             $ LamE [VarP oid]
             $ AppE (AppE (VarE '(<$>)) (ConE 'Interface))
             $ SigE
@@ -55,8 +49,8 @@ generateInterfaceTable e formatter =
               (AppT (ConT ''IO) (ConT . mkName $ formatter x))
         ]
       where
-        oid = mkName "objectId"
-    defs = tuple . fromJust . findAttr (qname "name") <$> findChildren (qname "interface") e
+        proxy = SigE (ConE 'Proxy) (AppT (ConT ''Proxy) (ConT . mkName $ formatter x))
+    defs = entry . fromJust . findAttr (qname "name") <$> findChildren (qname "interface") e
 
 -- Haddock {{{
 
@@ -90,13 +84,15 @@ dedent s = intercalate "\n" $ strip <$> body
 escapeHaddock :: String -> String
 escapeHaddock = concatMap $ \c -> if c `elem` ("\\/'\"@<>[]#" :: String) then ['\\', c] else [c]
 
--- | Attach a Haddock comment to a name defined by the current splice.
-docDecl :: Name -> Maybe String -> Q ()
-docDecl n = traverse_ (addModFinalizer . putDoc (DeclDoc n))
+{- | Attach a Haddock comment to a name defined by the current splice.
+No-op under `isIO`, where there is no splice to finalize.
+-}
+docDecl :: Bool -> Name -> Maybe String -> Q ()
+docDecl isIO n = unless isIO . traverse_ (addModFinalizer . putDoc (DeclDoc n))
 
 -- | Attach a Haddock comment to the @i@th argument of a function or constructor.
-docArg :: Name -> Int -> Maybe String -> Q ()
-docArg n i = traverse_ (addModFinalizer . putDoc (ArgDoc n i))
+docArg :: Bool -> Name -> Int -> Maybe String -> Q ()
+docArg isIO n i = unless isIO . traverse_ (addModFinalizer . putDoc (ArgDoc n i))
 
 -- }}}
 
@@ -157,10 +153,10 @@ example output:
 data EnumName = A | B | C | D ... deriving Eq
 enumName' A = 1 ...
 -}
-mkEnum :: String -> Element -> Q [Dec]
-mkEnum interfaceName enumEl = do
-  docDecl (mkName enumName') (elemDoc enumEl)
-  for_ entries $ \e -> docDecl (mkName $ enumName'' <> entryName e) (elemDoc e)
+mkEnum :: Bool -> String -> Element -> Q [Dec]
+mkEnum isIO interfaceName enumEl = do
+  docDecl isIO (mkName enumName') (elemDoc enumEl)
+  for_ entries $ \e -> docDecl isIO (mkName $ enumName'' <> entryName e) (elemDoc e)
   pure
     [ DataD [] (mkName enumName') [] Nothing constructors [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord]]
     , InstanceD
@@ -228,23 +224,21 @@ loadProtocolFileEnums :: Bool -> FilePath -> Q [Dec]
 loadProtocolFileEnums isIO path = do
   unless isIO $ addDependentFile path
   protocols <- filter ((== qname "protocol") . elName) . onlyElems . parseXML <$> runIO (readFileBS path)
-  concat . concat <$> mapM (mapM loadInterfaceEnums . findInterfaces) protocols
+  concat . concat <$> mapM (mapM (loadInterfaceEnums isIO) . findInterfaces) protocols
 
 generateTables :: Bool -> (String -> String) -> FilePath -> Q [Dec]
 generateTables isIO formatter path = do
   unless isIO $ addDependentFile path
   protocols <- filter ((== qname "protocol") . elName) . onlyElems . parseXML <$> runIO (readFileBS path)
-  pure
-    $ concatMap (`generateInterfaceTable` formatter) protocols
-    <> concatMap generateVersionTable protocols
+  pure $ concatMap (`generateProtocolTable` formatter) protocols
 
-mkEvents :: (String -> String) -> String -> String -> [Element] -> Q [Dec]
-mkEvents formatter interfaceName prefix events = do
-  docDecl (mkName prefix') . Just $ prefix <> "s of the t'" <> formatter interfaceName <> "' interface."
+mkEvents :: Bool -> (String -> String) -> String -> String -> [Element] -> Q [Dec]
+mkEvents isIO formatter interfaceName prefix events = do
+  docDecl isIO (mkName prefix') . Just $ prefix <> "s of the t'" <> formatter interfaceName <> "' interface."
   for_ events $ \e -> do
-    docDecl (conName e) (elemDoc e)
+    docDecl isIO (conName e) (elemDoc e)
     for_ (zip [0 ..] $ findChildren (qname "arg") e) $ \(i, a) ->
-      docArg (conName e) i (elemDoc a)
+      docArg isIO (conName e) i (elemDoc a)
   pure [DataD [] (mkName prefix') [] Nothing constructors []]
   where
     prefix' = prefix <> "_" <> interfaceName
@@ -373,7 +367,7 @@ mkWlEvent interfaceName prefix2 events = do
   show' <- mkShow interfaceName "showEvent" prefix2 events
   pure [InstanceD Nothing [] (AppT (ConT ''WaylandEvent) $ ConT . mkName $ prefix2 <> interfaceName) $ put' <> get' <> opc' <> show']
 
--- | Create all definitions for a single interface - version, the class, parsers, builders, enums, opcodes,
+-- | Create all definitions for a single interface - the class, parsers, builders, enums, opcodes etc.
 loadInterface :: (String -> String) -> Bool -> Element -> Q [Dec]
 loadInterface formatter isIO int = do
   let events = findChildren (qname "event") int
@@ -388,24 +382,16 @@ loadInterface formatter isIO int = do
           Just n -> pure n
           Nothing -> fail $ "sayland: protocol declares interface `" <> name' <> "` but no type `" <> formatter name' <> "` is in scope."
 
-  unless isIO $ docDecl ifaceName (elemDoc int)
+  docDecl isIO ifaceName (elemDoc int)
   newInterfaceInstance <- if isIO then pure [] else deriveNewInterface ifaceName
 
   concat
     <$> sequence
       [ -- WaylandEvent
-        mkEvents formatter name' "Request" requests
-      , mkEvents formatter name' "Event" events
+        mkEvents isIO formatter name' "Request" requests
+      , mkEvents isIO formatter name' "Event" events
       , mkWlEvent name' "Event_" $ zip [0 ..] events
       , mkWlEvent name' "Request_" $ zip [0 ..] requests
-      , pure
-          [ -- Version
-            SigD (mkName $ name' <> "Version") $ ConT ''Word32
-          , ValD (VarP verName) (NormalB . LitE . IntegerL $ version') []
-          , -- Name
-            SigD (mkName $ name' <> "Name") $ ConT ''String
-          , ValD (VarP nameName) (NormalB . LitE . StringL $ name') []
-          ]
       , -- IsInterface instance
         pure
           [ InstanceD
@@ -414,6 +400,12 @@ loadInterface formatter isIO int = do
               (AppT (ConT ''IsInterface) ifaceT)
               [ TySynInstD $ TySynEqn Nothing (AppT (ConT ''Event) ifaceT) (ConT $ mkName $ "Event_" <> name')
               , TySynInstD $ TySynEqn Nothing (AppT (ConT ''Request) ifaceT) (ConT $ mkName $ "Request_" <> name')
+              , FunD
+                  'getInterfaceVersion
+                  [Clause [WildP] (NormalB $ AppE (ConE 'WlUInt) (LitE $ IntegerL version')) []]
+              , FunD
+                  'getInterfaceName
+                  [Clause [WildP] (NormalB $ AppE (VarE 'fromString) (LitE $ StringL name')) []]
               ]
           ]
       , pure newInterfaceInstance
@@ -423,13 +415,11 @@ loadInterface formatter isIO int = do
   where
     name' = fromJust $ findAttr (qname "name") int
     ifaceT = ConT . mkName $ formatter name'
-    verName = mkName $ name' <> "Version"
-    nameName = mkName $ name' <> "Name"
     version' = Unsafe.read . fromJust $ findAttr (qname "version") int
 
-loadInterfaceEnums :: Element -> Q [Dec]
-loadInterfaceEnums int =
-  concat <$> mapM (mkEnum name) enums
+loadInterfaceEnums :: Bool -> Element -> Q [Dec]
+loadInterfaceEnums isIO int =
+  concat <$> mapM (mkEnum isIO name) enums
   where
     name = fromJust $ findAttr (qname "name") int
     enums = findChildren (qname "enum") int

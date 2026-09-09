@@ -18,14 +18,11 @@ import System.Posix.SharedMem
 c :: (Coercible a b) => a -> b
 c = coerce
 
-interfaceTable :: InterfaceClientTable
-interfaceTable = waylandInterfaceClientTable <> wlr_layer_shell_unstable_v1InterfaceClientTable
-
-versionTable :: VersionTable
-versionTable = waylandVersionTable <> wlr_layer_shell_unstable_v1VersionTable
+table :: ProtocolTable Client
+table = waylandClientTable <> wlr_layer_shell_unstable_v1ClientTable
 
 main :: IO ()
-main = runReaderT program =<< waylandSetup interfaceTable versionTable
+main = runReaderT program =<< waylandSetup table
 
 program :: Wayland Client ()
 program = do

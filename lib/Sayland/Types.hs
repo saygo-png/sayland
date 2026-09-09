@@ -67,10 +67,8 @@ data ServerEnvironment = ServerEnvironment
   -- ^ currently connected clients
   , clientSerial :: TVar ClientID
   -- ^ client counter, for identifying individual clients.
-  , interfaceTable :: IORef (Map WlString (ObjectID -> IO (Interface Server)))
-  -- ^ interfaces supported by the server
-  , versionTable :: IORef (Map WlString WlUInt)
-  -- ^ versions of interfaces
+  , interfaceTable :: IORef (Map WlString (InterfaceEntry Server))
+  -- ^ versioned interfaces supported by the server
   , eventHandlers :: IORef [EventHandler Server]
   -- ^ server-side event handlers
   }
@@ -82,8 +80,7 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
   , counter :: IORef ObjectID
   , objects :: IORef (Map ObjectID (Interface p))
   , globals :: IORef (BM.Bimap {-interface name-} WlString GlobalName)
-  , interfaceTable :: IORef (Map WlString (ObjectID -> IO (Interface p)))
-  , versionTable :: IORef (Map WlString WlUInt)
+  , interfaceTable :: IORef (Map WlString (InterfaceEntry p))
   , eventHandlers :: IORef [EventHandler p]
   , fdQueue :: TQueue Fd
   }
@@ -99,6 +96,8 @@ class
   where
   type Event a = r | r -> a
   type Request a = r | r -> a
+  getInterfaceVersion :: Proxy a -> WlUInt
+  getInterfaceName :: Proxy a -> WlString
 
 class (IsInterface a) => Interface' a (p :: Perspective) where
   runEvent :: a -> Event a -> Wayland p ()
@@ -122,10 +121,14 @@ class (Typeable e) => WaylandEvent e where
   getOpcode :: e -> Word16
   showEvent :: ObjectID -> e -> String
 
-type VersionTable = [(String, Word32)]
+type role InterfaceEntry nominal
 
-type InterfaceClientTable = [(String, ObjectID -> IO (Interface Client))]
+-- | Everything needed to advertise and construct one interface.
+data InterfaceEntry (p :: Perspective) = InterfaceEntry
+  { version :: WlUInt
+  , construct :: ObjectID -> IO (Interface p)
+  }
 
-type InterfaceServerTable = [(String, ObjectID -> IO (Interface Server))]
+type ProtocolTable (p :: Perspective) = [(WlString, InterfaceEntry p)]
 
 -- vim: foldmethod=marker

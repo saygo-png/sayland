@@ -49,7 +49,6 @@ handleIncomingClient env socket' = do
           , eventHandlers = env.eventHandlers
           , globals
           , interfaceTable = env.interfaceTable
-          , versionTable = env.versionTable
           , fdQueue
           }
   serial' <- atomically $ do
