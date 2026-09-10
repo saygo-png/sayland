@@ -5,7 +5,10 @@
 module Sayland.Codegen (module Sayland.Codegen) where
 
 import Data.Binary
+import Data.Binary.Get (getWord32le)
+import Data.Bits
 import Data.Char (isSpace)
+import Data.Foldable (Foldable (foldl))
 import Data.List qualified as L
 import Data.Maybe (fromJust)
 import Language.Haskell.TH
@@ -150,33 +153,59 @@ mkOpcode interfaceName fname opcode =
 
 {- | Defines an enum-like along with a function to look up the value of each element.
 example output:
-data EnumName = A | B | C | D ... deriving Eq
+data Enum_[interface]_[name] = A | B | C | D ... deriving (Eq, Ord)
 enumName' A = 1 ...
+
+if the enum is a bitfield, instead generates the following:
+data Enum_[interface]_[name] = Enum_[interface]_[name] {[name]_[entry] :: Bool, [name]_[entry2] :: Bool, ...} deriving (Eq, Ord, Generic)
 -}
 mkEnum :: Bool -> String -> Element -> Q [Dec]
 mkEnum isIO interfaceName enumEl = do
-  docDecl isIO (mkName enumName') (elemDoc enumEl)
-  for_ entries $ \e -> docDecl isIO (mkName $ enumName'' <> entryName e) (elemDoc e)
-  pure
-    [ DataD [] (mkName enumName') [] Nothing constructors [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord]]
-    , InstanceD
-        Nothing
-        []
-        (AppT (ConT ''WireFormat) $ ConT $ mkName enumName')
-        [ FunD 'wirePut clauses
-        , FunD 'wireGet clauses'
-        ]
-    , InstanceD
-        Nothing
-        []
-        (AppT (ConT ''Show) $ ConT $ mkName enumName')
-        [FunD 'Text.Show.showsPrec show_clauses]
-    ]
+  bool
+    ( do
+        for_ entries $ \e -> docDecl isIO (mkName $ enumName'' <> entryName e) (elemDoc e)
+        docDecl isIO (mkName enumName') (elemDoc enumEl)
+        pure
+          [ DataD [] (mkName enumName') [] Nothing constructors [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord]]
+          , InstanceD
+              Nothing
+              []
+              (AppT (ConT ''WireFormat) $ ConT $ mkName enumName')
+              [ FunD 'wirePut clauses
+              , FunD 'wireGet clauses'
+              ]
+          , InstanceD
+              Nothing
+              []
+              (AppT (ConT ''Show) $ ConT $ mkName enumName')
+              [FunD 'Text.Show.showsPrec show_clauses]
+          ]
+    )
+    ( do
+        docDecl isIO (mkName enumName') (elemDoc enumEl)
+        pure
+          [ DataD [] (mkName enumName') [] Nothing bitfieldConstructor [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord, ConT ''Generic]]
+          , InstanceD
+              Nothing
+              []
+              (AppT (ConT ''WireFormat) $ ConT $ mkName enumName')
+              [ FunD 'wirePut bitfieldClauses
+              , FunD 'wireGet bitfieldClauses'
+              ]
+          , InstanceD
+              Nothing
+              []
+              (AppT (ConT ''Show) $ ConT $ mkName enumName')
+              [FunD 'Text.Show.showsPrec bitfield_show_clauses]
+          ]
+    )
+    isBitfield
   where
     enumName = fromJust $ findAttr (qname "name") enumEl
     entries = findChildren (qname "entry") enumEl
     entryName e = fromJust $ findAttr (qname "name") e
     enumKV = [(entryName e, Unsafe.read . fromJust $ findAttr (qname "value") e) | e <- entries]
+    enumKeys = fmap fst enumKV
 
     enumName' = "Enum_" <> interfaceName <> "_" <> enumName
     enumName'' = enumName' <> "_"
@@ -194,6 +223,45 @@ mkEnum isIO interfaceName enumEl = do
           (NormalB $ AppE (VarE 'Text.Show.showString) (LitE (StringL k)))
           []
       | (k, _) <- enumKV
+      ]
+    isBitfield = case findAttr (qname "bitfield") enumEl of
+      Just x -> x == "true"
+      Nothing -> False
+    bitfieldConstructor = [RecC (mkName enumName') [(mkName $ enumName <> "_" <> name, Bang NoSourceUnpackedness NoSourceStrictness, ConT ''Bool) | name <- enumKeys]]
+
+    bitfieldClauses =
+      [ Clause
+          [RecP (mkName enumName') [(mkName $ enumName <> "_" <> field, VarP (mkName $ "field_" <> field)) | field <- enumKeys]]
+          (NormalB $ AppE (VarE 'wirePut) $ AppE (ConE 'WlUInt) $ AppE (VarE 'sum) $ ListE [AppE (AppE (AppE (VarE 'bool) $ LitE $ IntegerL 0) (LitE $ IntegerL value)) $ VarE $ mkName $ "field_" <> field | (field, value) <- enumKV])
+          []
+      ]
+    bitfieldClauses' =
+      [ Clause
+          []
+          ( NormalB
+              . DoE Nothing
+              $ [ BindS (ConP 'WlUInt [] [VarP $ mkName "byte"]) getUInt
+                , NoBindS
+                    $ AppE (VarE 'pure)
+                    $ foldl
+                      AppE
+                      (ConE $ mkName enumName')
+                      [bool (AppE (AppE (VarE 'testBit) $ VarE $ mkName "byte") $ LitE $ IntegerL $ round (logBase (2 :: Float) $ fromIntegral v)) (ConE 'True) (v == 0) | (_, v) <- enumKV]
+                ]
+          )
+          []
+      ]
+    bitfield_show_clauses =
+      [ Clause
+          [WildP, RecP (mkName enumName') [(mkName $ enumName <> "_" <> field, VarP (mkName $ "field_" <> field)) | field <- enumKeys]]
+          ( NormalB
+              $ AppE (VarE 'Text.Show.showString)
+              $ AppE (AppE (VarE 'intercalate) $ LitE $ StringL " .|. ")
+              $ AppE (AppE (VarE 'fmap) $ VarE 'fst)
+              $ AppE (AppE (VarE 'filter) $ VarE 'snd)
+              $ ListE [TupE [Just $ LitE $ StringL field, Just $ VarE $ mkName $ "field_" <> field] | field <- enumKeys]
+          )
+          []
       ]
 
 -- }}}
