@@ -1,6 +1,6 @@
 {-# LANGUAGE RequiredTypeArguments #-}
 
--- | Description : Utilities that do not depend on any protocol
+-- | Description : Utilities that do not depend on any protocol.
 module Sayland.Utils (getClientEnv, headerSize, waylandNull, newObjectId, newObject, runNewObjReq, sendMessage', interfaceFromName, getInterface, getInterface') where
 
 import Data.Bimap qualified as BM

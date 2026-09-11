@@ -23,7 +23,7 @@ main = bracket env cleanup program
       removeFile senv.socketPath
     env :: IO ServerEnvironment
     env = do
-      getSocketPath availableSocket >>= \case
+      getSocketPath availableSocketName >>= \case
         Nothing -> error "couldn't find a socket path"
         Just socketPath -> do
           socket' <- socket AF_UNIX Stream 0

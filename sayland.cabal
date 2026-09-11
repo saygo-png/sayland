@@ -106,7 +106,6 @@ test-suite server-basic-compositor
   main-is:        Main.hs
   build-depends:
     , base
-    , bytestring
     , containers
     , directory
     , network

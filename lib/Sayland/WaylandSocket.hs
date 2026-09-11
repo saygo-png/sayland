@@ -1,3 +1,4 @@
+-- | Description : Socket related functions and types.
 module Sayland.WaylandSocket (module Sayland.WaylandSocket) where
 
 import Control.Concurrent (forkIO)
@@ -27,7 +28,7 @@ import System.Posix (Fd (Fd))
 
 -- Listeners {{{
 
--- | listen for client connections in provided socket.
+-- | Listen for client connections and handle them with `handleIncomingClient`.
 listenForClients :: (MonadIO m) => ServerEnvironment -> m ()
 listenForClients env = do
   (sock, _) <- liftIO $ accept env.socket
@@ -35,6 +36,7 @@ listenForClients env = do
   handleIncomingClient env sock
   listenForClients env
 
+-- | Deal with an incoming client, creating a client environment and updating the server state.
 handleIncomingClient :: (MonadIO m) => ServerEnvironment -> Socket -> m ()
 handleIncomingClient env socket' = do
   counter <- liftIO $ newIORef 0
@@ -57,10 +59,11 @@ handleIncomingClient env socket' = do
   atomically . modifyTVar env.clients $ Map.insert serial' clientenv
   void . liftIO . forkIO $ runReaderT (clientLoop socket') $ ClientServerEnv env clientenv serial'
 
+-- | `Get` parser for a Wayland header.
 getHeader :: Get (ObjectID, Word16, Word16)
 getHeader = (,,) . WlUInt <$> getWord32le <*> getWord16le <*> getWord16le
 
--- | a monstracity that gets a list of file descriptors from an ancillary data bytestring.
+-- | Get a list of file descriptors from an ancillary data bytestring.
 decodeFds :: BS.ByteString -> IO [Fd]
 decodeFds bs = map Fd <$> go bs []
   where
@@ -72,11 +75,11 @@ decodeFds bs = map Fd <$> go bs []
           v <- BS.useAsCString x (peek . castPtr)
           go rest (v : acc)
 
--- | handle communication between a server and a client in provided socket, works both on the server and the client.
-clientLoop :: Socket -> Wayland p ()
+-- | Handle communication between a server and a client in provided socket, works both on the server and the client.
+clientLoop :: (Dispatch p) => Socket -> Wayland p ()
 clientLoop = clientLoop' ""
   where
-    clientLoop' :: BS.ByteString -> Socket -> Wayland p ()
+    clientLoop' :: (Dispatch p) => BS.ByteString -> Socket -> Wayland p ()
     clientLoop' bytes' sock = do
       queue <- (.fdQueue) <$> getClientEnv
       (_, bytes'', cmsgs, _flags) <- liftIO $ recvMsg sock 8 4096 mempty
@@ -92,33 +95,31 @@ clientLoop = clientLoop' ""
         )
         (clientLoop' bytes sock)
         (isPartial bytes)
+      where
+        isPartial :: BS.ByteString -> Bool
+        isPartial s = case runGetOrFail getHeader (fromStrict s) of
+          Left (_, _, _) -> True
+          Right (rest, _, (_, _, size')) -> fromIntegral (size' - headerSize) > BL.length rest
 
-isPartial :: BS.ByteString -> Bool
-isPartial s = case runGetOrFail getHeader (fromStrict s) of
-  Left (_, _, _) -> True
-  Right (rest, _, (_, _, size')) -> fromIntegral (size' - headerSize) > BL.length rest
-
+-- | Parse a `ByteString` into a message tuple.
 extractMessage :: BS.ByteString -> Maybe (ObjectID, Word16, BS.ByteString, BS.ByteString)
 extractMessage s = case runGetOrFail getHeader (fromStrict s) of
   Left (_, _, _) -> Nothing
-  Right (rest', _, (oid, opcode, size')) -> Just (oid, opcode, BS.take payload rest, BS.drop payload rest)
+  Right (rest', _, (oid, opcode, size)) -> Just (oid, opcode, BS.take payload rest, BS.drop payload rest)
     where
-      payload = fromIntegral $ size' - headerSize
+      payload = fromIntegral $ size - headerSize
       rest = BS.toStrict rest'
 
-handleMessage :: ObjectID -> Word16 -> BS.ByteString -> Wayland p ()
+{- | Deal with an inbound message. Checks if the `ObjectID` reference is valid.
+if it is valid, the work is handed to `dispatchMessage`.
+-}
+handleMessage :: (Dispatch p) => ObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 handleMessage oid opcode msg = do
-  ask >>= \case
-    ClientEnv env -> do
-      objects <- readIORef env.objects
-      case Map.lookup oid objects of
-        Just (Interface x) -> dispatchMessage x oid opcode msg
-        Nothing -> liftIO $ traceIO $ "invalid object reference with id: " <> show oid
-    ClientServerEnv _ env _ -> do
-      objects <- readIORef env.objects
-      case Map.lookup oid objects of
-        Just (Interface x) -> dispatchMessage x oid opcode msg
-        Nothing -> liftIO $ traceIO $ "invalid object reference with id: " <> show oid
+  env <- getClientEnv
+  objects <- readIORef env.objects
+  case Map.lookup oid objects of
+    Just (Interface x) -> dispatchMessage x oid opcode msg
+    Nothing -> liftIO $ traceIO $ "invalid object reference with id: " <> show oid
 
 class Dispatch (p :: Perspective) where
   dispatchMessage :: forall i. (Interface' i p) => i -> ObjectID -> Word16 -> BS.ByteString -> Wayland p ()
@@ -154,32 +155,38 @@ instance Dispatch Server where
 -- }}}
 
 -- Socket Finding Utilities {{{
-getXdgRuntimeDir :: IO (Maybe String)
-getXdgRuntimeDir = getEnv "XDG_RUNTIME_DIR"
 
-getWaylandDisplay :: IO (Maybe String)
-getWaylandDisplay = getEnv "WAYLAND_DISPLAY"
+-- | Get an absolute socket path based from @XDG_RUNTIME_DIR@.
+getSocketPath :: IO (Maybe String) -> IO (Maybe FilePath)
+getSocketPath = liftA2 (liftA2 (</>)) $ getEnv "XDG_RUNTIME_DIR"
 
-getSocketPath :: IO (Maybe FilePath) -> IO (Maybe FilePath)
-getSocketPath = liftA2 (liftA2 (</>)) getXdgRuntimeDir
+-- | Find an already existing socket, if @WAYLAND_DISPLAY@ does not exist.
+openSocketName :: IO (Maybe String)
+openSocketName = findSocketName doesFileExist
 
--- | Find an already existing socket, if the environment variable does not exist
-openSocket :: IO (Maybe FilePath)
-openSocket = findSocket' doesFileExist
+-- | Find a not already existing and valid socket name, if @WAYLAND_DISPLAY@ does not exist.
+availableSocketName :: IO (Maybe String)
+availableSocketName = findSocketName (fmap not . doesFileExist)
 
--- | Find a non-existing valid socket file
-availableSocket :: IO (Maybe FilePath)
-availableSocket = findSocket' (fmap not . doesFileExist)
+{- | Find a socket name by predicate.
+Short circuits if 'WAYLAND_DISPLAY' exists, ignoring the predicate.
+-}
+findSocketName :: (FilePath -> IO Bool) -> IO (Maybe String)
+findSocketName isAccepted = getEnv "WAYLAND_DISPLAY" `orElse` scanRuntimeDir
+  where
+    scanRuntimeDir =
+      getEnv "XDG_RUNTIME_DIR"
+        >>= maybe (pure Nothing) (\dir -> firstMatch (isAccepted . (dir </>)) candidates)
+    candidates :: [String] = ["wayland-" <> fromString (show i) | i <- [0 .. 99 :: Int]]
 
--- | Helper function allowing filtering of wayland sockets
-findSocket' :: (FilePath -> IO Bool) -> IO (Maybe FilePath)
-findSocket' f =
-  getWaylandDisplay >>= \case
-    Just x -> pure $ Just x
-    Nothing ->
-      getXdgRuntimeDir >>= \case
-        Just xdg -> newNumbered (f . (xdg </>)) "wayland-" 0 99
-        Nothing -> pure Nothing
+    -- Run the second action only if the first yields Nothing.
+    orElse :: IO (Maybe a) -> IO (Maybe a) -> IO (Maybe a)
+    orElse a b = a >>= maybe b (pure . Just)
+
+    -- First element satisfying the predicate, stopping on the first match.
+    firstMatch :: (a -> IO Bool) -> [a] -> IO (Maybe a)
+    firstMatch p =
+      foldr (\x rest -> p x >>= \ok -> if ok then pure (Just x) else rest) (pure Nothing)
 
 -- }}}
 

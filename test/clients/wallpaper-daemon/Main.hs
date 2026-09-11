@@ -6,7 +6,7 @@ import Control.Concurrent (forkIO)
 import Control.Exception
 import Data.ByteString.Lazy hiding (singleton)
 import Data.Maybe (fromJust)
-import Network.Socket hiding (openSocket)
+import Network.Socket
 import Relude hiding (ByteString, get, isPrefixOf, put)
 import Sayland
 import Sayland.WaylandUtils

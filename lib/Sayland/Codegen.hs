@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 
--- | Description : Defines all requests and events that exist and should be implemented. Implementations under `Protocols`
+-- | Description : Generate Haskell from xml protocol files.
 module Sayland.Codegen (module Sayland.Codegen) where
 
 import Data.Binary
