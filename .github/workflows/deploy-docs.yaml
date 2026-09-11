@@ -25,7 +25,8 @@ jobs:
         uses: actions/configure-pages@v5
 
       - uses: DeterminateSystems/nix-installer-action@main
-      - uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          determinate: false
 
       - name: Build website
         run: |
