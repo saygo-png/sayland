@@ -9,7 +9,7 @@ module Sayland.Protocols.Wayland (module Sayland.Protocols.Wayland) where
 
 -- Module implementing some interfaces using classes defined by the `Protocol` module.
 
-import Control.Concurrent (threadDelay)
+import Control.Concurrent (isEmptyMVar, modifyMVar, threadDelay)
 import Control.Exception (try)
 import Data.Bimap qualified as BM
 import Data.Data (cast)
@@ -107,11 +107,67 @@ data Wl_buffer = Wl_buffer
   , format :: Enum_wl_shm_format
   }
 
-newtype Wl_data_offer = Wl_data_offer {wlid :: TObjectID Wl_data_offer}
+newtype DndIcon = DndIcon Dnd
 
-newtype Wl_data_source = Wl_data_source {wlid :: TObjectID Wl_data_source}
+type Mimetype = WlString
 
-newtype Wl_data_device = Wl_data_device {wlid :: TObjectID Wl_data_device}
+data Wl_data_offer = Wl_data_offer
+  { wlid :: TObjectID Wl_data_offer
+  , acceptedMimetypes :: IORef [Mimetype]
+  , offeredMimetypes :: IORef [Mimetype]
+  , offer_data_device :: TObjectID Wl_data_device
+  , offerSourceActions :: IORef Enum_wl_data_device_manager_dnd_action
+  , offerActions :: IORef Enum_wl_data_device_manager_dnd_action
+  , offerPreferredAction :: IORef Enum_wl_data_device_manager_dnd_action
+  , selectedAction :: IORef Enum_wl_data_device_manager_dnd_action
+  }
+
+data Wl_data_source = Wl_data_source
+  { wlid :: TObjectID Wl_data_source
+  , source_data_device :: TObjectID Wl_data_device
+  , sourceOfferedMimetypes :: IORef [Mimetype]
+  , sourceActions :: IORef Enum_wl_data_device_manager_dnd_action
+  , sourceSelectedAction :: IORef Enum_wl_data_device_manager_dnd_action
+  , sourceTargetMimetype :: IORef (Maybe Mimetype)
+  }
+
+data Dnd = Dnd
+  { -- if source is 0, Dnd is performed only within the same client
+    source :: TObjectID Wl_data_source
+  , origin :: TObjectID Wl_surface
+  , icon :: TObjectID Wl_surface
+  , grabSerial :: WlUInt
+  }
+
+data DndClient = DndClient
+  { target :: TObjectID Wl_surface
+  , dndPosition :: (WlFixed, WlFixed)
+  , offer :: TObjectID Wl_data_offer
+  , enterSerial :: WlUInt
+  }
+
+data Selection = Selection
+  { source :: TObjectID Wl_data_source
+  , eventSerial :: WlUInt
+  }
+
+newtype SelectionClient = SelectionClient
+  { offer :: TObjectID Wl_data_offer
+  }
+
+data Wl_data_device = Wl_data_device
+  { wlid :: TObjectID Wl_data_device
+  , sources :: IORef [TObjectID Wl_data_source]
+  , offers :: IORef [TObjectID Wl_data_offer]
+  , dnd :: MVar Dnd
+  -- ^ a Drag and Drop session
+  , dndClient :: MVar DndClient
+  -- ^ a Drag and Drop client session
+  , selection :: MVar Selection
+  -- ^ selection session
+  , selectionClient :: MVar SelectionClient
+  , seat :: TObjectID Wl_seat
+  }
 
 newtype Wl_data_device_manager = Wl_data_device_manager {wlid :: TObjectID Wl_data_device_manager}
 
@@ -195,6 +251,34 @@ instance NewInterface Wl_shm_pool where
 instance NewInterface Wl_shm where
   newInterface i = newIORef [] <&> Wl_shm i
 
+instance NewInterface Wl_data_offer where
+  newInterface wlid = do
+    acceptedMimetypes <- newIORef []
+    offeredMimetypes <- newIORef []
+    offerSourceActions <- newIORef Enum_wl_data_device_manager_dnd_action{dnd_action_none = True, dnd_action_ask = False, dnd_action_copy = False, dnd_action_move = False}
+    offerActions <- newIORef Enum_wl_data_device_manager_dnd_action{dnd_action_none = True, dnd_action_ask = False, dnd_action_copy = False, dnd_action_move = False}
+    selectedAction <- newIORef Enum_wl_data_device_manager_dnd_action{dnd_action_none = True, dnd_action_ask = False, dnd_action_copy = False, dnd_action_move = False}
+    offerPreferredAction <- newIORef Enum_wl_data_device_manager_dnd_action{dnd_action_none = True, dnd_action_ask = False, dnd_action_copy = False, dnd_action_move = False}
+    pure Wl_data_offer{offer_data_device = 0, ..}
+
+instance NewInterface Wl_data_source where
+  newInterface wlid = do
+    sourceOfferedMimetypes <- newIORef []
+    sourceActions <- newIORef Enum_wl_data_device_manager_dnd_action{dnd_action_none = True, dnd_action_ask = False, dnd_action_copy = False, dnd_action_move = False}
+    sourceSelectedAction <- newIORef Enum_wl_data_device_manager_dnd_action{dnd_action_none = True, dnd_action_ask = False, dnd_action_copy = False, dnd_action_move = False}
+    sourceTargetMimetype <- newIORef Nothing
+    pure Wl_data_source{source_data_device = 0, ..}
+
+instance NewInterface Wl_data_device where
+  newInterface wlid = do
+    sources <- newIORef []
+    offers <- newIORef []
+    dnd <- newEmptyMVar
+    dndClient <- newEmptyMVar
+    selection <- newEmptyMVar
+    selectionClient <- newEmptyMVar
+    pure Wl_data_device{seat = 0, ..}
+
 instance NewInterface Wl_surface where
   newInterface i = do
     let wlid :: TObjectID Wl_surface = i
@@ -234,7 +318,7 @@ $(generateTables False wlFormatter "protocols/wayland.xml")
 dropObject :: TObjectID a -> Wayland p ()
 dropObject (TObjectID i) =
   ask >>= \case
-    ClientEnv env -> modifyIORef env.objects $ Map.delete i
+    ClientEnv env -> atomicModifyIORef env.objects $ (,()) . Map.delete i
     ClientServerEnv _ env _ -> do
       void $ atomicModifyIORef' env.objects (dup . Map.delete i)
       Just wldisplay <- getInterface wlDisplayId
@@ -252,7 +336,7 @@ sendError (TObjectID i) code msg = do
 instance Interface' Wl_display Client where
   runEvent _display (Event_wl_display_delete_id did) = do
     ClientEnv env <- ask
-    liftIO $ modifyIORef env.objects (Map.delete did)
+    liftIO $ atomicModifyIORef env.objects $ (,()) . Map.delete did
   runEvent _display (Event_wl_display_error object_id code message) = do
     liftIO $ print $ "Unhandled error from `" <> show object_id <> "`: [" <> show code <> "] " <> message
   runRequest display request@(Request_wl_display_sync callback) = do
@@ -267,7 +351,7 @@ instance Interface' Wl_display Client where
 instance Interface' Wl_display Server where
   runEvent display event@(Event_wl_display_delete_id did) = do
     ClientServerEnv _ env _ <- ask
-    liftIO $ modifyIORef env.objects (Map.delete did)
+    liftIO $ atomicModifyIORef env.objects ((,()) . Map.delete did)
     sendMessage' event display.wlid
   runEvent display event@(Event_wl_display_error _object_id _code _message) = do
     sendMessage' event display.wlid
@@ -285,7 +369,7 @@ instance Interface' Wl_display Server where
       let name = WlUInt name'
           event = Event_wl_registry_global name interface entry.version
       sendMessage' event registry
-      modifyIORef env.globals $ BM.insert interface (coerce name)
+      atomicModifyIORef env.globals $ (,()) . BM.insert interface (coerce name)
 
 -- }}}
 
@@ -311,17 +395,18 @@ instance Interface' Wl_callback Server where
 instance Interface' Wl_registry Client where
   runEvent _registry (Event_wl_registry_global name interface version) = do
     ClientEnv env <- ask
-    modifyIORef env.globals $ BM.insert interface (coerce name)
+    atomicModifyIORef env.globals $ (,()) . BM.insert interface (coerce name)
     table <- readIORef env.interfaceTable
     case Map.lookup interface table of
       Just entry ->
         when (entry.version > version)
-          $ modifyIORef env.interfaceTable
-          $ Map.insert interface entry{version = version}
+          $ atomicModifyIORef env.interfaceTable
+          $ (,())
+          . Map.insert interface entry{version = version}
       Nothing -> pass
   runEvent _registry (Event_wl_registry_global_remove name) = do
     ClientEnv env <- ask
-    modifyIORef env.globals $ BM.deleteR (coerce name)
+    atomicModifyIORef env.globals $ (,()) . BM.deleteR (coerce name)
 
   runRequest registry request@(Request_wl_registry_bind name (WlNewId _ _ newId)) = do
     ClientEnv env <- ask
@@ -336,11 +421,11 @@ instance Interface' Wl_registry Client where
 instance Interface' Wl_registry Server where
   runEvent registry event@(Event_wl_registry_global name interface _version) = do
     ClientServerEnv _ env _ <- ask
-    modifyIORef env.globals $ BM.insert interface (coerce name)
+    atomicModifyIORef env.globals $ (,()) . BM.insert interface (coerce name)
     sendMessage' event registry.wlid
   runEvent registry event@(Event_wl_registry_global_remove name) = do
     ClientServerEnv _ env _ <- ask
-    modifyIORef env.globals $ BM.deleteR (coerce name)
+    atomicModifyIORef env.globals $ (,()) . BM.deleteR (coerce name)
     sendMessage' event registry.wlid
   runRequest _registry (Request_wl_registry_bind name (WlNewId _ _ newId)) = do
     ClientServerEnv _ env _ <- ask
@@ -384,7 +469,7 @@ instance Interface' Wl_shm_pool Client where
     sendMessage' request shm_pool.wlid
     dropObject shm_pool.wlid
   runRequest shm_pool request@(Request_wl_shm_pool_resize size') = do
-    writeIORef shm_pool.size size'
+    atomicWriteIORef shm_pool.size size'
     sendMessage' request shm_pool.wlid
 
   runEvent _ _ = pass
@@ -415,8 +500,8 @@ instance Interface' Wl_shm_pool Server where
     ptr' <- case result of
       Left (e :: SomeException) -> liftIO (traceIO $ "mmap failed: " ++ show e) >> undefined
       Right ptr' -> liftIO (traceIO $ "mmap OK, ptr = " ++ show ptr') $> ptr'
-    writeIORef shm_pool.ptr ptr'
-    writeIORef shm_pool.size size'
+    atomicWriteIORef shm_pool.ptr ptr'
+    atomicWriteIORef shm_pool.size size'
   runEvent _ _ = pass
 
 -- }}}
@@ -432,7 +517,7 @@ instance Interface' Wl_shm Client where
     sendMessage' request shm.wlid
     dropObject shm.wlid
 
-  runEvent shm (Event_wl_shm_format format) = modifyIORef shm.formats (format :)
+  runEvent shm (Event_wl_shm_format format) = atomicModifyIORef shm.formats $ (,()) . (format :)
 
 instance Interface' Wl_shm Server where
   runRequest _shm (Request_wl_shm_create_pool poolId (WlFd fd) size') = do
@@ -477,62 +562,176 @@ instance Interface' Wl_buffer Server where
 
 -- Wl_data_offer {{{
 instance Interface' Wl_data_offer Client where
-  runRequest _ (Request_wl_data_offer_accept{}) = pass
-  runRequest _ (Request_wl_data_offer_receive{}) = pass
-  runRequest data_offer request@(Request_wl_data_offer_destroy{}) = do
+  runRequest data_offer request@(Request_wl_data_offer_accept _serial mimetype) = do
+    atomicModifyIORef data_offer.acceptedMimetypes $ (,()) . (mimetype :)
+    sendMessage' request data_offer.wlid
+  runRequest data_offer request@(Request_wl_data_offer_receive _mimetype _fd) = sendMessage' request data_offer.wlid
+  runRequest data_offer request@Request_wl_data_offer_destroy = do
     sendMessage' request data_offer.wlid
     dropObject data_offer.wlid
-  runRequest _ (Request_wl_data_offer_finish{}) = pass
-  runRequest _ (Request_wl_data_offer_set_actions{}) = pass
-  runEvent _ (Event_wl_data_offer_offer{}) = pass
-  runEvent _ (Event_wl_data_offer_source_actions{}) = pass
-  runEvent _ (Event_wl_data_offer_action{}) = pass
+  runRequest data_offer request@Request_wl_data_offer_finish = sendMessage' request data_offer.wlid
+  runRequest data_offer request@(Request_wl_data_offer_set_actions dnd_actions preferred_action) = do
+    atomicWriteIORef data_offer.offerActions dnd_actions
+    atomicWriteIORef data_offer.offerPreferredAction preferred_action
+    sendMessage' request data_offer.wlid
+  runEvent data_offer (Event_wl_data_offer_offer mimetype) = atomicModifyIORef data_offer.offeredMimetypes $ (,()) . (mimetype :)
+  runEvent data_offer (Event_wl_data_offer_source_actions source_actions) = atomicWriteIORef data_offer.offerSourceActions source_actions
+  runEvent data_offer (Event_wl_data_offer_action dnd_action) = atomicWriteIORef data_offer.selectedAction dnd_action
 
-instance Interface' Wl_data_offer Server
+instance Interface' Wl_data_offer Server where
+  runRequest data_offer (Request_wl_data_offer_accept _serial mimetype) = atomicModifyIORef data_offer.acceptedMimetypes $ (,()) . (mimetype :)
+  runRequest _ (Request_wl_data_offer_receive _ _) = pass
+  runRequest data_offer Request_wl_data_offer_destroy = dropObject data_offer.wlid
+  runRequest _ Request_wl_data_offer_finish = pass
+  runRequest data_offer (Request_wl_data_offer_set_actions dnd_actions preferred_action) = do
+    atomicWriteIORef data_offer.offerActions dnd_actions
+    atomicWriteIORef data_offer.offerPreferredAction preferred_action
+  runEvent data_offer event@(Event_wl_data_offer_offer mimetype) = do
+    atomicModifyIORef data_offer.offeredMimetypes $ (,()) . (mimetype :)
+    sendMessage' event data_offer.wlid
+  runEvent data_offer event@(Event_wl_data_offer_source_actions source_actions) = do
+    atomicWriteIORef data_offer.offerSourceActions source_actions
+    sendMessage' event data_offer.wlid
+  runEvent data_offer event@(Event_wl_data_offer_action dnd_action) = do
+    atomicWriteIORef data_offer.selectedAction dnd_action
+    sendMessage' event data_offer.wlid
 
 -- }}}
 
 -- Wl_data_source {{{
 instance Interface' Wl_data_source Client where
-  runRequest _ (Request_wl_data_source_offer{}) = pass
-  runRequest data_source request@(Request_wl_data_source_destroy{}) = do
+  runRequest source request@(Request_wl_data_source_offer mimetype) = do
+    atomicModifyIORef source.sourceOfferedMimetypes $ (,()) . (mimetype :)
+    sendMessage' request source.wlid
+  runRequest data_source request@Request_wl_data_source_destroy = do
     sendMessage' request data_source.wlid
     dropObject data_source.wlid
-  runRequest _ (Request_wl_data_source_set_actions{}) = pass
-  runEvent _ (Event_wl_data_source_target{}) = pass
-  runEvent _ (Event_wl_data_source_send{}) = pass
-  runEvent _ (Event_wl_data_source_cancelled{}) = pass
-  runEvent _ (Event_wl_data_source_dnd_drop_performed{}) = pass
-  runEvent _ (Event_wl_data_source_dnd_finished{}) = pass
-  runEvent _ (Event_wl_data_source_action{}) = pass
+  runRequest source request@(Request_wl_data_source_set_actions dnd_actions) = do
+    atomicWriteIORef source.sourceActions dnd_actions
+    sendMessage' request source.wlid
+  runEvent source (Event_wl_data_source_target mimetype) = atomicWriteIORef source.sourceTargetMimetype $ Just mimetype
+  runEvent _ (Event_wl_data_source_send _ _) = pass -- handling this event is left for EventHandlers
+  runEvent source Event_wl_data_source_cancelled = runRequest source Request_wl_data_source_destroy
+  runEvent _ Event_wl_data_source_dnd_drop_performed = pass
+  runEvent source Event_wl_data_source_dnd_finished = runRequest source Request_wl_data_source_destroy
+  runEvent source (Event_wl_data_source_action action) = atomicWriteIORef source.sourceSelectedAction action
 
-instance Interface' Wl_data_source Server
+instance Interface' Wl_data_source Server where
+  runRequest source (Request_wl_data_source_offer mimetype) = atomicModifyIORef source.sourceOfferedMimetypes $ (,()) . (mimetype :)
+  runRequest source Request_wl_data_source_destroy = dropObject source.wlid
+  runRequest source (Request_wl_data_source_set_actions dnd_actions) = atomicWriteIORef source.sourceActions dnd_actions
+  runEvent source event@(Event_wl_data_source_target mimetype) = do
+    atomicWriteIORef source.sourceTargetMimetype $ Just mimetype
+    sendMessage' event source.wlid
+  runEvent source event@(Event_wl_data_source_send _ _) = sendMessage' event source.wlid
+  runEvent source event@Event_wl_data_source_cancelled = sendMessage' event source.wlid
+  runEvent source event@Event_wl_data_source_dnd_drop_performed = sendMessage' event source.wlid
+  runEvent source event@Event_wl_data_source_dnd_finished = sendMessage' event source.wlid
+  runEvent source event@(Event_wl_data_source_action action) = do
+    atomicWriteIORef source.sourceSelectedAction action
+    sendMessage' event source.wlid
 
 -- }}}
 
 -- Wl_data_device {{{
 instance Interface' Wl_data_device Client where
-  runRequest _ (Request_wl_data_device_start_drag{}) = pass
-  runRequest _ (Request_wl_data_device_set_selection{}) = pass
-  runRequest _ (Request_wl_data_device_release{}) = pass
-  runEvent _ (Event_wl_data_device_data_offer{}) = pass
-  runEvent _ (Event_wl_data_device_enter{}) = pass
-  runEvent _ (Event_wl_data_device_leave{}) = pass
-  runEvent _ (Event_wl_data_device_motion{}) = pass
-  runEvent _ (Event_wl_data_device_drop{}) = pass
-  runEvent _ (Event_wl_data_device_selection{}) = pass
+  runRequest device request@(Request_wl_data_device_start_drag source origin icon grabSerial) = do
+    liftIO (isEmptyMVar device.dnd)
+      >>= bool
+        (error "tried starting drag while during one")
+        ( do
+            putMVar device.dnd $ Dnd{source, origin, icon, grabSerial}
+            sendMessage' request device.wlid
+        )
+  runRequest device request@(Request_wl_data_device_set_selection source eventSerial) = do
+    liftIO (isEmptyMVar device.dnd)
+      >>= bool
+        (void $ swapMVar device.selection $ Selection{source, eventSerial})
+        (putMVar device.selection $ Selection{source, eventSerial})
+    sendMessage' request device.wlid
+  runRequest device request@Request_wl_data_device_release = do
+    dropObject device.wlid
+    sendMessage' request device.wlid
+  runEvent _ (Event_wl_data_device_data_offer offer_id) = void $ newObject offer_id =<< newInterface offer_id
+  runEvent device (Event_wl_data_device_enter enterSerial target x y offer) = do
+    isEmpty <- liftIO $ isEmptyMVar device.dndClient
+    unless isEmpty $ void $ takeMVar device.dndClient
+    putMVar device.dndClient DndClient{target, dndPosition = (x, y), offer, enterSerial}
+  runEvent device Event_wl_data_device_leave = liftIO (isEmptyMVar device.dndClient) >>= (`unless` void (takeMVar device.dndClient))
+  runEvent device (Event_wl_data_device_motion _time x y) = liftIO $ modifyMVar device.dndClient $ \session -> pure (session{dndPosition = (x, y)}, ())
+  runEvent device Event_wl_data_device_drop = void $ takeMVar device.dndClient
+  runEvent device (Event_wl_data_device_selection offer) = do
+    isEmpty <- liftIO $ isEmptyMVar device.selection
+    unless isEmpty $ void $ takeMVar device.selectionClient
+    putMVar device.selectionClient SelectionClient{offer}
 
-instance Interface' Wl_data_device Server
+instance Interface' Wl_data_device Server where
+  runRequest device (Request_wl_data_device_start_drag source origin icon grabSerial) = do
+    isEmpty <- liftIO $ isEmptyMVar device.dnd
+    unless isEmpty $ void $ takeMVar device.dnd
+    getInterface icon >>= \case
+      Nothing -> putMVar device.dnd $ Dnd{source, origin, icon, grabSerial}
+      Just x -> do
+        SurfaceRole role <- readIORef x.role
+        case cast role of
+          Just () -> do
+            let dnd = Dnd{source, origin, icon, grabSerial}
+            atomicWriteIORef x.role $ SurfaceRole $ DndIcon dnd
+            putMVar device.dnd dnd
+          Nothing -> sendError device.wlid 0 ""
+  runRequest device (Request_wl_data_device_set_selection source eventSerial) = do
+    isEmpty <- liftIO $ isEmptyMVar device.selection
+    unless isEmpty $ void $ takeMVar device.selection
+    putMVar device.selection Selection{source, eventSerial}
+  runRequest device Request_wl_data_device_release = dropObject device.wlid
+  runEvent device event@(Event_wl_data_device_data_offer offer_id) = do
+    void $ newObject offer_id =<< newInterface offer_id
+    sendMessage' event device.wlid
+  runEvent device event@(Event_wl_data_device_enter enterSerial target x y offer) = do
+    isEmpty <- liftIO $ isEmptyMVar device.dndClient
+    unless isEmpty $ void $ takeMVar device.dndClient
+    putMVar device.dndClient DndClient{target, dndPosition = (x, y), offer, enterSerial}
+    sendMessage' event device.wlid
+  runEvent device event@Event_wl_data_device_leave = do
+    liftIO (isEmptyMVar device.dndClient) >>= (`unless` void (takeMVar device.dndClient))
+    sendMessage' event device.wlid
+  runEvent device event@(Event_wl_data_device_motion _time x y) = do
+    liftIO $ modifyMVar device.dndClient $ \session -> pure (session{dndPosition = (x, y)}, ())
+    sendMessage' event device.wlid
+  runEvent device event@Event_wl_data_device_drop = do
+    void $ takeMVar device.dndClient
+    sendMessage' event device.wlid
+  runEvent device event@(Event_wl_data_device_selection offer) = do
+    isEmpty <- liftIO $ isEmptyMVar device.selection
+    unless isEmpty $ void $ takeMVar device.selectionClient
+    putMVar device.selectionClient SelectionClient{offer}
+    sendMessage' event device.wlid
 
 -- }}}
 
 -- Wl_data_device_manager {{{
 instance Interface' Wl_data_device_manager Client where
-  runRequest _ (Request_wl_data_device_manager_create_data_source{}) = pass
-  runRequest _ (Request_wl_data_device_manager_get_data_device{}) = pass
-  runRequest _ (Request_wl_data_device_manager_release{}) = pass
+  runRequest mgr request@(Request_wl_data_device_manager_create_data_source source_id) = do
+    void $ newObject source_id =<< newInterface source_id
+    sendMessage' request mgr.wlid
+  runRequest mgr request@(Request_wl_data_device_manager_get_data_device device_id seat) = do
+    device <- newInterface device_id
+    void $ newObject device_id device{seat}
+    sendMessage' request mgr.wlid
+  runRequest mgr request@Request_wl_data_device_manager_release = do
+    sendMessage' request mgr.wlid
+    dropObject mgr.wlid
+  runEvent _ _ = pass
 
-instance Interface' Wl_data_device_manager Server
+instance Interface' Wl_data_device_manager Server where
+  runRequest _ (Request_wl_data_device_manager_create_data_source source_id) = do
+    void $ newObject source_id =<< newInterface source_id
+  runRequest _ (Request_wl_data_device_manager_get_data_device device_id seat_id) = do
+    device <- newInterface device_id
+    void $ newObject device_id device{seat = seat_id}
+  runRequest mgr Request_wl_data_device_manager_release = do
+    dropObject mgr.wlid
+  runEvent _ _ = pass
 
 -- }}}
 
@@ -609,7 +808,7 @@ instance Interface' Wl_surface Client where
         sync <- readIORef x.synchronized
         when sync $ getInterface x.surface >>= \case
           Just x' -> atomicModifyIORef x'.pendingState $ \s -> (s{cuSlaveCUs = cu : s.cuSlaveCUs}, ())
-          Nothing -> writeIORef surface'.role $ SurfaceRole ()
+          Nothing -> atomicWriteIORef surface'.role $ SurfaceRole ()
       Nothing -> pass
     sendMessage' request surface'.wlid
   runEvent _ (Event_wl_surface_enter _) = pass
@@ -647,7 +846,7 @@ instance Interface' Wl_surface Server where
         sync <- readIORef x.synchronized
         when sync $ getInterface x.surface >>= \case
           Just x' -> atomicModifyIORef x'.pendingState $ \s -> (s{cuSlaveCUs = cu : s.cuSlaveCUs}, ())
-          Nothing -> writeIORef surface.role $ SurfaceRole ()
+          Nothing -> atomicWriteIORef surface.role $ SurfaceRole ()
       Nothing -> pass
     atomicModifyIORef' surface.cuQueue $ (,()) . (cu{cuSurface = surface.wlid} Seq.<|)
   runEvent _surface (Event_wl_surface_enter _) = pass
@@ -763,7 +962,7 @@ instance Interface' Wl_subcompositor Client where
           Just () -> do
             obj <- newInterface subsurface :: Wayland Client Wl_subsurface
             void $ newObject subsurface obj{surface = surface, parent = parent}
-            writeIORef surfaceObj.role $ SurfaceRole subsurface
+            atomicWriteIORef surfaceObj.role $ SurfaceRole subsurface
             sendMessage' request subcompositor.wlid
           _ -> error "surface already has a role assigned"
   runEvent _ _ = pass
@@ -781,7 +980,7 @@ instance Interface' Wl_subcompositor Server where
           Just () -> do
             obj <- newInterface subsurface :: Wayland Server Wl_subsurface
             void $ newObject subsurface obj{surface = surface, parent = parent}
-            writeIORef surfaceObj.role $ SurfaceRole subsurface
+            atomicWriteIORef surfaceObj.role $ SurfaceRole subsurface
           _ -> sendError subcompositor.wlid 0 "bad_surface"
 
 -- }}}
@@ -793,20 +992,22 @@ instance Interface' Wl_subsurface Client where
     surfaceObj' <- getInterface subsurface.surface
     case surfaceObj' of
       Just surfaceObj -> do
-        writeIORef surfaceObj.role $ SurfaceRole ()
+        atomicWriteIORef surfaceObj.role $ SurfaceRole ()
       Nothing -> pass
     parentObj' <- getInterface subsurface.parent
     case parentObj' of
       Just parentObj -> do
-        writeIORef parentObj.role $ SurfaceRole ()
-        modifyIORef parentObj.state $ \state' ->
-          state'
-            { sSubsurfaces =
-                state'.sSubsurfaces
-                  { above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
-                  , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
-                  }
-            }
+        atomicWriteIORef parentObj.role $ SurfaceRole ()
+        atomicModifyIORef parentObj.state $ \state' ->
+          ( state'
+              { sSubsurfaces =
+                  state'.sSubsurfaces
+                    { above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
+                    , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
+                    }
+              }
+          , ()
+          )
       Nothing -> pass
     sendMessage' request subsurface.wlid
     dropObject subsurface.wlid
@@ -856,20 +1057,22 @@ instance Interface' Wl_subsurface Server where
     surfaceObj' <- getInterface subsurface.surface
     case surfaceObj' of
       Just surfaceObj -> do
-        writeIORef surfaceObj.role $ SurfaceRole ()
+        atomicWriteIORef surfaceObj.role $ SurfaceRole ()
       Nothing -> pass
     parentObj' <- getInterface subsurface.parent
     case parentObj' of
       Just parentObj -> do
-        writeIORef parentObj.role $ SurfaceRole ()
-        modifyIORef parentObj.state $ \state' ->
-          state'
-            { sSubsurfaces =
-                state'.sSubsurfaces
-                  { above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
-                  , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
-                  }
-            }
+        atomicWriteIORef parentObj.role $ SurfaceRole ()
+        atomicModifyIORef parentObj.state $ \state' ->
+          ( state'
+              { sSubsurfaces =
+                  state'.sSubsurfaces
+                    { above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
+                    , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
+                    }
+              }
+          , ()
+          )
       Nothing -> pass
     dropObject subsurface.wlid
   runRequest subsurface (Request_wl_subsurface_set_position (WlInt x) (WlInt y)) = atomicWriteIORef subsurface.position (x, y)
