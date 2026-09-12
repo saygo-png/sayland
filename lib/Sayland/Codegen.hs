@@ -143,13 +143,6 @@ deriveNewInterface ty = do
         RecC cn fields -> pure (cn, [(fieldBase f, t) | (f, _, t) <- fields])
         _ -> fail $ "sayland: " <> nameBase typ <> " is not a record"
 
--- | Returns a declaration of the `Function`s opcode as an integer variable.
-mkOpcode :: String -> String -> Word16 -> [Dec]
-mkOpcode interfaceName fname opcode =
-  [ SigD (mkName $ interfaceName <> "_" <> fname <> "Opcode") (ConT ''Word16)
-  , FunD (mkName $ interfaceName <> "_" <> fname <> "Opcode") [Clause [] (NormalB $ LitE $ IntegerL $ fromIntegral opcode) []]
-  ]
-
 {- | Defines an enum-like along with a function to look up the value of each element.
 example output:
 data Enum_[interface]_[name] = A | B | C | D ... deriving (Eq, Ord)
@@ -441,7 +434,6 @@ loadInterface :: (String -> String) -> Bool -> Element -> Q [Dec]
 loadInterface formatter isIO int = do
   let events = findChildren (qname "event") int
   let requests = findChildren (qname "request") int
-  let opcodes = concatMap (\(x, y) -> mkOpcode name' (fromJust $ findAttr (qname "name") y) x) $ zip [1 ..] $ findChildren (qname "event") int
 
   ifaceName <-
     if isIO
@@ -478,8 +470,6 @@ loadInterface formatter isIO int = do
               ]
           ]
       , pure newInterfaceInstance
-      , -- Opcodes
-        pure opcodes
       ]
   where
     name' = fromJust $ findAttr (qname "name") int
