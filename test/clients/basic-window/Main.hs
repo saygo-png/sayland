@@ -9,8 +9,7 @@ import GHC.IO.Handle
 import Network.Socket (close)
 import Relude hiding (hFlush)
 import Sayland
-import Sayland.WaylandUtils
-import Sayland.Wire.Types
+import Sayland.Wire
 import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import System.Random (randomIO)
 

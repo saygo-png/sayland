@@ -9,8 +9,7 @@ import Data.Maybe (fromJust)
 import Network.Socket
 import Relude hiding (ByteString, get, isPrefixOf, put)
 import Sayland
-import Sayland.WaylandUtils
-import Sayland.Wire.Types
+import Sayland.Wire
 import System.Posix (ownerReadMode, ownerWriteMode, setFdSize, unionFileModes)
 import System.Posix.IO
 import System.Posix.SharedMem

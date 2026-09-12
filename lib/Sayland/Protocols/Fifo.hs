@@ -2,14 +2,13 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module Sayland.Protocols.Fifo where
+module Sayland.Protocols.Fifo (module Sayland.Protocols.Fifo) where
 
 import Relude
 import Sayland.Codegen
-import Sayland.Internal.Utils
+import Sayland.Core
+import Sayland.Object
 import Sayland.Protocols.Wayland
-import Sayland.Types
-import Sayland.Utils
 
 $(loadProtocolFileEnums False "protocols/fifo-v1.xml")
 

@@ -60,16 +60,15 @@ library
   exposed-modules:
     Sayland
     Sayland.Codegen
-    Sayland.Internal.Utils
+    Sayland.Connection
+    Sayland.Core
+    Sayland.Object
     Sayland.Protocols.Fifo
     Sayland.Protocols.Wayland
     Sayland.Protocols.WlrLayerShell
     Sayland.Protocols.XdgShell
-    Sayland.Types
-    Sayland.Utils
-    Sayland.WaylandSocket
-    Sayland.WaylandUtils
-    Sayland.Wire.Types
+    Sayland.Trace
+    Sayland.Wire
 
 -- Test of a simple wallpaper daemon
 test-suite client-wallpaper-daemon

@@ -2,7 +2,6 @@ module Main (main) where
 
 import Language.Haskell.TH
 import Sayland.Codegen
-import Sayland.Internal.Utils (wlFormatter)
 import Prelude
 
 main :: IO ()

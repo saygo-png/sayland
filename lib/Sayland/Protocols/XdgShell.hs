@@ -11,11 +11,10 @@ import Data.Data (cast)
 import Data.Map qualified as Map
 import Relude
 import Sayland.Codegen
-import Sayland.Internal.Utils
+import Sayland.Core
+import Sayland.Object
 import Sayland.Protocols.Wayland
-import Sayland.Types
-import Sayland.Utils
-import Sayland.Wire.Types
+import Sayland.Wire
 
 -- Interfaces {{{
 $(loadProtocolFileEnums False "protocols/xdg-shell.xml")

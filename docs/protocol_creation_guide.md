@@ -15,8 +15,8 @@ First, define all enums:
 
 ```hs
 import Sayland.Codegen
-import Sayland.Types
-import Sayland.Utils
+import Sayland.Core
+import Sayland.Object
 import Sayland.Protocols.Wayland -- you might not need to import this one, it depends on the protocol.
 
 $(loadProtocolFileEnums False "protocols/fifo-v1.xml")
@@ -35,7 +35,7 @@ instance NewInterface Wp_fifo_v1 where newInterface i = pure $ Wp_fifo_v1 i 0
 Load rest of the protocol (mostly `Event_*` and `Request_*` data types):
 
 ```hs
--- wlFormatter can be found in Sayland.Internal.Utils
+-- wlFormatter can be found in Sayland.Codegen
 $(loadProtocolFile wlFormatter False "protocols/fifo-v1.xml")
 $(generateTables False wlFormatter "protocols/fifo-v1.xml")
 ```

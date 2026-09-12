@@ -23,10 +23,9 @@ import MMAP (mapShared, mkMmapFlags, mmap, munmap, protRead, protWrite)
 import Relude hiding (get, state)
 import Relude.Extra.Tuple (dup)
 import Sayland.Codegen
-import Sayland.Internal.Utils
-import Sayland.Types
-import Sayland.Utils
-import Sayland.Wire.Types
+import Sayland.Core
+import Sayland.Object
+import Sayland.Wire
 import System.Posix (Fd, setFdSize)
 
 $(loadProtocolFileEnums False "protocols/wayland.xml")
@@ -35,7 +34,14 @@ $(loadProtocolFileEnums False "protocols/wayland.xml")
 wlDisplayId :: TObjectID Wl_display
 wlDisplayId = 1
 
--- Nothing or empty list means no change. In order to "reset" values, set them to the defaults - ObjectID `0`, normal transform, etc.
+-- | A rectangle, described in pixels
+data Rectangle = Rectangle
+  { position :: (Int32, Int32)
+  , size :: (Int32, Int32)
+  }
+  deriving stock (Eq, Ord)
+
+-- | Nothing or empty list means no change. In order to "reset" values, set them to the defaults - ObjectID `0`, normal transform, etc.
 data ContentUpdate = ContentUpdate
   { cuSurface :: TObjectID Wl_surface
   , cuBuffer :: Maybe (TObjectID Wl_buffer)

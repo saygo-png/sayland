@@ -1,9 +1,11 @@
-module Sayland.Wire.Types (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, wireGet, wirePut, WireFormat) where
+-- | Description : Decoding and encoding wire protocol values.
+module Sayland.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, mkMessage) where
 
 import Data.Binary (Get)
-import Data.Binary.Get (getByteString, getInt32le, getWord32le, skip)
-import Data.Binary.Put (PutM, putByteString, putInt32le, putWord32le)
+import Data.Binary.Get (getByteString, getInt32le, getWord16le, getWord32le, skip)
+import Data.Binary.Put (PutM, putByteString, putInt32le, putLazyByteString, putWord16le, putWord32le, runPut)
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as BSL
 import Relude hiding (ByteString)
 import Relude.Monad qualified as State
 import System.Posix (Fd)
@@ -75,3 +77,27 @@ instance WireFormat WlFd where
 
 padTo4 :: Int -> Int
 padTo4 n = negate n `mod` 4
+
+-- | The header size is always 8 in Wayland.
+headerSize :: Word16
+headerSize = 8
+
+-- | Constant representing the Wayland null, which is just 0.
+waylandNull :: Word32
+waylandNull = 0
+
+-- | `Get` parser for a Wayland header.
+getHeader :: Get (WlUInt, Word16, Word16)
+getHeader = (,,) . WlUInt <$> getWord32le <*> getWord16le <*> getWord16le
+
+{- | Convenience function for formatting a Wayland message.
+It takes an objectID, operation code and a message body.
+The header is generated based on this, the size is derived automatically.
+-}
+mkMessage :: WlUInt -> Word16 -> BSL.ByteString -> BSL.ByteString
+mkMessage objectID opcode messageBody =
+  runPut $ do
+    putWord32le $ coerce objectID
+    putWord16le opcode
+    putWord16le $ 8 + fromIntegral (BSL.length messageBody)
+    putLazyByteString messageBody

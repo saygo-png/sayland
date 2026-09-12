@@ -1,13 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 
--- | Description : Generate Haskell from xml protocol files.
+-- | Description : Generate Haskell from Wayland xml protocol files.
 module Sayland.Codegen (module Sayland.Codegen) where
 
 import Data.Binary
-import Data.Binary.Get (getWord32le)
 import Data.Bits
-import Data.Char (isSpace)
+import Data.Char (isSpace, toUpper)
 import Data.Foldable (Foldable (foldl))
 import Data.List qualified as L
 import Data.Maybe (fromJust)
@@ -15,13 +14,15 @@ import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
 import Relude hiding (Type, get, put)
 import Relude.Unsafe qualified as Unsafe
-import Sayland.Internal.Utils
-import Sayland.Types
-import Sayland.Wire.Types
+import Sayland.Core
+import Sayland.Wire
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
 import Text.Show qualified
 import Text.XML.Light
+
+qname :: String -> QName
+qname x = QName x Nothing Nothing
 
 {- | Generates the client and server tables for the given protocol, using
 formatter to format interface type names - as they are to be defined by the user.
@@ -141,8 +142,6 @@ deriveNewInterface ty = do
       case con of
         RecC cn fields -> pure (cn, [(fieldBase f, t) | (f, _, t) <- fields])
         _ -> fail $ "sayland: " <> nameBase typ <> " is not a record"
-
--- TemplateHaskell Utils {{{
 
 -- | Returns a declaration of the `Function`s opcode as an integer variable.
 mkOpcode :: String -> String -> Word16 -> [Dec]
@@ -264,7 +263,9 @@ mkEnum isIO interfaceName enumEl = do
           []
       ]
 
--- }}}
+wlFormatter :: String -> String
+wlFormatter [] = []
+wlFormatter (x : xs) = toUpper x : xs
 
 {- | Loads all .xml files in `path` as protocols.
 Set `isIO` to True only when running the function within an IO monad. This should be used *only* for debugging purposes.
@@ -522,7 +523,5 @@ argType formatter intName element = case findAttr (qname "enum") element of
       Just x -> AppT (ConT ''TObjectID) . ConT . mkName $ formatter x
       Nothing -> ConT ''ObjectID
     Just y -> error $ "unknown type: " <> fromString y
-
--- }}}
 
 -- vim: foldmethod=marker

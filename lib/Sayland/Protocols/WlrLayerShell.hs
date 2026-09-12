@@ -7,11 +7,10 @@ module Sayland.Protocols.WlrLayerShell (module Sayland.Protocols.WlrLayerShell) 
 
 import Relude
 import Sayland.Codegen
-import Sayland.Internal.Utils
+import Sayland.Core
+import Sayland.Object
 import Sayland.Protocols.Wayland
 import Sayland.Protocols.XdgShell
-import Sayland.Types
-import Sayland.Utils
 
 $(loadProtocolFileEnums False "protocols/wlr-layer-shell-unstable-v1.xml")
 

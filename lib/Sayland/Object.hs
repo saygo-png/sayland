@@ -1,12 +1,11 @@
 {-# LANGUAGE RequiredTypeArguments #-}
 
--- | Description : Utilities that do not depend on any protocol.
-module Sayland.Utils (getClientEnv, headerSize, waylandNull, newObjectId, newObject, runNewObjReq, sendMessage', interfaceFromName, getInterface, getInterface') where
+-- | Description : Non protocol specific object management and communication.
+module Sayland.Object (getClientEnv, newObjectId, newObject, runNewObjReq, sendMessage', interfaceFromName, getInterface, getInterface') where
 
 import Data.Bimap qualified as BM
 import Data.Binary.Put
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BSL
 import Data.Data (cast)
 import Data.Map qualified as Map
 import Debug.Trace (traceIO)
@@ -14,18 +13,10 @@ import Network.Socket.ByteString (sendManyWithFds)
 import Network.Socket.ByteString.Lazy (sendAll)
 import Relude
 import Relude.Extra (dup)
-import Sayland.Internal.Utils
-import Sayland.Types
-import Sayland.Wire.Types
+import Sayland.Core
+import Sayland.Trace
+import Sayland.Wire
 import System.Console.ANSI (Color (..), ColorIntensity (..))
-
--- | The header size is always 8 in Wayland.
-headerSize :: Word16
-headerSize = 8
-
--- | Constant representing the Wayland null, which is just 0.
-waylandNull :: Word32
-waylandNull = 0
 
 -- | Increases the counter by 1 and returns it's new value.
 newObjectId :: Wayland p ObjectID
@@ -61,18 +52,6 @@ sendMessage' e (TObjectID o) = do
   liftIO $ case reverse fds of
     [] -> sendAll socket' msg
     fds' -> sendManyWithFds socket' [BS.toStrict msg] fds'
-
-{- | Convenience function for formatting a Wayland message.
-It takes an objectID, operation code and a message body.
-The header is generated based on this, the size is derived automatically.
--}
-mkMessage :: ObjectID -> Word16 -> BSL.ByteString -> BSL.ByteString
-mkMessage objectID opcode messageBody =
-  runPut $ do
-    putWord32le $ coerce objectID
-    putWord16le opcode
-    putWord16le $ 8 + fromIntegral (BSL.length messageBody)
-    putLazyByteString messageBody
 
 -- | Get the ClientEnvironment behind the Wayland monad.
 getClientEnv :: Wayland p (ClientEnvironment p)

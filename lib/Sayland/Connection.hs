@@ -1,5 +1,5 @@
--- | Description : Socket related functions and types.
-module Sayland.WaylandSocket (module Sayland.WaylandSocket) where
+-- | Description : Everything that has to do with making and keeping connections.
+module Sayland.Connection (module Sayland.Connection) where
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (flushTQueue, modifyTVar, newTQueue, unGetTQueue, writeTQueue)
@@ -15,11 +15,11 @@ import Foreign.C
 import Network.Socket
 import Network.Socket.ByteString (recvMsg)
 import Relude
-import Sayland.Internal.Utils
+import Sayland.Core
+import Sayland.Object
 import Sayland.Protocols.Wayland
-import Sayland.Types
-import Sayland.Utils
-import Sayland.Wire.Types
+import Sayland.Trace
+import Sayland.Wire
 import System.Console.ANSI (Color (Magenta), ColorIntensity (Vivid))
 import System.Directory (doesFileExist)
 import System.Environment.Blank (getEnv)
@@ -58,10 +58,6 @@ handleIncomingClient env socket' = do
     readTVar env.clientSerial
   atomically . modifyTVar env.clients $ Map.insert serial' clientenv
   void . liftIO . forkIO $ runReaderT (clientLoop socket') $ ClientServerEnv env clientenv serial'
-
--- | `Get` parser for a Wayland header.
-getHeader :: Get (ObjectID, Word16, Word16)
-getHeader = (,,) . WlUInt <$> getWord32le <*> getWord16le <*> getWord16le
 
 -- | Get a list of file descriptors from an ancillary data bytestring.
 decodeFds :: BS.ByteString -> IO [Fd]
@@ -187,6 +183,27 @@ findSocketName isAccepted = getEnv "WAYLAND_DISPLAY" `orElse` scanRuntimeDir
     firstMatch :: (a -> IO Bool) -> [a] -> IO (Maybe a)
     firstMatch p =
       foldr (\x rest -> p x >>= \ok -> if ok then pure (Just x) else rest) (pure Nothing)
+
+-- }}}
+
+-- Setup {{{
+
+waylandSetup :: ProtocolTable Client -> IO (WaylandEnv Client)
+waylandSetup protocolTable = do
+  let display :: Interface Client = Interface $ Wl_display wlDisplayId
+  getSocketPath openSocketName >>= \case
+    Just path -> do
+      putStrLn $ "using socket path: " <> show path
+      sock <- socket AF_UNIX Stream defaultProtocol
+      connect sock $ SockAddrUnix path
+      counter <- newIORef $ coerce wlDisplayId
+      objects <- newIORef $ fromList [(coerce wlDisplayId, display)]
+      globals <- newIORef BM.empty
+      handlers <- newIORef mempty
+      interfaceTable' <- newIORef $ fromList protocolTable
+      fdqueue <- atomically newTQueue
+      pure $ ClientEnv $ ClientEnvironment sock counter objects globals interfaceTable' handlers fdqueue
+    Nothing -> error "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."
 
 -- }}}
 

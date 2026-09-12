@@ -1,6 +1,7 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
 
-module Sayland.Types (module Sayland.Types) where
+-- | Description : Core of the library that most other modules depend on.
+module Sayland.Core (module Sayland.Core) where
 
 import Control.Concurrent.STM (TQueue)
 import Data.Bimap qualified as BM
@@ -9,7 +10,7 @@ import Data.Data (typeOf)
 import GHC.Records (HasField)
 import Network.Socket (Socket)
 import Relude hiding (ByteString, get, put)
-import Sayland.Wire.Types
+import Sayland.Wire
 import System.Posix (Fd)
 
 -- | The Wayland monad. Allows easy access to the Wayland environment state without threading repetitive arguments.
@@ -29,13 +30,6 @@ newtype TObjectID a = TObjectID ObjectID deriving newtype (Show, Eq, Ord, Num)
 instance WireFormat (TObjectID a) where
   wireGet = TObjectID <$> wireGet
   wirePut (TObjectID o) = wirePut o
-
--- a rectangle, described in pixels
-data Rectangle = Rectangle
-  { position :: (Int32, Int32)
-  , size :: (Int32, Int32)
-  }
-  deriving stock (Eq, Ord)
 
 -- | Class that allows to create an interface in IO with a wlid.
 class NewInterface a where
