@@ -1,36 +1,49 @@
 = Sayland
 
-Simple Wayland client and server library in Haskell. Allows you to act on events and send requests.
+Simple Wayland client and server library in Haskell. Allows you to act on events and send requests. +
 Currently it's a work in progress with many events and requests missing but it's enough to write a simple bar or compositor.
 
 == Usage
 
-don't
+Don't. +
+Currently the API is not even close to stable and the supported protocols are not fully implemented yet.
+The documentation is also poor right now and there aren't enough tests.
 
 == Documentation
 
-View online at https://saygo-png.github.io/sayland/
+View online at https://saygo-png.github.io/sayland/ +
 or build locally using `cabal haddock` and view the html files in a browser/put on a webserver.
+
+== Projects using the library
+
+- https://github.com/saygo-png/Saywallpaper[saywallpaper] -- wallpaper daemon using the `wlr-layer-shell-unstable-v1` protocol.
+- https://github.com/saygo-png/saybar[saybar] -- bar using the `wlr-layer-shell-unstable-v1` protocol.
+
+You can also check out the integration tests which work like demos:
+
+- link:test/Client/BasicWindow.hs[Basic window client]
+- link:test/Client/WallpaperDaemon.hs[Wallpaper daemon]
+- link:test/Server/BasicCompositor.hs[Basic compositor]
 
 == Building
 
-Build with Nix flakes: `nix build`
+Build with Nix flakes: `nix build`.
 
-Build using Cabal: `cabal build`
+Build using Cabal: `cabal build`.
 
 == Contributing
 
-The project provides a Nix dev shell with Haskell tooling.
+The project provides a Nix dev shell with Haskell tooling. +
 You can use it with `nix develop`.
 
-You can format the entire project using `treefmt` or `nix fmt`.
+You can format the entire project using `treefmt` or `nix fmt`. +
 There also is a githook that formats using `treefmt` on each commit.
 
 Run tests using `cabal test`.
 
-To generate docs while hiding certain warnings use `cabal run genHaddocks`.
+To generate docs while hiding certain warnings use `cabal run genHaddocks`. +
 This program wraps `cabal haddock` and removes bogus warnings related to https://github.com/haskell/haddock/issues/1071.
 
 To inspect generated protocol code run `cabal run unrollTH`.
 
-[Adding a new protocol](./abc/test.md)!
+link:docs/protocol_creation_guide.md[Adding a new protocol]
