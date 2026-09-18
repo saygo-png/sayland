@@ -1,7 +1,6 @@
 {- HLINT ignore "Use camelCase" -}
-module Main (main) where
+module Client.WallpaperDaemon (test) where
 
-import Config
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Exception
 import Data.ByteString.Lazy hiding (singleton)
@@ -14,12 +13,53 @@ import System.Posix (ownerReadMode, ownerWriteMode, setFdSize, unionFileModes)
 import System.Posix.IO
 import System.Posix.SharedMem
 import System.Timeout (timeout)
+import Test.Tasty.HUnit
+
+bufferWidth, bufferHeight :: Int32
+bufferWidth = 1920
+bufferHeight = 1080
+
+poolName :: String
+poolName = "saywallpaper-shared-pool"
+
+colorFormat :: Enum_wl_shm_format
+colorFormat = Enum_wl_shm_format_argb8888
+
+colorChannels :: Int32
+colorChannels = 4
+
+-- | Rainbow image :D
+image :: ByteString
+image =
+  generateBGRA8 $ \x y ->
+    let tx = fi x / fi @Int (fi bufferWidth - 1) :: Double
+        ty = fi y / fi @Int (fi bufferHeight - 1) :: Double
+        b = round $ tx * 255 -- left -> right
+        g = round $ ty * 255 -- top -> bottom
+        r = round $ (1 - tx) * 255 -- right -> left
+        a = round $ (1 - ty) * 255 -- bottom -> top
+     in (b, g, r, a)
+  where
+    fi :: forall a b. (Integral a, Num b) => a -> b
+    fi = fromIntegral
+    generateBGRA8 :: (Int -> Int -> (Word8, Word8, Word8, Word8)) -> ByteString
+    generateBGRA8 pixelFn =
+      pack
+        [ byte
+        | y <- [0 .. fi bufferHeight - 1]
+        , x <- [0 .. fi bufferWidth - 1]
+        , let (b, g, r, a) = pixelFn x y
+        , byte <- [b, g, r, a]
+        ]
 
 c :: (Coercible a b) => a -> b
 c = coerce
 
 table :: ProtocolTable Client
 table = waylandClientTable <> wlr_layer_shell_unstable_v1ClientTable
+
+test :: Assertion
+test = main
 
 main :: IO ()
 main = void . timeout 3_000_000 $ runReaderT program =<< waylandSetup table

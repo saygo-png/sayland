@@ -1,4 +1,4 @@
-module Main (main) where
+module Client.BasicWindow (test) where
 
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.STM (writeTMVar)
@@ -13,12 +13,16 @@ import Sayland.Wire
 import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import System.Random (randomIO)
 import System.Timeout (timeout)
+import Test.Tasty.HUnit
 
 c :: (Coercible a b) => a -> b
 c = coerce
 
 table :: ProtocolTable Client
 table = waylandClientTable <> xdg_shellClientTable
+
+test :: Assertion
+test = main
 
 main :: IO ()
 main = void . timeout 3_000_000 $ runReaderT program =<< waylandSetup table

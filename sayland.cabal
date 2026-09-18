@@ -70,53 +70,37 @@ library
     Sayland.Trace
     Sayland.Wire
 
--- Test of a simple wallpaper daemon
-test-suite client-wallpaper-daemon
+executable unrollTH
   import:         common-options, executable-options
-  type:           exitcode-stdio-1.0
-  hs-source-dirs: test/clients/wallpaper-daemon
-  main-is:        Main.hs
-  other-modules:  Config
+  hs-source-dirs: debug
+  main-is:        UnrollTH.hs
   build-depends:
     , base
-    , network
-    , relude
+    , process
     , sayland
-    , unix
+    , template-haskell
 
-test-suite client-basic-window
+test-suite sayland-tests
   import:         common-options, executable-options
   type:           exitcode-stdio-1.0
-  hs-source-dirs: test/clients/basic-window
   main-is:        Main.hs
-  build-depends:
-    , base
-    , network
-    , random
-    , relude
-    , sayland
-    , stm
-    , unix
+  hs-source-dirs: test
+  other-modules:
+    Both.Protocol.Codegen
+    Client.BasicWindow
+    Client.WallpaperDaemon
+    Server.BasicCompositor
 
-test-suite server-basic-compositor
-  import:         common-options, executable-options
-  type:           exitcode-stdio-1.0
-  hs-source-dirs: test/servers/basic-compositor
-  main-is:        Main.hs
   build-depends:
     , base
     , containers
     , directory
     , network
+    , random
     , relude
     , sayland
-
-test-suite template-haskell-protocol
-  import:         common-options, executable-options
-  type:           exitcode-stdio-1.0
-  hs-source-dirs: test/both/protocol
-  main-is:        Main.hs
-  build-depends:
-    , base
-    , sayland
+    , stm
+    , tasty
+    , tasty-hunit
     , template-haskell
+    , unix

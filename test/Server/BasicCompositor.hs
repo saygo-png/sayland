@@ -1,4 +1,4 @@
-module Main (main) where
+module Server.BasicCompositor (test) where
 
 -- THIS IS JUST A SERVER. IT DOES NOT RENDER ANYTHING.
 
@@ -9,9 +9,13 @@ import Relude
 import Sayland
 import System.Directory (removeFile)
 import System.Timeout (timeout)
+import Test.Tasty.HUnit
 
 table :: ProtocolTable Server
 table = waylandServerTable <> xdg_shellServerTable
+
+test :: Assertion
+test = main
 
 main :: IO ()
 main = bracket env cleanup program

@@ -28,5 +28,5 @@ cabal.project.local~
 .HTF/
 .ghc.environment.*
 /tags
-/output.hs
+/unrolled-TH.hs
 /.pre-commit-config.yaml
