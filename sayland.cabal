@@ -70,6 +70,16 @@ library
     Sayland.Trace
     Sayland.Wire
 
+executable genHaddocks
+  import:         common-options, executable-options
+  hs-source-dirs: debug
+  main-is:        GenHaddocks.hs
+  build-depends:
+    , base
+    , process
+    , template-haskell
+    , text
+
 executable unrollTH
   import:         common-options, executable-options
   hs-source-dirs: debug

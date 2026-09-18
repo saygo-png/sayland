@@ -25,3 +25,12 @@ You can use it with `nix develop`.
 
 You can format the entire project using `treefmt` or `nix fmt`.
 There also is a githook that formats using `treefmt` on each commit.
+
+Run tests using `cabal test`.
+
+To generate docs while hiding certain warnings use `cabal run genHaddocks`.
+This program wraps `cabal haddock` and removes bogus warnings related to https://github.com/haskell/haddock/issues/1071.
+
+To inspect generated protocol code run `cabal run unrollTH`.
+
+[Adding a new protocol](./abc/test.md)!
