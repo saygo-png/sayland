@@ -160,24 +160,29 @@ getSocketPath = liftA2 (liftA2 (</>)) $ getEnv "XDG_RUNTIME_DIR"
 openSocketName :: IO (Maybe String)
 openSocketName = findSocketName doesFileExist
 
--- | Find a not already existing and valid socket name, if @WAYLAND_DISPLAY@ does not exist.
+{- | Find a not already existing and valid socket name.
+Does NOT care about @WAYLAND_DISPLAY@
+-}
 availableSocketName :: IO (Maybe String)
-availableSocketName = findSocketName (fmap not . doesFileExist)
+availableSocketName = scanRuntimeDir (fmap not . doesFileExist)
 
 {- | Find a socket name by predicate.
 Short circuits if 'WAYLAND_DISPLAY' exists, ignoring the predicate.
 -}
 findSocketName :: (FilePath -> IO Bool) -> IO (Maybe String)
-findSocketName isAccepted = getEnv "WAYLAND_DISPLAY" `orElse` scanRuntimeDir
+findSocketName isAccepted = getEnv "WAYLAND_DISPLAY" `orElse` scanRuntimeDir isAccepted
   where
-    scanRuntimeDir =
-      getEnv "XDG_RUNTIME_DIR"
-        >>= maybe (pure Nothing) (\dir -> firstMatch (isAccepted . (dir </>)) candidates)
-    candidates :: [String] = ["wayland-" <> fromString (show i) | i <- [0 .. 99 :: Int]]
-
     -- Run the second action only if the first yields Nothing.
     orElse :: IO (Maybe a) -> IO (Maybe a) -> IO (Maybe a)
     orElse a b = a >>= maybe b (pure . Just)
+
+-- | Find a socket name by predicate, scanning @XDG_RUNTIME_DIR@.
+scanRuntimeDir :: (FilePath -> IO Bool) -> IO (Maybe String)
+scanRuntimeDir isAccepted =
+  getEnv "XDG_RUNTIME_DIR"
+    >>= maybe (pure Nothing) (\dir -> firstMatch (isAccepted . (dir </>)) candidates)
+  where
+    candidates :: [String] = ["wayland-" <> fromString (show i) | i <- [0 .. 99 :: Int]]
 
     -- First element satisfying the predicate, stopping on the first match.
     firstMatch :: (a -> IO Bool) -> [a] -> IO (Maybe a)

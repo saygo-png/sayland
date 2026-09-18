@@ -2,7 +2,7 @@
 module Main (main) where
 
 import Config
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkIO, myThreadId)
 import Control.Exception
 import Data.ByteString.Lazy hiding (singleton)
 import Data.Maybe (fromJust)
@@ -13,6 +13,7 @@ import Sayland.Wire
 import System.Posix (ownerReadMode, ownerWriteMode, setFdSize, unionFileModes)
 import System.Posix.IO
 import System.Posix.SharedMem
+import System.Timeout (timeout)
 
 c :: (Coercible a b) => a -> b
 c = coerce
@@ -21,7 +22,7 @@ table :: ProtocolTable Client
 table = waylandClientTable <> wlr_layer_shell_unstable_v1ClientTable
 
 main :: IO ()
-main = runReaderT program =<< waylandSetup table
+main = void . timeout 3_000_000 $ runReaderT program =<< waylandSetup table
 
 program :: Wayland Client ()
 program = do
@@ -32,11 +33,17 @@ program = do
   display <- fromJust <$> getInterface wlDisplayId
   registry <- runNewObjReq display Request_wl_display_get_registry
 
+  -- A crash in the event loop has to reach the main thread. Otherwise the
+  -- `finally` below just fills `running` and the daemon exits successfully despite errors.
+  mainThread <- liftIO myThreadId
+  let rethrow :: SomeException -> IO ()
+      rethrow = throwTo mainThread
+
   liftIO
     . void
     . forkIO
     $ finally
-      (putStrLn "\n--- Starting event loop ---" >> runReaderT (clientLoop env.socket) (ClientEnv env))
+      (handle rethrow $ putStrLn "\n--- Starting event loop ---" >> runReaderT (clientLoop env.socket) (ClientEnv env))
       (close env.socket >> putMVar running ())
 
   putStrLn "Binding to required interfaces..."

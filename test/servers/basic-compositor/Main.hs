@@ -8,6 +8,7 @@ import Network.Socket
 import Relude
 import Sayland
 import System.Directory (removeFile)
+import System.Timeout (timeout)
 
 table :: ProtocolTable Server
 table = waylandServerTable <> xdg_shellServerTable
@@ -44,5 +45,5 @@ main = bracket env cleanup program
               , clientSerial
               }
 
-program :: (MonadIO m) => ServerEnvironment -> m ()
-program = listenForClients
+program :: ServerEnvironment -> IO ()
+program = void . timeout 3_000_000 . listenForClients

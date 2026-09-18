@@ -1,8 +1,8 @@
 module Main (main) where
 
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.STM (writeTMVar)
-import Control.Exception (bracket, finally)
+import Control.Exception (bracket, finally, handle, throwTo)
 import Data.ByteString (hPut, pack)
 import Data.Maybe (fromJust)
 import GHC.IO.Handle
@@ -12,6 +12,7 @@ import Sayland
 import Sayland.Wire
 import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import System.Random (randomIO)
+import System.Timeout (timeout)
 
 c :: (Coercible a b) => a -> b
 c = coerce
@@ -20,7 +21,7 @@ table :: ProtocolTable Client
 table = waylandClientTable <> xdg_shellClientTable
 
 main :: IO ()
-main = runReaderT program =<< waylandSetup table
+main = void . timeout 3_000_000 $ runReaderT program =<< waylandSetup table
 
 program :: Wayland Client ()
 program = do
@@ -32,11 +33,17 @@ program = do
   runRequest display $ Request_wl_display_get_registry registryId
   registry <- fromJust <$> getInterface registryId
 
+  -- A crash in the event loop has to reach the main thread. Otherwise the
+  -- `finally` below just fills `running` and the daemon exits successfully despite errors.
+  mainThread <- liftIO myThreadId
+  let rethrow :: SomeException -> IO ()
+      rethrow = throwTo mainThread
+
   liftIO
     . void
     . forkIO
     $ finally
-      (putStrLn "\n--- Starting event loop ---" >> runReaderT (clientLoop env.socket) (ClientEnv env))
+      (handle rethrow $ putStrLn "\n--- Starting event loop ---" >> runReaderT (clientLoop env.socket) (ClientEnv env))
       (close env.socket >> putMVar running ())
 
   putStrLn "Binding to required interfaces..."
