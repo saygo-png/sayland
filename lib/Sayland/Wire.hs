@@ -18,24 +18,40 @@ type WirePut = StateT [Fd] PutM
 
 -- | Typeclass for wire types implementing decoding and serializing.
 class WireFormat a where
-  -- | Get a value from the wire
+  -- | Get a value from the wire.
   wireGet :: WireGet a
 
-  -- | Put a value from the wire
+  -- | Put a value from the wire.
   wirePut :: a -> WirePut ()
 
+-- | Wayland @int@. 32-bit signed integer.
 newtype WlInt = WlInt Int32 deriving newtype (Show, Eq, Ord, Num, Integral, Enum, Real)
 
+-- | Wayland @uint@. 32-bit unsigned integer.
 newtype WlUInt = WlUInt Word32 deriving newtype (Show, Eq, Ord, Num, Integral, Enum, Real)
 
+-- | Wayland @fixed@. 24.8 bit signed fixed-point number.
 newtype WlFixed = WlFixed Int32 deriving newtype (Show, Eq, Ord)
 
+{- | Wayland @string@.
+A string, prefixed with a 32-bit integer specifying its length (in bytes), followed by the string contents and a NUL terminator, padded to 32 bits with zero bytes. The encoding is not specified. The `isString` instance encodes in UTF-8.
+-}
 newtype WlString = WlString BS.ByteString deriving newtype (Show, Eq, Ord, IsString, Semigroup, Monoid)
 
+{- | Wayland @array@.
+A blob of arbitrary data, prefixed with a 32-bit integer specifying its length (in bytes), then the verbatim contents of the array, padded to 32 bits with zero bytes.
+-}
 newtype WlArray = WlArray BS.ByteString deriving newtype (Show, Eq, Ord)
 
+{- | Wayland @fd@.
+0-bit value on the primary transport, but transfers a file descriptor to the other end using the ancillary data in the Unix domain socket message (msg_control).
+This is the reason why we don't use a `Binary` instance for wire types, as we need additional state to house fds.
+-}
 newtype WlFd = WlFd Fd deriving newtype (Show, Eq, Ord)
 
+{- | Wayland @new_id@.
+A 32-bit unspecified object ID. Preceded by a `WlString` specifying the interface name, and a `WlUInt` specifying the version.
+-}
 data WlNewId = WlNewId WlString WlUInt WlUInt deriving stock (Show, Eq)
 
 instance WireFormat WlUInt where
@@ -75,6 +91,9 @@ instance WireFormat WlFd where
       f : fs -> WlFd f <$ State.put fs
   wirePut (WlFd f) = State.modify' (f :)
 
+{- | Number needed to round n up to the next multiple of 4.
+Used to determine 0 byte padding for types such as `WlString` or `WlArray`.
+-}
 padTo4 :: Int -> Int
 padTo4 n = negate n `mod` 4
 
