@@ -102,7 +102,7 @@ class BufferBackend a where
 
 data Buffer where Buffer :: (BufferBackend a) => a -> Buffer
 
-data ShmBuffer = ShmBuffer {offset :: WlInt, width :: WlInt, height :: WlInt, stride :: WlInt, pool :: TObjectID Wl_shm_pool, format :: Enum_wl_shm_format}
+data ShmBuffer = ShmBuffer {offset :: WlInt, stride :: WlInt, pool :: TObjectID Wl_shm_pool, format :: Enum_wl_shm_format}
 
 instance BufferBackend ShmBuffer where
   releaseBuffer _ = pass
@@ -113,6 +113,8 @@ instance BufferBackend () where
 data Wl_buffer = Wl_buffer
   { wlid :: TObjectID Wl_buffer
   , buffer :: Buffer
+  , width :: WlInt
+  , height :: WlInt
   }
 
 newtype DndIcon = DndIcon Dnd
@@ -239,7 +241,7 @@ $(loadProtocolFile wlFormatter False "protocols/wayland.xml")
 -- NewInterface instances {{{
 
 instance NewInterface Wl_buffer where
-  newInterface i = pure Wl_buffer{wlid = i, buffer = Buffer ()}
+  newInterface i = pure Wl_buffer{wlid = i, width = 0, height = 0, buffer = Buffer ()}
 
 instance NewInterface Wl_region where
   newInterface i = do
@@ -470,7 +472,7 @@ instance Interface' Wl_compositor Server where
 -- Wl_shm_pool {{{
 instance Interface' Wl_shm_pool Client where
   runRequest shm_pool request@(Request_wl_shm_pool_create_buffer bufId offset width height stride format) = do
-    let buffer = Wl_buffer{wlid = bufId, buffer = Buffer ShmBuffer{pool = shm_pool.wlid, ..}}
+    let buffer = Wl_buffer{wlid = bufId, width, height, buffer = Buffer ShmBuffer{pool = shm_pool.wlid, ..}}
     void $ newObject bufId buffer
     sendMessage' request shm_pool.wlid
   runRequest shm_pool request@Request_wl_shm_pool_destroy = do
@@ -503,7 +505,7 @@ instance Interface' Wl_shm_pool Client where
 instance Interface' Wl_shm_pool Server where
   runRequest shm_pool (Request_wl_shm_pool_create_buffer bufId offset width height stride format) = do
     ClientServerEnv{} <- ask
-    let buffer = Wl_buffer{wlid = bufId, buffer = Buffer ShmBuffer{pool = shm_pool.wlid, ..}}
+    let buffer = Wl_buffer{wlid = bufId, width, height, buffer = Buffer ShmBuffer{pool = shm_pool.wlid, ..}}
     void $ newObject bufId buffer
   runRequest shm_pool Request_wl_shm_pool_destroy = do
     dropObject shm_pool.wlid

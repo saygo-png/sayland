@@ -30,8 +30,6 @@ data Dmabuf = Dmabuf
 
 data DmabufBuffer = DmabufBuffer
   { dmabufs :: [Dmabuf]
-  , width :: WlInt
-  , height :: WlInt
   , format :: WlUInt
   , flags :: Enum_zwp_linux_buffer_params_v1_flags
   }
@@ -123,7 +121,7 @@ instance Interface' Zwp_linux_buffer_params_v1 Client where
     buffer <- newInterface bufferId
     dmabufs <- atomicModifyIORef params.dmabufSet ([],)
     let dmabuf = DmabufBuffer{..}
-    void $ newObject bufferId buffer{buffer = Buffer dmabuf}
+    void $ newObject bufferId buffer{width, height, buffer = Buffer dmabuf}
     sendMessage' request params.wlid
   runRequest params request@(Request_zwp_linux_buffer_params_v1_set_sampling_device dev) = do
     writeIORef params.sampling_device $ Just dev
