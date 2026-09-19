@@ -100,7 +100,7 @@ data Wl_shm = Wl_shm {wlid :: TObjectID Wl_shm, formats :: IORef [Enum_wl_shm_fo
 class BufferBackend a where
   releaseBuffer :: a -> Wayland p ()
 
-data Buffer where Buffer :: (BufferBackend a) => a -> Buffer
+data Buffer where Buffer :: (Typeable a, BufferBackend a) => a -> Buffer
 
 data ShmBuffer = ShmBuffer {offset :: WlInt, stride :: WlInt, pool :: TObjectID Wl_shm_pool, format :: Enum_wl_shm_format}
 
