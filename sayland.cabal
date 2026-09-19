@@ -63,6 +63,7 @@ library
     Sayland.Connection
     Sayland.Core
     Sayland.Object
+    Sayland.Protocols.DmaBuf
     Sayland.Protocols.Fifo
     Sayland.Protocols.Wayland
     Sayland.Protocols.WlrLayerShell

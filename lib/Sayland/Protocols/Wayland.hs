@@ -97,14 +97,22 @@ data Wl_shm_pool = Wl_shm_pool {wlid :: TObjectID Wl_shm_pool, fd :: Fd, size ::
 
 data Wl_shm = Wl_shm {wlid :: TObjectID Wl_shm, formats :: IORef [Enum_wl_shm_format]}
 
+class BufferBackend a where
+  releaseBuffer :: a -> Wayland p ()
+
+data Buffer where Buffer :: (BufferBackend a) => a -> Buffer
+
+data ShmBuffer = ShmBuffer {offset :: WlInt, width :: WlInt, height :: WlInt, stride :: WlInt, pool :: TObjectID Wl_shm_pool, format :: Enum_wl_shm_format}
+
+instance BufferBackend ShmBuffer where
+  releaseBuffer _ = pass
+
+instance BufferBackend () where
+  releaseBuffer _ = pass
+
 data Wl_buffer = Wl_buffer
   { wlid :: TObjectID Wl_buffer
-  , offset :: WlInt
-  , width :: WlInt
-  , height :: WlInt
-  , stride :: WlInt
-  , pool :: TObjectID Wl_shm_pool
-  , format :: Enum_wl_shm_format
+  , buffer :: Buffer
   }
 
 newtype DndIcon = DndIcon Dnd
@@ -231,7 +239,7 @@ $(loadProtocolFile wlFormatter False "protocols/wayland.xml")
 -- NewInterface instances {{{
 
 instance NewInterface Wl_buffer where
-  newInterface i = pure Wl_buffer{wlid = i, offset = 0, width = 0, height = 0, stride = 0, format = Enum_wl_shm_format_argb8888, pool = 0}
+  newInterface i = pure Wl_buffer{wlid = i, buffer = Buffer ()}
 
 instance NewInterface Wl_region where
   newInterface i = do
@@ -461,14 +469,32 @@ instance Interface' Wl_compositor Server where
 
 -- Wl_shm_pool {{{
 instance Interface' Wl_shm_pool Client where
-  runRequest shm_pool request@(Request_wl_shm_pool_create_buffer bufId offset' width' height' stride' format') = do
-    let buffer = Wl_buffer{wlid = bufId, offset = offset', width = width', height = height', stride = stride', format = format', pool = shm_pool.wlid}
+  runRequest shm_pool request@(Request_wl_shm_pool_create_buffer bufId offset width height stride format) = do
+    let buffer = Wl_buffer{wlid = bufId, buffer = Buffer ShmBuffer{pool = shm_pool.wlid, ..}}
     void $ newObject bufId buffer
     sendMessage' request shm_pool.wlid
   runRequest shm_pool request@Request_wl_shm_pool_destroy = do
     sendMessage' request shm_pool.wlid
     dropObject shm_pool.wlid
   runRequest shm_pool request@(Request_wl_shm_pool_resize size') = do
+    liftIO . setFdSize shm_pool.fd $ fromIntegral size'
+    oldsize <- readIORef shm_pool.size
+    ptr <- readIORef shm_pool.ptr
+    liftIO $ munmap ptr $ fromIntegral oldsize
+    result <-
+      liftIO
+        $ try
+        $ mmap
+          nullPtr
+          (fromIntegral size')
+          (protRead <> protWrite)
+          (mkMmapFlags mapShared mempty)
+          shm_pool.fd
+          0
+    ptr' <- case result of
+      Left (e :: SomeException) -> liftIO (traceIO $ "mmap failed: " ++ show e) >> undefined
+      Right ptr' -> liftIO (traceIO $ "mmap OK, ptr = " ++ show ptr') $> ptr'
+    atomicWriteIORef shm_pool.ptr ptr'
     atomicWriteIORef shm_pool.size size'
     sendMessage' request shm_pool.wlid
 
@@ -477,13 +503,12 @@ instance Interface' Wl_shm_pool Client where
 instance Interface' Wl_shm_pool Server where
   runRequest shm_pool (Request_wl_shm_pool_create_buffer bufId offset width height stride format) = do
     ClientServerEnv{} <- ask
-    let buffer = Wl_buffer{wlid = bufId, offset = offset, width = width, height = height, stride = stride, format = format, pool = shm_pool.wlid}
+    let buffer = Wl_buffer{wlid = bufId, buffer = Buffer ShmBuffer{pool = shm_pool.wlid, ..}}
     void $ newObject bufId buffer
-  runRequest shm_pool request@Request_wl_shm_pool_destroy = do
-    sendMessage' request shm_pool.wlid
+  runRequest shm_pool Request_wl_shm_pool_destroy = do
     dropObject shm_pool.wlid
   runRequest shm_pool (Request_wl_shm_pool_resize size') = do
-    liftIO . setFdSize shm_pool.fd $ fromIntegral size'
+    -- liftIO . setFdSize shm_pool.fd $ fromIntegral size'
     oldsize <- readIORef shm_pool.size
     ptr <- readIORef shm_pool.ptr
     liftIO $ munmap ptr $ fromIntegral oldsize
@@ -508,10 +533,23 @@ instance Interface' Wl_shm_pool Server where
 
 -- Wl_shm {{{
 instance Interface' Wl_shm Client where
-  runRequest shm request@(Request_wl_shm_create_pool poolId (WlFd fd) size) = do
-    sizeRef <- newIORef size
-    ptrRef <- newIORef nullPtr {-IIRC client doesn't need exposed -}
-    void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd, size = sizeRef, ptr = ptrRef}
+  runRequest shm request@(Request_wl_shm_create_pool poolId (WlFd fd) size') = do
+    sizeRef <- newIORef size'
+    result <-
+      liftIO
+        $ try
+        $ mmap
+          nullPtr
+          (fromIntegral size')
+          (protRead <> protWrite)
+          (mkMmapFlags mapShared mempty)
+          fd
+          0
+    ptr' <- case result of
+      Left (e :: SomeException) -> liftIO (traceIO $ "mmap failed: " ++ show e) >> undefined
+      Right ptr' -> liftIO (traceIO $ "mmap OK, ptr = " ++ show ptr') $> ptr'
+    ptr <- newIORef ptr'
+    void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd, size = sizeRef, ptr}
     sendMessage' request shm.wlid
   runRequest shm request@(Request_wl_shm_release{}) = do
     sendMessage' request shm.wlid
@@ -555,8 +593,9 @@ instance Interface' Wl_buffer Client where
 
 instance Interface' Wl_buffer Server where
   runRequest buffer Request_wl_buffer_destroy = dropObject buffer.wlid
-  runEvent buffer event@Event_wl_buffer_release = do
+  runEvent buffer@Wl_buffer{buffer = Buffer buf} event@Event_wl_buffer_release = do
     sendMessage' event buffer.wlid
+    releaseBuffer buf
 
 -- }}}
 

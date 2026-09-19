@@ -4,6 +4,7 @@ module Sayland (
   module Sayland.Connection,
   module Sayland.Core,
   module Sayland.Object,
+  module Sayland.Protocols.DmaBuf,
   module Sayland.Protocols.Fifo,
   module Sayland.Protocols.Wayland,
   module Sayland.Protocols.WlrLayerShell,
@@ -14,6 +15,7 @@ import Sayland.Codegen
 import Sayland.Connection
 import Sayland.Core
 import Sayland.Object
+import Sayland.Protocols.DmaBuf
 import Sayland.Protocols.Fifo
 import Sayland.Protocols.Wayland
 import Sayland.Protocols.WlrLayerShell
