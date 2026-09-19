@@ -193,6 +193,7 @@ scanRuntimeDir isAccepted =
 
 -- Setup {{{
 
+-- | Create a default client environment.
 waylandSetup :: ProtocolTable Client -> IO (WaylandEnv Client)
 waylandSetup protocolTable = do
   let display :: Interface Client = Interface $ Wl_display wlDisplayId
