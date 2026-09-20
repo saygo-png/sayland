@@ -25,19 +25,19 @@ data Dmabuf = Dmabuf
   , dmabufPlaneIdx :: WlUInt
   , dmabufOffset :: WlUInt
   , dmabufStride :: WlUInt
-  , dmabufModifier :: Word64
   }
 
 data DmabufBuffer = DmabufBuffer
   { dmabufs :: [Dmabuf]
   , format :: WlUInt
+  , modifier :: Word64
   , flags :: Enum_zwp_linux_buffer_params_v1_flags
   }
 
 instance BufferBackend DmabufBuffer where
   releaseBuffer DmabufBuffer{dmabufs} = liftIO $ forM_ dmabufs $ \Dmabuf{dmabufFd = WlFd fd} -> closeFd fd
 
-data Zwp_linux_buffer_params_v1 = Zwp_linux_buffer_params_v1 {wlid :: TObjectID Zwp_linux_buffer_params_v1, dmabufSet :: IORef [Dmabuf], sampling_device :: IORef (Maybe WlArray)}
+data Zwp_linux_buffer_params_v1 = Zwp_linux_buffer_params_v1 {wlid :: TObjectID Zwp_linux_buffer_params_v1, dmabufSet :: IORef [Dmabuf], paramsModifier :: IORef Word64, sampling_device :: IORef (Maybe WlArray)}
 
 data Tranche = Tranche
   { targetDevice :: WlArray
@@ -72,6 +72,7 @@ instance NewInterface Zwp_linux_dmabuf_feedback_v1 where
 instance NewInterface Zwp_linux_buffer_params_v1 where
   newInterface wlid = do
     dmabufSet <- newIORef []
+    paramsModifier <- newIORef 0
     sampling_device <- newIORef Nothing
     pure Zwp_linux_buffer_params_v1{..}
 
@@ -113,12 +114,19 @@ instance Interface' Zwp_linux_buffer_params_v1 Client where
     sendMessage' request params.wlid
   runRequest params request@(Request_zwp_linux_buffer_params_v1_add dmabufFd dmabufPlaneIdx dmabufOffset dmabufStride (WlUInt modifier_hi) (WlUInt modifier_lo)) = do
     let dmabufModifier :: Word64 = shiftL (fromIntegral modifier_hi) 32 .|. fromIntegral modifier_lo
-    atomicModifyIORef params.dmabufSet $ (,()) . (Dmabuf{dmabufFd, dmabufOffset, dmabufStride, dmabufModifier, dmabufPlaneIdx} :)
-    sendMessage' request params.wlid
+    modifier <- readIORef params.paramsModifier
+    bool
+      (error "invalid format")
+      ( do
+          atomicModifyIORef params.dmabufSet $ (,()) . (Dmabuf{dmabufFd, dmabufOffset, dmabufStride, dmabufPlaneIdx} :)
+          sendMessage' request params.wlid
+      )
+      (dmabufModifier == modifier)
   runRequest params request@(Request_zwp_linux_buffer_params_v1_create _width _height _format _flags) = do
     sendMessage' request params.wlid
   runRequest params request@(Request_zwp_linux_buffer_params_v1_create_immed bufferId width height format flags) = do
     buffer <- newInterface bufferId
+    modifier <- readIORef params.paramsModifier
     dmabufs <- atomicModifyIORef params.dmabufSet ([],)
     let dmabuf = DmabufBuffer{..}
     void $ newObject bufferId buffer{width, height, buffer = Buffer dmabuf}
@@ -131,7 +139,11 @@ instance Interface' Zwp_linux_buffer_params_v1 Server where
   runRequest params Request_zwp_linux_buffer_params_v1_destroy = dropObject params.wlid
   runRequest params (Request_zwp_linux_buffer_params_v1_add dmabufFd dmabufPlaneIdx dmabufOffset dmabufStride (WlUInt modifier_hi) (WlUInt modifier_lo)) = do
     let dmabufModifier :: Word64 = shiftL (fromIntegral modifier_hi) 32 .|. fromIntegral modifier_lo
-    atomicModifyIORef params.dmabufSet $ (,()) . (Dmabuf{dmabufFd, dmabufOffset, dmabufStride, dmabufModifier, dmabufPlaneIdx} :)
+    modifier <- readIORef params.paramsModifier
+    bool
+      (sendError params.wlid 4 "invalid format")
+      (atomicModifyIORef params.dmabufSet $ (,()) . (Dmabuf{dmabufFd, dmabufOffset, dmabufStride, dmabufPlaneIdx} :))
+      (modifier == dmabufModifier)
   runRequest _params Request_zwp_linux_buffer_params_v1_create{} = pass -- the compositor handles this event
   runRequest _params Request_zwp_linux_buffer_params_v1_create_immed{} = pass -- the compositor handles this event
   runRequest params (Request_zwp_linux_buffer_params_v1_set_sampling_device dev) = writeIORef params.sampling_device $ Just dev
