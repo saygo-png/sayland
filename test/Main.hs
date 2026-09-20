@@ -1,5 +1,6 @@
 module Main (main) where
 
+import Both.Protocol.Wire qualified
 import Client.BasicWindow qualified
 import Client.WallpaperDaemon qualified
 import Server.BasicCompositor qualified
@@ -11,7 +12,7 @@ main :: IO ()
 main = defaultMain tests
 
 tests :: TestTree
-tests = testGroup "Tests" [integrationTests]
+tests = testGroup "Tests" [integrationTests, Both.Protocol.Wire.tests]
 
 integrationTests :: TestTree
 integrationTests =

@@ -98,20 +98,25 @@ test-suite sayland-tests
   hs-source-dirs: test
   other-modules:
     Both.Protocol.Codegen
+    Both.Protocol.Wire
     Client.BasicWindow
     Client.WallpaperDaemon
     Server.BasicCompositor
 
   build-depends:
     , base
+    , binary
+    , bytestring
     , containers
     , directory
     , network
+    , QuickCheck
     , random
     , relude
     , sayland
     , stm
     , tasty
     , tasty-hunit
+    , tasty-quickcheck
     , template-haskell
     , unix
