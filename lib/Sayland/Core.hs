@@ -26,8 +26,8 @@ type TObjectID :: forall k. k -> Type
 
 type role TObjectID phantom
 
--- | Type representing an `objectID` of a certain interface.
-newtype TObjectID a = TObjectID ObjectID deriving newtype (Show, Eq, Ord, Num)
+-- | Type representing an `objectID` of a certain object.
+newtype TObjectID a = TObjectID RawObjectID deriving newtype (Show, Eq, Ord)
 
 instance WireFormat (TObjectID a) where
   wireGet = TObjectID <$> wireGet
@@ -37,17 +37,99 @@ instance WireFormat (TObjectID a) where
 class NewInterface a where
   newInterface :: (MonadIO m) => TObjectID a -> m a
 
--- | Perspective of the current Wayland Environment.
-data Perspective = Client | Server
+{- | Sum type representing a perspective.
+Used to make things reusable for clients and servers (compositors).
+Should not be used on the term level.
+-}
+data Perspective = Client | Server -- TODO: Use TypeData here to remove term level constructors.
+
+-- | Incoming message to Client/Server's object
+type Incoming :: Perspective -> Type -> Type
+
+-- | Incoming message to Client/Server's object
+type Outgoing :: Perspective -> Type -> Type
+
+-- | Defines the relation of incoming messages to a client and server
+type family Incoming (p :: Perspective) (i :: Type) where
+  Incoming Client i = Event i -- Clients receive events.
+  Incoming Server i = Request i -- Servers receive requests.
+
+-- | Defines the relation of outgoing messages to a client and server.
+type family Outgoing p i where
+  Outgoing Client i = Request i -- Clients send requests.
+  Outgoing Server i = Event i -- Servers send events.
+
+-- | An interface that can be used as an object. In other words, the implementation of an interface.
+class (Interface i) => Object i where
+  -- | Effect of a request on local state. Runs on the sender and the receiver.
+  onRequest :: i -> Request i -> Wayland p ()
+  onRequest _ _ = pass
+
+  -- | Effect of an event on local state. Runs on the sender and the receiver.
+  onEvent :: i -> Event i -> Wayland p ()
+  onEvent _ _ = pass
+
+-- | Resolves which handler a message reaches, given the perspective it arrives from.
+class KnownPerspective (p :: Perspective) where
+  -- Route an incoming message to 'onEvent' on a client, 'onRequest' on a server.
+  applyIncoming :: (Object i) => i -> Incoming p i -> Wayland p ()
+
+  -- Route an outgoing message to 'onRequest' on a client, 'onEvent' on a server.
+  applyOutgoing :: (Object i) => i -> Outgoing p i -> Wayland p ()
+
+instance KnownPerspective Client where
+  applyIncoming = onEvent
+  applyOutgoing = onRequest
+
+instance KnownPerspective Server where
+  applyIncoming = onRequest
+  applyOutgoing = onEvent
 
 type role EventHandler nominal
 
 -- | EventHandlers, called whenever an event is received.
 data EventHandler p where
-  EventHandler :: (Typeable e, WaylandEvent e) => (ObjectID -> e -> Wayland p ()) -> EventHandler p
+  EventHandler :: (Typeable m, Message m) => (RawObjectID -> m -> Wayland p ()) -> EventHandler p
 
 -- | Number representing a Wayland Client.
 type ClientID = Int
+
+{- | Class defining an Interface as a collection of events and requests which has an `ObjectID`, version and name.
+This does not include implementations of events and requests which are supplied by `Interface'`.
+-}
+class
+  ( Message (Event a)
+  , Message (Request a)
+  , HasField "wlid" a (TObjectID a)
+  , Typeable a
+  ) =>
+  Interface a
+  where
+  type Event a = r | r -> a
+  type Request a = r | r -> a
+  getInterfaceVersion :: Proxy a -> WlUInt
+  getInterfaceName :: Proxy a -> WlString
+
+type role SomeObject nominal
+
+data SomeObject (p :: Perspective) where
+  SomeObject :: (Object i, Typeable i) => i -> SomeObject p
+
+class (Typeable m) => Message m where
+  getMessage :: Word16 -> WireGet m
+  putMessage :: m -> WirePut ()
+  getOpcode :: m -> Word16
+  showMessage :: RawObjectID -> m -> String
+
+type role InterfaceEntry nominal
+
+-- | Everything needed to advertise and construct one interface.
+data InterfaceEntry (p :: Perspective) = InterfaceEntry
+  { version :: WlUInt
+  , construct :: RawObjectID -> IO (SomeObject p)
+  }
+
+type ProtocolTable (p :: Perspective) = [(WlString, InterfaceEntry p)]
 
 type role WaylandEnv nominal
 
@@ -77,9 +159,9 @@ type role ClientEnvironment nominal
 data ClientEnvironment (p :: Perspective) = ClientEnvironment
   { socket :: Socket
   -- ^ Socket the client connects to.
-  , counter :: IORef ObjectID
+  , counter :: IORef RawObjectID
   -- ^ Mutable counter used to derive `objectID`s with increasing values.
-  , objects :: IORef (Map ObjectID (Interface p))
+  , objects :: IORef (Map RawObjectID (SomeObject p))
   -- ^ Mutable `Map` of `objectID`s to interfaces they represent.
   , globals :: IORef (BM.Bimap {-interface name-} WlString GlobalName)
   -- ^ `Bimap` of globals advertised to the server stored as an interface name and `GlobalName`.
@@ -92,52 +174,9 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
   }
   deriving stock (Eq)
 
-{- | Class defining an Interface as a collection of events and requests which has an `ObjectID`, version and name.
-This does not include implementations of events and requests which are supplied by `Interface'`.
--}
-class
-  ( WaylandEvent (Event a)
-  , WaylandEvent (Request a)
-  , HasField "wlid" a (TObjectID a)
-  , Typeable a
-  ) =>
-  IsInterface a
-  where
-  type Event a = r | r -> a
-  type Request a = r | r -> a
-  getInterfaceVersion :: Proxy a -> WlUInt
-  getInterfaceName :: Proxy a -> WlString
-
-class (IsInterface a) => Interface' a (p :: Perspective) where
-  runEvent :: a -> Event a -> Wayland p ()
-  runEvent = unimplementedFor "runEvent"
-  runRequest :: a -> Request a -> Wayland p ()
-  runRequest = unimplementedFor "runRequest"
-
 -- | Filler "implementation" for unimplemented methods.
 unimplementedFor :: (Typeable a) => Text -> a -> b -> Wayland p ()
 unimplementedFor meth x _ =
   error $ "sayland: " <> meth <> " is not implemented for " <> show (typeOf x)
-
-type role Interface nominal
-
-data Interface (p :: Perspective) where
-  Interface :: (Interface' i p, Typeable i) => i -> Interface p
-
-class (Typeable e) => WaylandEvent e where
-  getEvent :: Word16 -> WireGet e
-  putEvent :: e -> WirePut ()
-  getOpcode :: e -> Word16
-  showEvent :: ObjectID -> e -> String
-
-type role InterfaceEntry nominal
-
--- | Everything needed to advertise and construct one interface.
-data InterfaceEntry (p :: Perspective) = InterfaceEntry
-  { version :: WlUInt
-  , construct :: ObjectID -> IO (Interface p)
-  }
-
-type ProtocolTable (p :: Perspective) = [(WlString, InterfaceEntry p)]
 
 -- vim: foldmethod=marker

@@ -1,5 +1,5 @@
 -- | Description : Decoding and encoding wire protocol values.
-module Sayland.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, mkMessage, ObjectID) where
+module Sayland.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, mkMessage, RawObjectID) where
 
 import Data.Binary (Get)
 import Data.Binary.Get (getByteString, getInt32le, getWord16le, getWord32le, skip)
@@ -38,8 +38,10 @@ A string, prefixed with a 32-bit integer specifying its length (in bytes), follo
 -}
 newtype WlString = WlString BS.ByteString deriving newtype (Show, Eq, Ord, IsString, Semigroup, Monoid)
 
--- | Wayland @object@. Equivalent to `WlUInt`
-type ObjectID = WlUInt
+{- | Wayland @object@. Equivalent to `WlUInt`.
+Used internally, users should use `ObjectID` as it offers more safety guaranatees using the type system.
+-}
+type RawObjectID = WlUInt
 
 {- | Wayland @array@.
 A blob of arbitrary data, prefixed with a 32-bit integer specifying its length (in bytes), then the verbatim contents of the array, padded to 32 bits with zero bytes.
