@@ -11,7 +11,6 @@ module Sayland.Protocols.Wayland (module Sayland.Protocols.Wayland) where
 
 import Control.Concurrent (isEmptyMVar, modifyMVar, threadDelay)
 import Control.Exception (try)
-import Data.Bimap qualified as BM
 import Data.Data (cast)
 import Data.Map qualified as Map
 import Data.Maybe (fromJust)

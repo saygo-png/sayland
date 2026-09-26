@@ -3,7 +3,6 @@
 -- | Description : Non protocol specific object management and communication.
 module Sayland.Object (getClientEnv, newObjectId, newObject, runNewObjReq, sendMessage', interfaceFromName, getInterface, getInterface') where
 
-import Data.Bimap qualified as BM
 import Data.Binary.Put
 import Data.ByteString qualified as BS
 import Data.Data (cast)
@@ -19,20 +18,32 @@ import Sayland.Wire
 import System.Console.ANSI (Color (..), ColorIntensity (..))
 
 -- | Increases the counter by 1 and returns it's new value.
-newObjectId :: Wayland p ObjectID
+newObjectId :: Wayland p RawObjectID
 newObjectId = do
   ClientEnv env <- ask
   liftIO $ atomicModifyIORef' env.counter $ dup . (+) 1
 
 -- | Insert the given interface to the objects map with provided id as key.
-newObject :: (Interface' i p) => TObjectID i -> i -> Wayland p i
+newObject :: (Interface i p) => TObjectID i -> i -> Wayland p i
 newObject (TObjectID intId) int = do
   objs <- (.objects) <$> getClientEnv
   _ <- atomicModifyIORef' objs $ dup . Map.insert intId (Interface int)
   pure int
 
+-- | Insert the given interface to the objects map with provided id as key.
+register :: (Object i) => TObjectID i -> (TObjectID i -> IO i) -> Wayland p i
+register oid mk = do
+  env <- getClientEnv
+  obj <- liftIO (mk oid)
+  _ <- atomicModifyIORef' objs $ dup . Map.insert intId (Interface int)
+  -- collided <- atomicModifyIORef' env.objects $ \m ->
+  --   case Map.insertLookupWithKey (\_ new _ -> new) (raw oid) (SomeObject obj) m of
+  --     (old, m') -> (m', isJust old)
+  -- when collided . throwIO $ Violation (raw oid) 0 "object id already in use"
+  pure obj
+
 -- | like `runRequest` but meant for use with creation requests. Returns the created interface.
-runNewObjReq :: forall a b. (Interface' a Client, Typeable b) => a -> (TObjectID b -> Request a) -> Wayland Client b
+runNewObjReq :: forall a b. (Interface a, Typeable b) => a -> (TObjectID b -> Request a) -> Wayland Client b
 runNewObjReq i mkReq = do
   newId <- TObjectID <$> newObjectId
   runRequest i $ mkReq newId
@@ -42,7 +53,7 @@ runNewObjReq i mkReq = do
       error "runNewObjReq: runRequest did not register the expected object (library bug)"
 
 -- | Send a message over the wire.
-sendMessage' :: (WaylandEvent e) => e -> TObjectID i -> Wayland p ()
+sendMessage' :: (Message m) => m -> TObjectID i -> Wayland p ()
 sendMessage' e (TObjectID o) = do
   colorize <- liftIO getColorize
   liftIO (traceIO $ colorize Vivid Yellow $ ("    -> " <>) $ showEvent o e)
@@ -74,11 +85,11 @@ getInterface (TObjectID objectID) = do
   (proxyInterface <=< Map.lookup objectID) <$> readIORef env.objects
 
 -- | Get an Interface by @TypeApplication
-getInterface' :: forall i p. (Typeable i) => ObjectID -> Wayland p (Maybe i)
+getInterface' :: forall i p. (Typeable i) => RawObjectID -> Wayland p (Maybe i)
 getInterface' objectID = do
   env <- getClientEnv
   (proxyInterface <=< Map.lookup objectID) <$> readIORef env.objects
 
 -- | Cast provided interface into proxied type.
-proxyInterface :: forall i p. (Typeable i) => Interface p -> Maybe i
-proxyInterface (Interface i) = cast i
+-- proxyInterface :: forall i p. (Typeable i) => Interface p -> Maybe i
+-- proxyInterface (Interface i) = cast i

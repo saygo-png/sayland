@@ -3,7 +3,6 @@ module Sayland.Connection (module Sayland.Connection) where
 
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (flushTQueue, modifyTVar, newTQueue, unGetTQueue, writeTQueue)
-import Data.Bimap qualified as BM
 import Data.Binary.Get
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL

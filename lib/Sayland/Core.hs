@@ -1,15 +1,33 @@
 {-# LANGUAGE TypeFamilyDependencies #-}
 
 -- | Description : Core of the library that most other modules depend on.
-module Sayland.Core (module Sayland.Core) where
+module Sayland.Core (
+  Wayland,
+  Perspective (..),
+  GlobalName (..),
+  Object (..),
+  TObjectID,
+  raw,
+  Global (..),
+  ClientEnvironment (..),
+  ServerEnvironment (..),
+  KnownPerspective (..),
+  EventHandler (..),
+  Interface (..),
+  SomeObject (..),
+  Message (..),
+  WaylandEnv (..),
+  InterfaceEntry (..),
+  ProtocolTable,
+) where
 
 import Control.Concurrent.STM (TQueue)
-import Data.Bimap qualified as BM
 import Data.Binary
 import Data.Data (typeOf)
 import GHC.Records (HasField)
 import Network.Socket (Socket)
 import Relude hiding (ByteString, get, put)
+import Sayland.Core.Internal (TObjectID, raw)
 import Sayland.Wire
 import System.Posix (Fd)
 
@@ -22,20 +40,9 @@ Created in order to prevent mixups between object ids and global names.
 newtype GlobalName = GlobalName WlUInt
   deriving newtype (Show, Eq, Ord, Num)
 
-type TObjectID :: forall k. k -> Type
-
-type role TObjectID phantom
-
--- | Type representing an `objectID` of a certain object.
-newtype TObjectID a = TObjectID RawObjectID deriving newtype (Show, Eq, Ord)
-
-instance WireFormat (TObjectID a) where
-  wireGet = TObjectID <$> wireGet
-  wirePut (TObjectID o) = wirePut o
-
--- | Class that allows to create an interface in IO with a wlid.
-class NewInterface a where
-  newInterface :: (MonadIO m) => TObjectID a -> m a
+class (Object i) => Global i where
+  global :: (Coercible (TObjectID i) i) => TObjectID i -> IO i
+  global = pure . coerce
 
 {- | Sum type representing a perspective.
 Used to make things reusable for clients and servers (compositors).
@@ -94,8 +101,8 @@ data EventHandler p where
 -- | Number representing a Wayland Client.
 type ClientID = Int
 
-{- | Class defining an Interface as a collection of events and requests which has an `ObjectID`, version and name.
-This does not include implementations of events and requests which are supplied by `Interface'`.
+{- | Class defining an Interface as a collection of events and requests which has a `TObjectID`, version and name.
+This does not include implementations of events and requests which are supplied by `Interface`.
 -}
 class
   ( Message (Event a)
@@ -110,10 +117,9 @@ class
   getInterfaceVersion :: Proxy a -> WlUInt
   getInterfaceName :: Proxy a -> WlString
 
-type role SomeObject nominal
-
-data SomeObject (p :: Perspective) where
-  SomeObject :: (Object i, Typeable i) => i -> SomeObject p
+-- | Existential type for holding different objects in one structure.
+data SomeObject where
+  SomeObject :: (Object i) => i -> SomeObject
 
 class (Typeable m) => Message m where
   getMessage :: Word16 -> WireGet m
@@ -121,15 +127,13 @@ class (Typeable m) => Message m where
   getOpcode :: m -> Word16
   showMessage :: RawObjectID -> m -> String
 
-type role InterfaceEntry nominal
-
 -- | Everything needed to advertise and construct one interface.
-data InterfaceEntry (p :: Perspective) = InterfaceEntry
-  { version :: WlUInt
-  , construct :: RawObjectID -> IO (SomeObject p)
+data InterfaceEntry = InterfaceEntry
+  { version :: Word32
+  , construct :: RawObjectID -> IO SomeObject
   }
 
-type ProtocolTable (p :: Perspective) = [(WlString, InterfaceEntry p)]
+type ProtocolTable = [(WlString, InterfaceEntry)]
 
 type role WaylandEnv nominal
 
@@ -147,7 +151,7 @@ data ServerEnvironment = ServerEnvironment
   -- ^ Currently connected clients.
   , clientSerial :: TVar ClientID
   -- ^ Client counter, for identifying individual clients.
-  , interfaceTable :: IORef (Map WlString (InterfaceEntry Server))
+  , interfaceTable :: IORef (Map WlString InterfaceEntry)
   -- ^ Table of interfaces supported by the server. This allows for adding in custom protocols.
   , eventHandlers :: IORef [EventHandler Server]
   -- ^ Server-side event handlers.
@@ -161,11 +165,11 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
   -- ^ Socket the client connects to.
   , counter :: IORef RawObjectID
   -- ^ Mutable counter used to derive `objectID`s with increasing values.
-  , objects :: IORef (Map RawObjectID (SomeObject p))
+  , objects :: IORef (Map RawObjectID SomeObject)
   -- ^ Mutable `Map` of `objectID`s to interfaces they represent.
-  , globals :: IORef (BM.Bimap {-interface name-} WlString GlobalName)
-  -- ^ `Bimap` of globals advertised to the server stored as an interface name and `GlobalName`.
-  , interfaceTable :: IORef (Map WlString (InterfaceEntry p))
+  , globals :: IORef (Map WlString GlobalName)
+  -- ^ `Map` of globals advertised to the server indexable by interface name.
+  , interfaceTable :: IORef (Map WlString InterfaceEntry)
   -- ^ Table of interfaces supported by the client. This allows for adding in custom protocols.
   , eventHandlers :: IORef [EventHandler p]
   -- ^ Custom event handlers that run on received events.

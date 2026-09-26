@@ -47,7 +47,7 @@ generateProtocolTable e formatter =
             $ AppE
               (AppE (ConE 'InterfaceEntry) (AppE (VarE 'getInterfaceVersion) proxy))
             $ LamE [VarP oid]
-            $ AppE (AppE (VarE '(<$>)) (ConE 'Interface))
+            $ AppE (AppE (VarE '(<$>)) (ConE 'SomeObject))
             $ SigE
               (AppE (VarE 'newInterface) (AppE (ConE 'TObjectID) (VarE oid)))
               (AppT (ConT ''IO) (ConT . mkName $ formatter x))
@@ -313,10 +313,10 @@ mkShow :: String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkShow interfaceName prefix prefix2 events =
   mapM (pure . mkShowC) (fmap snd events) <&> \m ->
     bool
-      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''ObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
+      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''RawObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
       , FunD (mkName prefix) m
       ]
-      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''ObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
+      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''RawObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
       , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]
       ]
       (null m)
@@ -427,7 +427,7 @@ mkWlEvent interfaceName prefix2 events = do
       get' = mkParser interfaceName "getEvent" prefix2 events
   opc' <- mkOpcodeGetter interfaceName "getOpcode" prefix2 events
   show' <- mkShow interfaceName "showEvent" prefix2 events
-  pure [InstanceD Nothing [] (AppT (ConT ''WaylandEvent) $ ConT . mkName $ prefix2 <> interfaceName) $ put' <> get' <> opc' <> show']
+  pure [InstanceD Nothing [] (AppT (ConT ''Message) $ ConT . mkName $ prefix2 <> interfaceName) $ put' <> get' <> opc' <> show']
 
 -- | Create all definitions for a single interface - the class, parsers, builders, enums, opcodes etc.
 loadInterface :: (String -> String) -> Bool -> Element -> Q [Dec]
@@ -453,12 +453,12 @@ loadInterface formatter isIO int = do
       , mkEvents isIO formatter name' "Event" events
       , mkWlEvent name' "Event_" $ zip [0 ..] events
       , mkWlEvent name' "Request_" $ zip [0 ..] requests
-      , -- IsInterface instance
+      , -- Interface instance
         pure
           [ InstanceD
               Nothing
               []
-              (AppT (ConT ''IsInterface) ifaceT)
+              (AppT (ConT ''Interface) ifaceT)
               [ TySynInstD $ TySynEqn Nothing (AppT (ConT ''Event) ifaceT) (ConT $ mkName $ "Event_" <> name')
               , TySynInstD $ TySynEqn Nothing (AppT (ConT ''Request) ifaceT) (ConT $ mkName $ "Request_" <> name')
               , FunD
@@ -511,7 +511,7 @@ argType formatter intName element = case findAttr (qname "enum") element of
     Just "fd" -> ConT ''WlFd
     Just "object" -> case findAttr (qname "interface") element of
       Just x -> AppT (ConT ''TObjectID) . ConT . mkName $ formatter x
-      Nothing -> ConT ''ObjectID
+      Nothing -> ConT ''RawObjectID
     Just y -> error $ "unknown type: " <> fromString y
 
 -- vim: foldmethod=marker
