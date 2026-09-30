@@ -93,7 +93,7 @@ data Wl_callback = Wl_callback {wlid :: TObjectID Wl_callback, done :: MVar ()}
 
 newtype Wl_compositor = Wl_compositor {wlid :: TObjectID Wl_compositor}
 
-data Wl_shm_pool = Wl_shm_pool {wlid :: TObjectID Wl_shm_pool, fd :: Fd, size :: IORef WlInt, ptr :: IORef (Ptr ())}
+data Wl_shm_pool = Wl_shm_pool {wlid :: TObjectID Wl_shm_pool, fd :: Fd, size :: IORef WlInt, ptr :: IORef (Ptr ()), references :: IORef Int}
 
 data Wl_shm = Wl_shm {wlid :: TObjectID Wl_shm, formats :: IORef [Enum_wl_shm_format]}
 
@@ -102,10 +102,16 @@ class BufferBackend a where
 
 data Buffer where Buffer :: (Typeable a, BufferBackend a) => a -> Buffer
 
-data ShmBuffer = ShmBuffer {offset :: WlInt, stride :: WlInt, pool :: TObjectID Wl_shm_pool, format :: Enum_wl_shm_format}
+data ShmBuffer = ShmBuffer {offset :: WlInt, stride :: WlInt, pool :: Wl_shm_pool, format :: Enum_wl_shm_format}
 
 instance BufferBackend ShmBuffer where
-  releaseBuffer _ = pass
+  releaseBuffer (ShmBuffer{pool}) = do
+    refs <- atomicModifyIORef pool.references (\x -> (x - 1, x - 1))
+    when (refs == 0) $ do
+      ptr <- readIORef pool.ptr
+      WlInt size <- readIORef pool.size
+      liftIO $ munmap ptr (fromIntegral size)
+    pass
 
 instance BufferBackend () where
   releaseBuffer _ = pass
@@ -256,7 +262,8 @@ instance NewInterface Wl_shm_pool where
   newInterface i = do
     ref <- newIORef 0
     ptrRef <- newIORef nullPtr
-    pure $ Wl_shm_pool i 0 ref ptrRef
+    ref_count <- newIORef 0
+    pure $ Wl_shm_pool i 0 ref ptrRef ref_count
 
 instance NewInterface Wl_shm where
   newInterface i = newIORef [] <&> Wl_shm i
@@ -472,11 +479,16 @@ instance Interface' Wl_compositor Server where
 -- Wl_shm_pool {{{
 instance Interface' Wl_shm_pool Client where
   runRequest shm_pool request@(Request_wl_shm_pool_create_buffer bufId offset width height stride format) = do
-    let buffer = Wl_buffer{wlid = bufId, width, height, buffer = Buffer ShmBuffer{pool = shm_pool.wlid, ..}}
+    void $ atomicModifyIORef shm_pool.references (\x -> (x + 1, ()))
+    let buffer = Wl_buffer{wlid = bufId, width, height, buffer = Buffer ShmBuffer{pool = shm_pool, ..}}
     void $ newObject bufId buffer
     sendMessage' request shm_pool.wlid
   runRequest shm_pool request@Request_wl_shm_pool_destroy = do
     sendMessage' request shm_pool.wlid
+    refs <- atomicModifyIORef shm_pool.references (\x -> (x - 1, x - 1))
+    ptr <- readIORef shm_pool.ptr
+    WlInt size <- readIORef shm_pool.size
+    when (refs == 0) $ liftIO $ munmap ptr (fromIntegral size)
     dropObject shm_pool.wlid
   runRequest shm_pool request@(Request_wl_shm_pool_resize size') = do
     liftIO . setFdSize shm_pool.fd $ fromIntegral size'
@@ -504,10 +516,14 @@ instance Interface' Wl_shm_pool Client where
 
 instance Interface' Wl_shm_pool Server where
   runRequest shm_pool (Request_wl_shm_pool_create_buffer bufId offset width height stride format) = do
-    ClientServerEnv{} <- ask
-    let buffer = Wl_buffer{wlid = bufId, width, height, buffer = Buffer ShmBuffer{pool = shm_pool.wlid, ..}}
+    void $ atomicModifyIORef shm_pool.references (\x -> (x + 1, ()))
+    let buffer = Wl_buffer{wlid = bufId, width, height, buffer = Buffer ShmBuffer{pool = shm_pool, ..}}
     void $ newObject bufId buffer
   runRequest shm_pool Request_wl_shm_pool_destroy = do
+    refs <- atomicModifyIORef shm_pool.references (\x -> (x - 1, x - 1))
+    ptr <- readIORef shm_pool.ptr
+    WlInt size <- readIORef shm_pool.size
+    when (refs == 0) $ liftIO $ munmap ptr (fromIntegral size)
     dropObject shm_pool.wlid
   runRequest shm_pool (Request_wl_shm_pool_resize size') = do
     -- liftIO . setFdSize shm_pool.fd $ fromIntegral size'
@@ -551,7 +567,9 @@ instance Interface' Wl_shm Client where
       Left (e :: SomeException) -> liftIO (traceIO $ "mmap failed: " ++ show e) >> undefined
       Right ptr' -> liftIO (traceIO $ "mmap OK, ptr = " ++ show ptr') $> ptr'
     ptr <- newIORef ptr'
-    void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd, size = sizeRef, ptr}
+    poolObj <- newInterface poolId
+    references <- newIORef 1
+    void $ newObject poolId poolObj{fd, size = sizeRef, ptr, references}
     sendMessage' request shm.wlid
   runRequest shm request@(Request_wl_shm_release{}) = do
     sendMessage' request shm.wlid
@@ -576,8 +594,10 @@ instance Interface' Wl_shm Server where
       Left (e :: SomeException) -> liftIO (traceIO $ "mmap failed: " ++ show e) >> undefined
       Right ptr' -> liftIO (traceIO $ "mmap OK, ptr = " ++ show ptr') $> ptr'
     sizeRef <- newIORef size'
-    ptrRef <- newIORef ptr'
-    void $ newObject poolId $ Wl_shm_pool{wlid = poolId, fd = fd, size = sizeRef, ptr = ptrRef}
+    ptr <- newIORef ptr'
+    poolObj <- newInterface poolId
+    references <- newIORef 1
+    void $ newObject poolId poolObj{fd, size = sizeRef, ptr, references}
   runRequest shm Request_wl_shm_release = do
     ClientServerEnv{} <- ask
     dropObject shm.wlid
