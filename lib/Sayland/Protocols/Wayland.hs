@@ -218,6 +218,7 @@ data Wl_surface = Wl_surface
   , cuQueue :: IORef (Seq.Seq ContentUpdate)
   , role :: IORef SurfaceRole
   , state :: IORef SurfaceState
+  , outputs :: IORef [TObjectID Wl_output]
   }
 
 data Wl_subsurface = Wl_subsurface
@@ -236,7 +237,27 @@ newtype Wl_keyboard = Wl_keyboard {wlid :: TObjectID Wl_keyboard}
 
 newtype Wl_touch = Wl_touch {wlid :: TObjectID Wl_touch}
 
-newtype Wl_output = Wl_output {wlid :: TObjectID Wl_output}
+data OutputGeometry = OutputGeometry {outputPosition :: (WlInt, WlInt), outputSize :: (WlInt, WlInt), subpixel :: Enum_wl_output_subpixel, make :: WlString, model :: WlString, outputTransform :: Enum_wl_output_transform}
+
+data OutputMode = OutputMode {outputFlags :: Enum_wl_output_mode, modeWidth :: WlInt, modeHeight :: WlInt, modeRefresh :: WlInt}
+
+data OutputUpdate = OutputUpdate
+  { updateGeometry :: Maybe OutputGeometry
+  , updateMode :: Maybe OutputMode
+  , updateScale :: Maybe WlInt
+  , updateName :: Maybe WlString
+  , updateDescription :: Maybe WlString
+  }
+
+data Wl_output = Wl_output
+  { wlid :: TObjectID Wl_output
+  , outputGeometry :: IORef OutputGeometry
+  , outputMode :: IORef OutputMode
+  , outputScale :: IORef WlInt
+  , outputName :: IORef WlString
+  , outputDescription :: IORef WlString
+  , outputUpdate :: IORef OutputUpdate
+  }
 
 newtype Wl_subcompositor = Wl_subcompositor {wlid :: TObjectID Wl_subcompositor}
 
@@ -245,6 +266,16 @@ newtype Wl_fixes = Wl_fixes {wlid :: TObjectID Wl_fixes}
 $(loadProtocolFile wlFormatter False "protocols/wayland.xml")
 
 -- NewInterface instances {{{
+
+instance NewInterface Wl_output where
+  newInterface wlid = do
+    outputGeometry <- newIORef OutputGeometry{outputPosition = (0, 0), outputSize = (0, 0), subpixel = Enum_wl_output_subpixel_horizontal_rgb, make = "", model = "", outputTransform = Enum_wl_output_transform_normal}
+    outputMode <- newIORef OutputMode{outputFlags = Enum_wl_output_mode{mode_current = False, mode_preferred = False}, modeWidth = 0, modeHeight = 0, modeRefresh = 0}
+    outputScale <- newIORef 1
+    outputName <- newIORef ""
+    outputDescription <- newIORef ""
+    outputUpdate <- newIORef $ OutputUpdate Nothing Nothing Nothing Nothing Nothing
+    pure Wl_output{wlid, outputGeometry, outputMode, outputScale, outputName, outputDescription, outputUpdate}
 
 instance NewInterface Wl_buffer where
   newInterface i = pure Wl_buffer{wlid = i, width = 0, height = 0, buffer = Buffer ()}
@@ -872,8 +903,8 @@ instance Interface' Wl_surface Client where
           Nothing -> atomicWriteIORef surface'.role $ SurfaceRole ()
       Nothing -> pass
     sendMessage' request surface'.wlid
-  runEvent _ (Event_wl_surface_enter _) = pass
-  runEvent _ (Event_wl_surface_leave _) = pass
+  runEvent surface (Event_wl_surface_enter output) = atomicModifyIORef surface.outputs $ (,()) . (output :)
+  runEvent surface (Event_wl_surface_leave output) = atomicModifyIORef surface.outputs $ (,()) . filter (/= output)
   runEvent _ (Event_wl_surface_preferred_buffer_scale _) = pass
   runEvent _ (Event_wl_surface_preferred_buffer_transform _) = pass
 
@@ -910,8 +941,12 @@ instance Interface' Wl_surface Server where
           Nothing -> atomicWriteIORef surface.role $ SurfaceRole ()
       Nothing -> pass
     atomicModifyIORef' surface.cuQueue $ (,()) . (cu{cuSurface = surface.wlid} Seq.<|)
-  runEvent _surface (Event_wl_surface_enter _) = pass
-  runEvent _surface (Event_wl_surface_leave _) = pass
+  runEvent surface event@(Event_wl_surface_enter output) = do
+    atomicModifyIORef surface.outputs $ (,()) . (output :)
+    sendMessage' event surface.wlid
+  runEvent surface event@(Event_wl_surface_leave output) = do
+    atomicModifyIORef surface.outputs $ (,()) . filter (/= output)
+    sendMessage' event surface.wlid
   runEvent _surface (Event_wl_surface_preferred_buffer_scale _) = pass
   runEvent _surface (Event_wl_surface_preferred_buffer_transform _) = pass
 
@@ -981,15 +1016,52 @@ instance Interface' Wl_touch Server
 
 -- Wl_output {{{
 instance Interface' Wl_output Client where
-  runRequest _ (Request_wl_output_release{}) = pass
-  runEvent _ (Event_wl_output_geometry{}) = pass
-  runEvent _ (Event_wl_output_mode{}) = pass
-  runEvent _ (Event_wl_output_done{}) = pass
-  runEvent _ (Event_wl_output_scale{}) = pass
-  runEvent _ (Event_wl_output_name{}) = pass
-  runEvent _ (Event_wl_output_description{}) = pass
+  runRequest output request@Request_wl_output_release = do
+    dropObject output.wlid
+    sendMessage' request output.wlid
+  runEvent output (Event_wl_output_geometry x y width height subpixel make model outputTransform) =
+    atomicModifyIORef output.outputUpdate $ \upd -> (upd{updateGeometry = Just OutputGeometry{outputPosition = (x, y), outputSize = (width, height), subpixel, make, model, outputTransform}}, ())
+  runEvent output (Event_wl_output_mode outputFlags modeWidth modeHeight modeRefresh) =
+    atomicModifyIORef output.outputUpdate $ \upd -> (upd{updateMode = Just OutputMode{outputFlags, modeWidth, modeHeight, modeRefresh}}, ())
+  runEvent output Event_wl_output_done = do
+    update <- readIORef output.outputUpdate
+    whenJust update.updateGeometry $ writeIORef output.outputGeometry
+    whenJust update.updateMode $ writeIORef output.outputMode
+    whenJust update.updateScale $ writeIORef output.outputScale
+    whenJust update.updateName $ writeIORef output.outputName
+    whenJust update.updateDescription $ writeIORef output.outputDescription
+  runEvent output (Event_wl_output_scale factor) =
+    atomicModifyIORef output.outputUpdate $ \upd -> (upd{updateScale = Just factor}, ())
+  runEvent output (Event_wl_output_name name) =
+    atomicModifyIORef output.outputUpdate $ \upd -> (upd{updateName = Just name}, ())
+  runEvent output (Event_wl_output_description description) =
+    atomicModifyIORef output.outputUpdate $ \upd -> (upd{updateDescription = Just description}, ())
 
-instance Interface' Wl_output Server
+instance Interface' Wl_output Server where
+  runRequest output Request_wl_output_release = dropObject output.wlid
+  runEvent output event@(Event_wl_output_geometry x y width height subpixel make model outputTransform) = do
+    atomicModifyIORef output.outputUpdate $ \upd -> (upd{updateGeometry = Just OutputGeometry{outputPosition = (x, y), outputSize = (width, height), subpixel, make, model, outputTransform}}, ())
+    sendMessage' event output.wlid
+  runEvent output event@(Event_wl_output_mode outputFlags modeWidth modeHeight modeRefresh) = do
+    atomicModifyIORef output.outputUpdate $ \upd -> (upd{updateMode = Just OutputMode{outputFlags, modeWidth, modeHeight, modeRefresh}}, ())
+    sendMessage' event output.wlid
+  runEvent output event@Event_wl_output_done = do
+    update <- readIORef output.outputUpdate
+    whenJust update.updateGeometry $ writeIORef output.outputGeometry
+    whenJust update.updateMode $ writeIORef output.outputMode
+    whenJust update.updateScale $ writeIORef output.outputScale
+    whenJust update.updateName $ writeIORef output.outputName
+    whenJust update.updateDescription $ writeIORef output.outputDescription
+    sendMessage' event output.wlid
+  runEvent output event@(Event_wl_output_scale factor) = do
+    atomicModifyIORef output.outputUpdate $ \upd -> (upd{updateScale = Just factor}, ())
+    sendMessage' event output.wlid
+  runEvent output event@(Event_wl_output_name name) = do
+    atomicModifyIORef output.outputUpdate $ \upd -> (upd{updateName = Just name}, ())
+    sendMessage' event output.wlid
+  runEvent output event@(Event_wl_output_description description) = do
+    atomicModifyIORef output.outputUpdate $ \upd -> (upd{updateDescription = Just description}, ())
+    sendMessage' event output.wlid
 
 -- }}}
 
