@@ -3,8 +3,7 @@ module Client.BasicWindow (test) where
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.STM (writeTMVar)
 import Control.Exception (bracket, finally, handle, throwTo)
-import Data.ByteString (hPut, pack)
-import Data.Maybe (fromJust)
+import Data.ByteString (hPut)
 import GHC.IO.Handle
 import Network.Socket (close)
 import Relude hiding (hFlush)
@@ -14,12 +13,10 @@ import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, own
 import System.Random (randomIO)
 import System.Timeout (timeout)
 import Test.Tasty.HUnit
+import TestUtils
 
-c :: (Coercible a b) => a -> b
-c = coerce
-
-table :: ProtocolTable Client
-table = waylandClientTable <> xdg_shellClientTable
+table :: ProtocolTable
+table = waylandTable <> xdg_shellTable
 
 test :: Assertion
 test = main
@@ -32,10 +29,8 @@ program = do
   ClientEnv env <- ask
   running :: MVar () <- newEmptyMVar
 
-  display <- fromJust <$> getInterface wlDisplayId
-  registryId <- TObjectID <$> newObjectId
-  runRequest display $ Request_wl_display_get_registry registryId
-  registry <- fromJust <$> getInterface registryId
+  display <- getWlDisplay
+  registry <- newObject display Request_wl_display_get_registry
 
   -- A crash in the event loop has to reach the main thread. Otherwise the
   -- `finally` below just fills `running` and the daemon exits successfully despite errors.
@@ -50,81 +45,46 @@ program = do
       (handle rethrow $ putStrLn "\n--- Starting event loop ---" >> runReaderT (clientLoop env.socket) (ClientEnv env))
       (close env.socket >> putMVar running ())
 
+  -- Round trip, so the registry has advertised its globals before binding to them.
+  callback <- newObject display Request_wl_display_sync
+  takeMVar callback.done
+
   putStrLn "Binding to required interfaces..."
-  wlShmId :: TObjectID Wl_shm <- TObjectID . fromJust <$> bindToInterface registry "wl_shm"
-  wl_shm <- fromJust <$> getInterface wlShmId
+  wl_shm <- bindToInterface @Wl_shm registry
+  wl_compositor <- bindToInterface @Wl_compositor registry
+  xdg_wm_base <- bindToInterface @Xdg_wm_base registry
 
-  wlCompositorId :: TObjectID Wl_compositor <- TObjectID . fromJust <$> bindToInterface registry "wl_compositor"
-  wl_compositor <- fromJust <$> getInterface wlCompositorId
-
-  wlSurfaceId :: TObjectID Wl_surface <- TObjectID <$> newObjectId
-  runRequest wl_compositor $ Request_wl_compositor_create_surface wlSurfaceId
-  surface' <- fromJust <$> getInterface wlSurfaceId
-
-  xdgWmBaseId :: TObjectID Xdg_wm_base <- TObjectID . fromJust <$> bindToInterface registry "xdg_wm_base"
-  xdg_wm_base <- fromJust <$> getInterface xdgWmBaseId
-
-  xdgSurfaceId :: TObjectID Xdg_surface <- TObjectID <$> newObjectId
-  runRequest xdg_wm_base $ Request_xdg_wm_base_get_xdg_surface xdgSurfaceId wlSurfaceId
-  xdg_surface <- fromJust <$> getInterface xdgSurfaceId
-
-  xdgToplevelId :: TObjectID Xdg_toplevel <- TObjectID <$> newObjectId
-  runRequest xdg_surface $ Request_xdg_surface_get_toplevel xdgToplevelId
+  surface <- newObject wl_compositor Request_wl_compositor_create_surface
+  xdg_surface <- newObject xdg_wm_base $ \i -> Request_xdg_wm_base_get_xdg_surface i surface.wlid
+  _xdg_toplevel <- newObject xdg_surface Request_xdg_surface_get_toplevel
 
   configured <- liftIO newEmptyTMVarIO
   modifyIORef env.eventHandlers $ (:) $ EventHandler $ \_oid -> \case
     (Event_xdg_surface_configure _) -> do
       atomically $ writeTMVar configured ()
-  runRequest surface' Request_wl_surface_commit
-  liftIO . atomically $ takeTMVar configured
-  bufferWidth <- liftIO $ newIORef 512
-  bufferHeight <- liftIO $ newIORef 512
+  sendMsg surface Request_wl_surface_commit
+  atomically $ takeTMVar configured
+  bufferWidth <- newIORef 512
+  bufferHeight <- newIORef 512
   shm_pool_rand :: Int <- randomIO
   let colorChannels :: Int32 = 4
   let
     makeSharedMemoryObject = shmOpen ("basic-window" <> show shm_pool_rand) (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
     useSharedMemoryObject fileDescriptor =
       usingReaderT (ClientEnv env) $ do
-        bw <- liftIO $ readIORef bufferWidth
-        bh <- liftIO $ readIORef bufferHeight
+        bw <- readIORef bufferWidth
+        bh <- readIORef bufferHeight
         let frameSize = bw * bh * colorChannels
         liftIO . setFdSize fileDescriptor $ fromIntegral frameSize
-        wlShmPoolId :: TObjectID Wl_shm_pool <- TObjectID <$> newObjectId
-        runRequest wl_shm $ Request_wl_shm_create_pool wlShmPoolId (c fileDescriptor) (c frameSize)
-        wl_shm_pool <- fromJust <$> getInterface wlShmPoolId
-        wlBufferId :: TObjectID Wl_buffer <- TObjectID <$> newObjectId
-        runRequest wl_shm_pool $ Request_wl_shm_pool_create_buffer wlBufferId 0 (c bw) (c bh) (c (bw * colorChannels)) Enum_wl_shm_format_argb8888
+        wl_shm_pool <- newObject wl_shm $ \i -> Request_wl_shm_create_pool i (c fileDescriptor) (c frameSize)
+        wl_buffer <- newObject wl_shm_pool $ \i -> Request_wl_shm_pool_create_buffer i 0 (c bw) (c bh) (c (bw * colorChannels)) Enum_wl_shm_format_argb8888
         fileHandle <- liftIO $ fdToHandle fileDescriptor
 
-        liftIO $ hPut fileHandle $ image bw bh
+        liftIO $ hPut fileHandle $ rainbowImage bw bh
         liftIO $ hFlush fileHandle
-        runRequest surface' $ Request_wl_surface_attach wlBufferId 0 0
-        runRequest surface' Request_wl_surface_commit
+        sendMsg surface $ Request_wl_surface_attach wl_buffer.wlid 0 0
+        sendMsg surface Request_wl_surface_commit
         -- Wait for exit
         takeMVar running
 
   liftIO . void $ bracket makeSharedMemoryObject (const $ shmUnlink $ "basic-window" <> show shm_pool_rand) useSharedMemoryObject
-
--- | Rainbow image :D
-image :: Int32 -> Int32 -> ByteString
-image bufferWidth bufferHeight =
-  generateBGRA8 $ \x y ->
-    let tx = fi x / fi @Int32 (fi bufferWidth - 1) :: Double
-        ty = fi y / fi @Int32 (fi bufferHeight - 1) :: Double
-        b = round $ tx * 255 -- left -> right
-        g = round $ ty * 255 -- top -> bottom
-        r = round $ (1 - tx) * 255 -- right -> left
-        a = round $ (1 - ty) * 255 -- bottom -> top
-     in (b, g, r, a)
-  where
-    fi :: forall a b. (Integral a, Num b) => a -> b
-    fi = fromIntegral
-    generateBGRA8 :: (Int32 -> Int32 -> (Word8, Word8, Word8, Word8)) -> ByteString
-    generateBGRA8 pixelFn =
-      pack
-        [ byte
-        | y <- [0 .. fi bufferHeight - 1]
-        , x <- [0 .. fi bufferWidth - 1]
-        , let (b, g, r, a) = pixelFn x y
-        , byte <- [b, g, r, a]
-        ]

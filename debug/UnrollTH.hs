@@ -1,7 +1,7 @@
 module Main (main) where
 
 import Language.Haskell.TH
-import Sayland.Codegen
+import Sayland.Internal.Codegen
 import System.Process (readProcess)
 import Prelude
 

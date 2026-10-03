@@ -1,6 +1,5 @@
--- | Description : Re-exports all other modules of Sayland.
+-- | Description: Re-exports all public modules of Sayland.
 module Sayland (
-  module Sayland.Codegen,
   module Sayland.Connection,
   module Sayland.Core,
   module Sayland.Object,
@@ -11,7 +10,6 @@ module Sayland (
   module Sayland.Protocols.XdgShell,
 ) where
 
-import Sayland.Codegen
 import Sayland.Connection
 import Sayland.Core
 import Sayland.Object

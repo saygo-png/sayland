@@ -1,20 +1,32 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 
--- | Description : Generate Haskell from Wayland xml protocol files.
-module Sayland.Codegen (module Sayland.Codegen) where
+{- | Description : Generate Haskell from Wayland xml protocol files.
 
+This API is internal, so it is quite messy and is highly unstable
+You can still use it if you want to implement your own protocols.
+-}
+module Sayland.Internal.Codegen (module Sayland.Internal.Codegen) where
+
+import Control.Applicative
+import Control.Monad
 import Data.Binary
 import Data.Bits
+import Data.Bool
+import Data.ByteString qualified as BS
 import Data.Char (isSpace, toUpper)
-import Data.Foldable (Foldable (foldl))
+import Data.Functor
+import Data.List
 import Data.List qualified as L
-import Data.Maybe (fromJust)
+import Data.Maybe (catMaybes, fromJust)
+import Data.Proxy
+import Data.String
+import GHC.Generics (Generic)
+import GHC.TypeError (Unsatisfiable)
 import Language.Haskell.TH
 import Language.Haskell.TH.Syntax
-import Relude hiding (Type, get, put)
-import Relude.Unsafe qualified as Unsafe
-import Sayland.Core
+import Sayland.Internal.Core
+import Sayland.Internal.Prelude
 import Sayland.Wire
 import System.Directory (listDirectory)
 import System.FilePath (takeExtension, (</>))
@@ -24,37 +36,92 @@ import Text.XML.Light
 qname :: String -> QName
 qname x = QName x Nothing Nothing
 
-{- | Generates the client and server tables for the given protocol, using
-formatter to format interface type names - as they are to be defined by the user.
--}
-generateProtocolTable :: Element -> (String -> String) -> [Dec]
-generateProtocolTable e formatter =
-  [ SigD cname $ AppT (ConT ''ProtocolTable) (PromotedT 'Client)
-  , ValD (VarP cname) (NormalB $ ListE defs) []
-  , SigD sname $ AppT (ConT ''ProtocolTable) (PromotedT 'Server)
-  , ValD (VarP sname) (NormalB $ ListE defs) []
+-- | Look up a required attribute, failing the splice with the element's name when it is absent.
+attr :: String -> Element -> Q String
+attr n el =
+  maybe
+    (fail $ "sayland: element `" <> qName (elName el) <> "` has no `" <> n <> "` attribute")
+    pure
+    (findAttr (qname n) el)
+
+-- | Interfaces created by a @new_id@ argument somewhere in this protocol.
+createdInterfaces :: Element -> [String]
+createdInterfaces e =
+  [ iface
+  | int <- findChildren (qname "interface") e
+  , msg <- findChildren (qname "request") int <> findChildren (qname "event") int
+  , arg <- findChildren (qname "arg") msg
+  , findAttr (qname "type") arg == Just "new_id"
+  , Just iface <- [findAttr (qname "interface") arg]
   ]
+
+{- | Whether an interface has a usable 'Object' instance. I.e it exists, and it isn't an 'Unsatisfiable' placeholder.
+Also throw error if an object is `Unsatisfiable` but the global instance of it isn't.
+-}
+isImplemented :: Name -> Q Bool
+isImplemented ty =
+  reifyInstances ''Object [ConT ty] >>= \case
+    [InstanceD _ ctx _ _]
+      | any isUnsatisfiable ctx -> do
+          hasGlobal <- isInstance ''Global [ConT ty]
+          unless hasGlobal
+            . fail
+            $ "sayland: "
+            <> nameBase ty
+            <> " is a global with an Unsatisfiable `Object` instance. declare the same for `Global`."
+          pure False
+      | otherwise -> pure True
+    _ -> pure False
   where
-    protocol = fromJust $ findAttr (qname "name") e
-    cname = mkName $ protocol <> "ClientTable"
-    sname = mkName $ protocol <> "ServerTable"
-    oid = mkName "objectId"
-    entry x =
-      TupE
-        [ Just $ AppE (VarE 'getInterfaceName) proxy
-        , -- InterfaceEntry <version> <constructor>
-          Just
-            $ AppE
-              (AppE (ConE 'InterfaceEntry) (AppE (VarE 'getInterfaceVersion) proxy))
-            $ LamE [VarP oid]
-            $ AppE (AppE (VarE '(<$>)) (ConE 'Interface))
-            $ SigE
-              (AppE (VarE 'newInterface) (AppE (ConE 'TObjectID) (VarE oid)))
-              (AppT (ConT ''IO) (ConT . mkName $ formatter x))
-        ]
-      where
-        proxy = SigE (ConE 'Proxy) (AppT (ConT ''Proxy) (ConT . mkName $ formatter x))
-    defs = entry . fromJust . findAttr (qname "name") <$> findChildren (qname "interface") e
+    isUnsatisfiable (AppT (ConT n) _) = n == ''Unsatisfiable
+    isUnsatisfiable _ = False
+
+{- | Generates the table for the given protocol, using formatter to format
+interface type names - as they are to be defined by the user. Only globals are
+listed: an interface created by a @new_id@ is not registry-bindable. Also emits
+the `Global` instances for those globals whose only field is @wlid@.
+-}
+generateProtocolTable :: Bool -> Element -> (String -> String) -> Q [Dec]
+generateProtocolTable isIO e formatter = do
+  protocol <- attr "name" e
+  names <- traverse (attr "name") (findChildren (qname "interface") e)
+  let tname = mkName $ protocol <> "Table"
+  implementedGlobals <-
+    let
+      created = createdInterfaces e
+      globals = filter (\n -> n /= "wl_display" && n `notElem` created) names
+     in
+      if isIO
+        then pure globals
+        else filterM (\n -> lookupTypeName (formatter n) >>= maybe (pure False) isImplemented) globals
+  instances <- if isIO then pure [] else concat <$> traverse globalInstance implementedGlobals
+  defs <- traverse entry implementedGlobals
+  pure
+    $ instances
+    <> [ SigD tname (ConT ''ProtocolTable)
+       , ValD (VarP tname) (NormalB $ ListE defs) []
+       ]
+  where
+    globalInstance n =
+      lookupTypeName (formatter n) >>= \case
+        Just ty -> deriveGlobal ty
+        Nothing -> fail $ "sayland: protocol declares global `" <> n <> "` but no type `" <> formatter n <> "` is in scope."
+    entry x = do
+      oid <- newName "oid"
+      pure
+        $ TupE
+          [ Just $ AppE (VarE 'getInterfaceName) (proxy x)
+          , -- InterfaceEntry <version> <constructor>
+            Just
+              $ AppE
+                (AppE (ConE 'InterfaceEntry) (AppE (VarE 'getInterfaceVersion) (proxy x)))
+              $ LamE [VarP oid]
+              $ AppE (AppE (VarE '(<$>)) (ConE 'SomeObject))
+              $ SigE
+                (AppE (VarE 'global) (AppE (ConE 'TObjectID) (VarE oid)))
+                (AppT (ConT ''IO) (ConT . mkName $ formatter x))
+          ]
+    proxy x = SigE (ConE 'Proxy) (AppT (ConT ''Proxy) (ConT . mkName $ formatter x))
 
 -- Haddock {{{
 
@@ -92,36 +159,40 @@ escapeHaddock = concatMap $ \c -> if c `elem` ("\\/'\"@<>[]#" :: String) then ['
 No-op under `isIO`, where there is no splice to finalize.
 -}
 docDecl :: Bool -> Name -> Maybe String -> Q ()
-docDecl isIO n = unless isIO . traverse_ (addModFinalizer . putDoc (DeclDoc n))
+docDecl isIO n = unless isIO . mapM_ (addModFinalizer . putDoc (DeclDoc n))
 
 -- | Attach a Haddock comment to the @i@th argument of a function or constructor.
 docArg :: Bool -> Name -> Int -> Maybe String -> Q ()
-docArg isIO n i = unless isIO . traverse_ (addModFinalizer . putDoc (ArgDoc n i))
+docArg isIO n i = unless isIO . mapM_ (addModFinalizer . putDoc (ArgDoc n i))
 
 -- }}}
 
-{- | @instance NewInterface T where newInterface = pure . T@, for interfaces whose
-only field is @wlid@. Yields no declarations when there are further fields: their
-initial values are not derivable, so those instances stay hand-written.
+{- | @instance Global T@, for globals whose only field is @wlid@ the default
+method coerces the id. Reports warns for globals that need to be handwritten.
 -}
-deriveNewInterface :: Name -> Q [Dec]
-deriveNewInterface ty = do
-  (cn, fields) <- soleRecordCon ty
+deriveGlobal :: Name -> Q [Dec]
+deriveGlobal ty = do
+  (_cn, fields) <- soleRecordCon ty
   case fields of
-    [("wlid", _)] ->
-      pure
-        [ InstanceD
-            Nothing
-            []
-            (AppT (ConT ''NewInterface) (ConT ty))
-            [ FunD
-                'newInterface
-                [Clause [] (NormalB $ InfixE (Just $ VarE 'pure) (VarE '(.)) (Just $ ConE cn)) []]
-            ]
-        ]
+    [("wlid", _)] -> pure [InstanceD Nothing [] (AppT (ConT ''Global) (ConT ty)) []]
     fs
-      | "wlid" `notElem` fmap fst fs -> fail $ "sayland: " <> nameBase ty <> " has no `wlid` field"
-      | otherwise -> pure []
+      | "wlid" `notElem` fmap fst fs ->
+          fail $ "sayland: " <> nameBase ty <> " has no `wlid` field"
+      | otherwise -> do
+          declared <- isInstance ''Global [ConT ty]
+          unless declared
+            . reportWarning
+            . intercalate "\n"
+            $ [ "sayland: " <> nameBase ty <> " is a global with fields beyond `wlid`, so its"
+              , "  `Global` instance cannot be derived. Write one above the `generateTables`"
+              , "  splice, e.g."
+              , ""
+              , "    instance Global " <> nameBase ty <> " where"
+              , "      global i = " <> nameBase ty <> " i <$> newIORef ..."
+              , ""
+              , "  fields to initialise: " <> intercalate ", " [f | (f, _) <- fs, f /= "wlid"]
+              ]
+          pure []
   where
     -- Strip the @$sel:wlid:Wl_seat@ mangling DuplicateRecordFields can introduce.
     fieldBase :: Name -> String
@@ -155,23 +226,24 @@ mkEnum :: Bool -> String -> Element -> Q [Dec]
 mkEnum isIO interfaceName enumEl = do
   bool
     ( do
-        for_ entries $ \e -> docDecl isIO (mkName $ enumName'' <> entryName e) (elemDoc e)
+        forM_ entries $ \e -> docDecl isIO (mkName $ enumName'' <> entryName e) (elemDoc e)
         docDecl isIO (mkName enumName') (elemDoc enumEl)
         pure
-          [ DataD [] (mkName enumName') [] Nothing constructors [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord]]
-          , InstanceD
-              Nothing
-              []
-              (AppT (ConT ''WireFormat) $ ConT $ mkName enumName')
-              [ FunD 'wirePut clauses
-              , FunD 'wireGet clauses'
-              ]
-          , InstanceD
-              Nothing
-              []
-              (AppT (ConT ''Show) $ ConT $ mkName enumName')
-              [FunD 'Text.Show.showsPrec show_clauses]
-          ]
+          $ [ DataD [] (mkName enumName') [] Nothing constructors [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord]]
+            , InstanceD
+                Nothing
+                []
+                (AppT (ConT ''WireFormat) $ ConT $ mkName enumName')
+                [ FunD 'wirePut clauses
+                , FunD 'wireGet clauses'
+                ]
+            , InstanceD
+                Nothing
+                []
+                (AppT (ConT ''Show) $ ConT $ mkName enumName')
+                [FunD 'Text.Show.showsPrec show_clauses]
+            ]
+          <> errorInstance
     )
     ( do
         docDecl isIO (mkName enumName') (elemDoc enumEl)
@@ -196,7 +268,7 @@ mkEnum isIO interfaceName enumEl = do
     enumName = fromJust $ findAttr (qname "name") enumEl
     entries = findChildren (qname "entry") enumEl
     entryName e = fromJust $ findAttr (qname "name") e
-    enumKV = [(entryName e, Unsafe.read . fromJust $ findAttr (qname "value") e) | e <- entries]
+    enumKV = [(entryName e, read . fromJust $ findAttr (qname "value") e) | e <- entries]
     enumKeys = fmap fst enumKV
 
     enumName' = "Enum_" <> interfaceName <> "_" <> enumName
@@ -216,6 +288,21 @@ mkEnum isIO interfaceName enumEl = do
           []
       | (k, _) <- enumKV
       ]
+
+    errorInstance =
+      [ InstanceD
+          Nothing
+          []
+          (AppT (ConT ''ErrorCode) (ConT $ mkName enumName'))
+          [ FunD
+              'errorCode
+              [ Clause [ConP (mkName $ enumName'' <> k) [] []] (NormalB $ AppE (ConE 'WlUInt) (LitE $ IntegerL v)) []
+              | (k, v) <- enumKV
+              ]
+          ]
+      | enumName == "error"
+      ]
+
     isBitfield = case findAttr (qname "bitfield") enumEl of
       Just x -> x == "true"
       Nothing -> False
@@ -276,7 +363,7 @@ findInterfaces = findChildren (qname "interface")
 loadProtocolFile :: (String -> String) -> Bool -> FilePath -> Q [Dec]
 loadProtocolFile formatter isIO path = do
   unless isIO $ addDependentFile path
-  protocols <- filter ((== qname "protocol") . elName) . onlyElems . parseXML <$> runIO (readFileBS path)
+  protocols <- filter ((== qname "protocol") . elName) . onlyElems . parseXML <$> runIO (BS.readFile path)
   concat
     <$> mapM
       ((<&> concat) . mapM (loadInterface formatter isIO) . findInterfaces)
@@ -285,21 +372,22 @@ loadProtocolFile formatter isIO path = do
 loadProtocolFileEnums :: Bool -> FilePath -> Q [Dec]
 loadProtocolFileEnums isIO path = do
   unless isIO $ addDependentFile path
-  protocols <- filter ((== qname "protocol") . elName) . onlyElems . parseXML <$> runIO (readFileBS path)
+  protocols <- filter ((== qname "protocol") . elName) . onlyElems . parseXML <$> runIO (BS.readFile path)
   concat . concat <$> mapM (mapM (loadInterfaceEnums isIO) . findInterfaces) protocols
 
 generateTables :: Bool -> (String -> String) -> FilePath -> Q [Dec]
 generateTables isIO formatter path = do
   unless isIO $ addDependentFile path
-  protocols <- filter ((== qname "protocol") . elName) . onlyElems . parseXML <$> runIO (readFileBS path)
-  pure $ concatMap (`generateProtocolTable` formatter) protocols
+  protocols <- filter ((== qname "protocol") . elName) . onlyElems . parseXML <$> runIO (BS.readFile path)
+  concat <$> traverse (\p -> generateProtocolTable isIO p formatter) protocols
 
-mkEvents :: Bool -> (String -> String) -> String -> String -> [Element] -> Q [Dec]
-mkEvents isIO formatter interfaceName prefix events = do
+-- | Create message types (requests and events).
+mkMessages :: Bool -> (String -> String) -> String -> String -> [Element] -> Q [Dec]
+mkMessages isIO formatter interfaceName prefix events = do
   docDecl isIO (mkName prefix') . Just $ prefix <> "s of the t'" <> formatter interfaceName <> "' interface."
-  for_ events $ \e -> do
+  forM_ events $ \e -> do
     docDecl isIO (conName e) (elemDoc e)
-    for_ (zip [0 ..] $ findChildren (qname "arg") e) $ \(i, a) ->
+    forM_ (zip [0 ..] $ findChildren (qname "arg") e) $ \(i, a) ->
       docArg isIO (conName e) i (elemDoc a)
   pure [DataD [] (mkName prefix') [] Nothing constructors []]
   where
@@ -313,11 +401,11 @@ mkShow :: String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkShow interfaceName prefix prefix2 events =
   mapM (pure . mkShowC) (fmap snd events) <&> \m ->
     bool
-      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''ObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
+      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''RawObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
       , FunD (mkName prefix) m
       ]
-      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''ObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
-      , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]
+      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''RawObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
+      , FunD (mkName prefix) [Clause [WildP, WildP] (NormalB $ LitE $ StringL $ mconcat [arrow, interfaceName, "@?"]) []]
       ]
       (null m)
   where
@@ -421,13 +509,15 @@ mkParser interfaceName prefix prefix2 events =
     nestGetters [x, y] = InfixE (Just y) (VarE '(<$>)) (Just x)
     nestGetters (x : xs) = InfixE (Just $ nestGetters xs) (VarE '(<*>)) (Just x)
 
-mkWlEvent :: String -> String -> [(Word16, Element)] -> Q [Dec]
-mkWlEvent interfaceName prefix2 events = do
-  let put' = mkPut interfaceName "putEvent" prefix2 events
-      get' = mkParser interfaceName "getEvent" prefix2 events
+-- | Create message instances for messages of an interface.
+mkMessageInstances :: String -> String -> [(Word16, Element)] -> Q [Dec]
+mkMessageInstances interfaceName prefix2 events = do
+  let put' = mkPut interfaceName "putMessage" prefix2 events
+      get' = mkParser interfaceName "getMessage" prefix2 events
+      sender' = [FunD 'sender [Clause [WildP] (NormalB . ConE $ if prefix2 == "Request_" then 'Client else 'Server) []]]
   opc' <- mkOpcodeGetter interfaceName "getOpcode" prefix2 events
-  show' <- mkShow interfaceName "showEvent" prefix2 events
-  pure [InstanceD Nothing [] (AppT (ConT ''WaylandEvent) $ ConT . mkName $ prefix2 <> interfaceName) $ put' <> get' <> opc' <> show']
+  show' <- mkShow interfaceName "showMessage" prefix2 events
+  pure [InstanceD Nothing [] (AppT (ConT ''Message) $ ConT . mkName $ prefix2 <> interfaceName) $ put' <> get' <> opc' <> show' <> sender']
 
 -- | Create all definitions for a single interface - the class, parsers, builders, enums, opcodes etc.
 loadInterface :: (String -> String) -> Bool -> Element -> Q [Dec]
@@ -444,21 +534,20 @@ loadInterface formatter isIO int = do
           Nothing -> fail $ "sayland: protocol declares interface `" <> name' <> "` but no type `" <> formatter name' <> "` is in scope."
 
   docDecl isIO ifaceName (elemDoc int)
-  newInterfaceInstance <- if isIO then pure [] else deriveNewInterface ifaceName
 
   concat
     <$> sequence
       [ -- WaylandEvent
-        mkEvents isIO formatter name' "Request" requests
-      , mkEvents isIO formatter name' "Event" events
-      , mkWlEvent name' "Event_" $ zip [0 ..] events
-      , mkWlEvent name' "Request_" $ zip [0 ..] requests
-      , -- IsInterface instance
+        mkMessages isIO formatter name' "Request" requests
+      , mkMessages isIO formatter name' "Event" events
+      , mkMessageInstances name' "Event_" $ zip [0 ..] events
+      , mkMessageInstances name' "Request_" $ zip [0 ..] requests
+      , -- Interface instance
         pure
           [ InstanceD
               Nothing
               []
-              (AppT (ConT ''IsInterface) ifaceT)
+              (AppT (ConT ''Interface) ifaceT)
               [ TySynInstD $ TySynEqn Nothing (AppT (ConT ''Event) ifaceT) (ConT $ mkName $ "Event_" <> name')
               , TySynInstD $ TySynEqn Nothing (AppT (ConT ''Request) ifaceT) (ConT $ mkName $ "Request_" <> name')
               , FunD
@@ -469,12 +558,11 @@ loadInterface formatter isIO int = do
                   [Clause [WildP] (NormalB $ AppE (VarE 'fromString) (LitE $ StringL name')) []]
               ]
           ]
-      , pure newInterfaceInstance
       ]
   where
     name' = fromJust $ findAttr (qname "name") int
     ifaceT = ConT . mkName $ formatter name'
-    version' = Unsafe.read . fromJust $ findAttr (qname "version") int
+    version' = read . fromJust $ findAttr (qname "version") int
 
 loadInterfaceEnums :: Bool -> Element -> Q [Dec]
 loadInterfaceEnums isIO int =
@@ -487,7 +575,7 @@ loadInterfaceEnums isIO int =
 loadEnum :: Element -> (String, [(String, Int)])
 loadEnum e' = (fromJust $ findAttr (qname "name") e', f <$> findChildren (qname "entry") e')
   where
-    f e = (fromJust $ findAttr (qname "name") e, Unsafe.read $ fromJust $ findAttr (qname "value") e)
+    f e = (fromJust $ findAttr (qname "name") e, read $ fromJust $ findAttr (qname "value") e)
 
 argType :: (String -> String) -> String -> Element -> Type
 argType formatter intName element = case findAttr (qname "enum") element of
@@ -511,7 +599,7 @@ argType formatter intName element = case findAttr (qname "enum") element of
     Just "fd" -> ConT ''WlFd
     Just "object" -> case findAttr (qname "interface") element of
       Just x -> AppT (ConT ''TObjectID) . ConT . mkName $ formatter x
-      Nothing -> ConT ''ObjectID
+      Nothing -> ConT ''RawObjectID
     Just y -> error $ "unknown type: " <> fromString y
 
 -- vim: foldmethod=marker

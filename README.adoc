@@ -40,6 +40,8 @@ You can format the entire project using `treefmt` or `nix fmt`. +
 There also is a githook that formats using `treefmt` on each commit.
 
 Run tests using `cabal test`.
+To run a single test use `cabal run sayland-tests -- -p <test-name>`.
+To see other test options use `cabal run sayland-tests -- --help`
 
 To generate docs while hiding certain warnings use `cabal run genHaddocks`. +
 This program wraps `cabal haddock` and removes bogus warnings related to https://github.com/haskell/haddock/issues/1071.

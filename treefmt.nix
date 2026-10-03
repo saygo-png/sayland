@@ -9,7 +9,7 @@
   programs.deadnix.enable = true;
   programs.statix.enable = true;
   programs.fourmolu.enable = true;
-  programs.cabal-fmt.enable = true;
+  programs.cabal-gild.enable = true;
 
   settings.formatter = {
     fourmolu = {

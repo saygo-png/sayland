@@ -4,7 +4,7 @@ module Both.Protocol.Codegen (test) where
 
 import Control.Monad (void)
 import Language.Haskell.TH
-import Sayland.Codegen
+import Sayland.Internal.Codegen
 import Test.Tasty.HUnit
 import Prelude
 

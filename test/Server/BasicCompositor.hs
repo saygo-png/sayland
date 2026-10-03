@@ -11,8 +11,8 @@ import System.Directory (removeFile)
 import System.Timeout (timeout)
 import Test.Tasty.HUnit
 
-table :: ProtocolTable Server
-table = waylandServerTable <> xdg_shellServerTable
+table :: ProtocolTable
+table = waylandTable <> xdg_shellTable
 
 test :: Assertion
 test = main
@@ -36,7 +36,6 @@ main = bracket env cleanup program
           listen socket' 5
 
           clients <- newTVarIO Map.empty
-          interfaceTable <- newIORef $ fromList table
           eventHandlers <- newIORef []
           clientSerial <- newTVarIO 0
           pure
@@ -44,7 +43,7 @@ main = bracket env cleanup program
               { socket = socket'
               , socketPath
               , clients
-              , interfaceTable
+              , interfaceTable = Map.fromList table
               , eventHandlers
               , clientSerial
               }

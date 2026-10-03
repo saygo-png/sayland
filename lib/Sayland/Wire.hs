@@ -1,13 +1,18 @@
 -- | Description : Decoding and encoding wire protocol values.
-module Sayland.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, mkMessage, ObjectID) where
+module Sayland.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, mkMessage, RawObjectID) where
 
-import Data.Binary (Get)
+import Control.Monad.State.Strict (MonadTrans (lift), StateT)
+import Control.Monad.State.Strict qualified as State
+import Data.Binary (Get, Word16, Word32)
 import Data.Binary.Get (getByteString, getInt32le, getWord16le, getWord32le, skip)
 import Data.Binary.Put (PutM, putByteString, putInt32le, putLazyByteString, putWord16le, putWord32le, runPut)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
-import Relude hiding (ByteString)
-import Relude.Monad qualified as State
+import Data.Coerce (coerce)
+import Data.Functor
+import Data.Int
+import Data.String (IsString)
+import Sayland.Internal.Prelude
 import System.Posix (Fd)
 
 -- | WireGet monad, appends file descriptors to the Get monad.
@@ -38,8 +43,10 @@ A string, prefixed with a 32-bit integer specifying its length (in bytes), follo
 -}
 newtype WlString = WlString BS.ByteString deriving newtype (Show, Eq, Ord, IsString, Semigroup, Monoid)
 
--- | Wayland @object@. Equivalent to `WlUInt`
-type ObjectID = WlUInt
+{- | Wayland @object@. Equivalent to `WlUInt`.
+Used internally, users should use `ObjectID` as it offers more safety guaranatees using the type system.
+-}
+type RawObjectID = WlUInt
 
 {- | Wayland @array@.
 A blob of arbitrary data, prefixed with a 32-bit integer specifying its length (in bytes), then the verbatim contents of the array, padded to 32 bits with zero bytes.

@@ -2,23 +2,32 @@
 module Sayland.Connection (module Sayland.Connection) where
 
 import Control.Concurrent (forkIO)
-import Control.Concurrent.STM (flushTQueue, modifyTVar, newTQueue, unGetTQueue, writeTQueue)
-import Data.Bimap qualified as BM
+import Control.Concurrent.STM (flushTQueue, newTQueue, unGetTQueue, writeTQueue)
+import Control.Concurrent.STM.TVar
+import Control.Exception (finally)
+import Control.Monad
+import Control.Monad.IO.Class
+import Control.Monad.Reader
+import Control.Monad.State.Strict (runStateT)
+import Data.Binary (Word16)
 import Data.Binary.Get
+import Data.Bool
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BL
+import Data.Coerce
 import Data.Data (cast)
 import Data.Map qualified as Map
+import Data.String
 import Debug.Trace (traceIO)
 import Foreign (Storable (peek, sizeOf), castPtr)
 import Foreign.C
 import Network.Socket
 import Network.Socket.ByteString (recvMsg)
-import Relude
-import Sayland.Core
-import Sayland.Object
-import Sayland.Protocols.Wayland
-import Sayland.Trace
+import Sayland.Internal.Core
+import Sayland.Internal.Object
+import Sayland.Internal.Prelude
+import Sayland.Internal.Protocols.Wayland
+import Sayland.Internal.Trace
 import Sayland.Wire
 import System.Console.ANSI (Color (Magenta), ColorIntensity (Vivid))
 import System.Directory (doesFileExist)
@@ -39,10 +48,10 @@ listenForClients env = do
 -- | Deal with an incoming client, creating a client environment and updating the server state.
 handleIncomingClient :: (MonadIO m) => ServerEnvironment -> Socket -> m ()
 handleIncomingClient env socket' = do
-  counter <- liftIO $ newIORef 0
-  objects <- liftIO $ newIORef $ one (1, Interface Wl_display{wlid = 1})
-  globals <- liftIO $ newIORef BM.empty
-  fdQueue <- liftIO $ atomically newTQueue
+  counter <- newIORef 0
+  objects <- newIORef $ Map.fromList [(1, SomeObject $ Wl_display $ TObjectID 1)]
+  globals <- newIORef mempty
+  fdQueue <- atomically newTQueue
   let clientenv =
         ClientEnvironment
           { socket = socket'
@@ -57,7 +66,22 @@ handleIncomingClient env socket' = do
     modifyTVar env.clientSerial (+ 1)
     readTVar env.clientSerial
   atomically . modifyTVar env.clients $ Map.insert serial' clientenv
-  void . liftIO . forkIO $ runReaderT (clientLoop socket') $ ClientServerEnv env clientenv serial'
+  void
+    . liftIO
+    . forkIO
+    $ runReaderT (serveClient $ clientLoop socket') (ClientServerEnv env clientenv serial')
+    `finally` do
+      close socket'
+      atomically . modifyTVar env.clients $ Map.delete serial'
+
+{- | Run one client's connection. A protocol violation is reported to the client
+before the connection is closed.
+-}
+serveClient :: Wayland Server () -> Wayland Server ()
+serveClient loop =
+  loop `catchW` \(e :: ProtocolError) -> do
+    sendMsg (Wl_display wlDisplayId) (Event_wl_display_error e.object e.code e.message)
+    throwIO e
 
 -- | Get a list of file descriptors from an ancillary data bytestring.
 decodeFds :: BS.ByteString -> IO [Fd]
@@ -72,15 +96,15 @@ decodeFds bs = map Fd <$> go bs []
           go rest (v : acc)
 
 -- | Handle communication between a server and a client in provided socket, works both on the server and the client.
-clientLoop :: (Dispatch p) => Socket -> Wayland p ()
+clientLoop :: (KnownPerspective p) => Socket -> Wayland p ()
 clientLoop = clientLoop' ""
   where
-    clientLoop' :: (Dispatch p) => BS.ByteString -> Socket -> Wayland p ()
+    clientLoop' :: (KnownPerspective p) => BS.ByteString -> Socket -> Wayland p ()
     clientLoop' bytes' sock = do
       queue <- (.fdQueue) <$> getClientEnv
       (_, bytes'', cmsgs, _flags) <- liftIO $ recvMsg sock 8 4096 mempty
       newFds <- liftIO $ concat <$> traverse (decodeFds . cmsgData) (filter (\x -> cmsgId x == CmsgIdFds) cmsgs)
-      liftIO . atomically $ mapM_ (writeTQueue queue) newFds
+      atomically $ mapM_ (writeTQueue queue) newFds
       let bytes = bytes' <> bytes''
       bool
         ( case extractMessage bytes of
@@ -93,13 +117,13 @@ clientLoop = clientLoop' ""
         (isPartial bytes)
       where
         isPartial :: BS.ByteString -> Bool
-        isPartial s = case runGetOrFail getHeader (fromStrict s) of
+        isPartial s = case runGetOrFail getHeader (BS.fromStrict s) of
           Left (_, _, _) -> True
           Right (rest, _, (_, _, size')) -> fromIntegral (size' - headerSize) > BL.length rest
 
 -- | Parse a `ByteString` into a message tuple.
-extractMessage :: BS.ByteString -> Maybe (ObjectID, Word16, BS.ByteString, BS.ByteString)
-extractMessage s = case runGetOrFail getHeader (fromStrict s) of
+extractMessage :: BS.ByteString -> Maybe (RawObjectID, Word16, BS.ByteString, BS.ByteString)
+extractMessage s = case runGetOrFail getHeader (BS.fromStrict s) of
   Left (_, _, _) -> Nothing
   Right (rest', _, (oid, opcode, size)) -> Just (oid, opcode, BS.take payload rest, BS.drop payload rest)
     where
@@ -109,44 +133,28 @@ extractMessage s = case runGetOrFail getHeader (fromStrict s) of
 {- | Deal with an inbound message. Checks if the `ObjectID` reference is valid.
 if it is valid, the work is handed to `dispatchMessage`.
 -}
-handleMessage :: (Dispatch p) => ObjectID -> Word16 -> BS.ByteString -> Wayland p ()
+handleMessage :: (KnownPerspective p) => RawObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 handleMessage oid opcode msg = do
   env <- getClientEnv
   objects <- readIORef env.objects
   case Map.lookup oid objects of
-    Just (Interface x) -> dispatchMessage x oid opcode msg
+    Just (SomeObject o) -> withIncoming o $ dispatchWith (applyIncoming o) oid opcode msg
     Nothing -> liftIO $ traceIO $ "invalid object reference with id: " <> show oid
 
-class Dispatch (p :: Perspective) where
-  dispatchMessage :: forall i. (Interface' i p) => i -> ObjectID -> Word16 -> BS.ByteString -> Wayland p ()
-
-instance Dispatch Client where
-  dispatchMessage x oid opcode msg = do
-    ClientEnv env <- ask
-    fds <- atomically $ flushTQueue env.fdQueue
-    case runGetOrFail (runStateT (getEvent opcode) fds) (toLazy msg) of
-      Left (_, _, err) -> fail err
-      Right (_, _, (event, leftover)) -> do
-        atomically $ traverse_ (unGetTQueue env.fdQueue) (reverse leftover)
-        colorize <- liftIO getColorize
-        liftIO . traceIO . colorize Vivid Magenta $ ("  <- " <>) $ showEvent oid event
-        runEvent x event
-        handlers <- liftIO $ readIORef env.eventHandlers
-        forM_ handlers $ \(EventHandler f) -> for_ (cast event) $ f oid
-
-instance Dispatch Server where
-  dispatchMessage x oid opcode msg = do
-    ClientServerEnv _ env _ <- ask
-    fds <- atomically $ flushTQueue env.fdQueue
-    case runGetOrFail (runStateT (getEvent opcode) fds) (toLazy msg) of
-      Left (_, _, err) -> fail err
-      Right (_, _, (event, leftover)) -> do
-        atomically $ traverse_ (unGetTQueue env.fdQueue) (reverse leftover)
-        colorize <- liftIO getColorize
-        liftIO . traceIO . colorize Vivid Magenta $ ("  <- " <>) $ showEvent oid event
-        runRequest x event
-        handlers <- liftIO $ readIORef env.eventHandlers
-        forM_ handlers $ \(EventHandler f) -> for_ (cast event) $ f oid
+-- | Parse a message for an object and run the given handler on it, then any registered 'EventHandler's.
+dispatchWith :: (Message m) => (m -> Wayland p ()) -> RawObjectID -> Word16 -> BS.ByteString -> Wayland p ()
+dispatchWith handle oid opcode msg = do
+  env <- getClientEnv
+  fds <- atomically $ flushTQueue env.fdQueue
+  case runGetOrFail (runStateT (getMessage opcode) fds) (BS.fromStrict msg) of
+    Left (_, _, err) -> fail err
+    Right (_, _, (message, leftover)) -> do
+      void . atomically $ traverse (unGetTQueue env.fdQueue) (reverse leftover)
+      colorize <- liftIO getColorize
+      liftIO . traceIO . colorize Vivid Magenta $ ("  <- " <>) $ showMessage oid message
+      handle message
+      handlers <- readIORef env.eventHandlers
+      forM_ handlers $ \(EventHandler f) -> forM_ (cast message) $ f oid
 
 -- }}}
 
@@ -170,11 +178,11 @@ availableSocketName = scanRuntimeDir (fmap not . doesFileExist)
 Short circuits if 'WAYLAND_DISPLAY' exists, ignoring the predicate.
 -}
 findSocketName :: (FilePath -> IO Bool) -> IO (Maybe String)
-findSocketName isAccepted = getEnv "WAYLAND_DISPLAY" `orElse` scanRuntimeDir isAccepted
+findSocketName isAccepted = getEnv "WAYLAND_DISPLAY" `orElse'` scanRuntimeDir isAccepted
   where
     -- Run the second action only if the first yields Nothing.
-    orElse :: IO (Maybe a) -> IO (Maybe a) -> IO (Maybe a)
-    orElse a b = a >>= maybe b (pure . Just)
+    orElse' :: IO (Maybe a) -> IO (Maybe a) -> IO (Maybe a)
+    orElse' a b = a >>= maybe b (pure . Just)
 
 -- | Find a socket name by predicate, scanning @XDG_RUNTIME_DIR@.
 scanRuntimeDir :: (FilePath -> IO Bool) -> IO (Maybe String)
@@ -191,26 +199,22 @@ scanRuntimeDir isAccepted =
 
 -- }}}
 
--- Setup {{{
-
 -- | Create a default client environment.
-waylandSetup :: ProtocolTable Client -> IO (WaylandEnv Client)
+waylandSetup :: ProtocolTable -> IO (WaylandEnv Client)
 waylandSetup protocolTable = do
-  let display :: Interface Client = Interface $ Wl_display wlDisplayId
+  let display = SomeObject $ Wl_display wlDisplayId
   getSocketPath openSocketName >>= \case
     Just path -> do
       putStrLn $ "using socket path: " <> show path
       sock <- socket AF_UNIX Stream defaultProtocol
       connect sock $ SockAddrUnix path
       counter <- newIORef $ coerce wlDisplayId
-      objects <- newIORef $ fromList [(coerce wlDisplayId, display)]
-      globals <- newIORef BM.empty
+      objects <- newIORef $ Map.fromList [(coerce wlDisplayId, display)]
+      globals <- newIORef mempty
       handlers <- newIORef mempty
-      interfaceTable' <- newIORef $ fromList protocolTable
+      let interfaceTable = Map.fromList protocolTable
       fdqueue <- atomically newTQueue
-      pure $ ClientEnv $ ClientEnvironment sock counter objects globals interfaceTable' handlers fdqueue
+      pure $ ClientEnv $ ClientEnvironment sock counter objects globals interfaceTable handlers fdqueue
     Nothing -> error "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."
-
--- }}}
 
 -- vim: foldmethod=marker
