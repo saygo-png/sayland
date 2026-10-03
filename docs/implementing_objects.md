@@ -41,7 +41,7 @@ You can still use `protocolError` and `protocolErrorG` in this style.
 If you wish to not implement an interface write:
 
 ```hs
-instance (Unsatisfiable (Text "Your reason for not implementing")) => Object Wp_fifo_manager_v1`
+instance (Unsatisfiable (Text "Your reason for not implementing")) => Object Wp_fifo_manager_v1
 ```
 
 This provides compile time errors for people who attempt to use this interface.
@@ -53,7 +53,7 @@ Either implement fully or don't in most cases.
 
 ```hs
 instance Object Xdg_popup where
-  onRequest popup msg@Request_xdg_popup_destroy = do
+  onRequest obj msg@Request_xdg_popup_destroy = do
     stub obj msg
     forwardMessage obj msg
 ```
