@@ -48,7 +48,7 @@ atomicWriteIORef ref what = liftIO $ Ref.atomicWriteIORef ref what
 {-# INLINE atomicWriteIORef #-}
 {-# SPECIALIZE atomicWriteIORef :: IORef a -> a -> IO () #-}
 
--- | Lifted `readIORed`
+-- | Lifted `readIORef`
 readIORef :: (MonadIO m) => IORef a -> m a
 readIORef = liftIO . Ref.readIORef
 {-# INLINE readIORef #-}
