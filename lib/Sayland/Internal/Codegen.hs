@@ -571,12 +571,6 @@ loadInterfaceEnums isIO int =
     name = fromJust $ findAttr (qname "name") int
     enums = findChildren (qname "enum") int
 
--- | Load enum data from XML spec.
-loadEnum :: Element -> (String, [(String, Int)])
-loadEnum e' = (fromJust $ findAttr (qname "name") e', f <$> findChildren (qname "entry") e')
-  where
-    f e = (fromJust $ findAttr (qname "name") e, read $ fromJust $ findAttr (qname "value") e)
-
 argType :: (String -> String) -> String -> Element -> Type
 argType formatter intName element = case findAttr (qname "enum") element of
   Just enumName ->
