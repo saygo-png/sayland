@@ -10,10 +10,6 @@ import Sayland.Internal.Core
 import Sayland.Internal.Prelude
 import Sayland.Wire
 
-{- | Insert the given interface to the objects map with provided id as key.
-Used to implement handlers.
--}
-
 -- | Enter an object in this side's object map.
 registerObject :: (Object i) => i -> Wayland p ()
 registerObject obj = do
