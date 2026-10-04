@@ -1,4 +1,4 @@
-cabal-version: 2.4
+cabal-version: 3.0
 name: sayland
 version: 0.0.0
 license: GPL-3.0-or-later
@@ -53,6 +53,7 @@ common executable-options
 
 library sayland-wire
   import: common-options
+  visibility: public
   -- Boot libraries.
   build-depends:
     binary,
