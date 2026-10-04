@@ -318,7 +318,7 @@ sendMessage e (TObjectID o) = do
   liftIO (traceIO $ colorize Vivid Yellow $ ("    -> " <>) $ showMessage o e)
   socket' <- (.socket) <$> getClientEnv
   let (fds, body) = runPutM (execStateT (putMessage e) [])
-      msg = mkMessage o (getOpcode e) body
+      msg = encodeMessage o (getOpcode e) body
   liftIO $ case reverse fds of
     [] -> sendAll socket' msg
     fds' -> sendManyWithFds socket' [BS.toStrict msg] fds'

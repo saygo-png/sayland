@@ -43,7 +43,7 @@ prop_roundtrip _type x = roundtrip x === Right x
 
 prop_header :: WlUInt -> Word16 -> [Word8] -> Property
 prop_header objectID opcode body =
-  runGetOrFail getHeader (mkMessage objectID opcode payload)
+  runGetOrFail getHeader (encodeMessage objectID opcode payload)
     === Right (payload, fromIntegral headerSize, (objectID, opcode, size))
   where
     payload = BSL.pack body

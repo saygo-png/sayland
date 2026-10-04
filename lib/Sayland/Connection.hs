@@ -107,7 +107,7 @@ clientLoop = clientLoop' ""
       atomically $ mapM_ (writeTQueue queue) newFds
       let bytes = bytes' <> bytes''
       bool
-        ( case extractMessage bytes of
+        ( case decodeMessage bytes of
             Just (oid, opcode, x, y) -> do
               handleMessage oid opcode x
               clientLoop' y sock

@@ -1,14 +1,13 @@
 -- | Description : Decoding and encoding wire protocol values.
-module Sayland.Internal.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, extractMessage, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, mkMessage, RawObjectID) where
+module Sayland.Internal.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, decodeMessage, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, encodeMessage, RawObjectID) where
 
 import Control.Monad.State.Strict (MonadTrans (lift), StateT)
 import Control.Monad.State.Strict qualified as State
-import Data.Binary (Get, Word16, Word32)
-import Data.Binary.Get (getByteString, getInt32le, getWord16le, getWord32le, runGetOrFail, skip)
-import Data.Binary.Put (PutM, putByteString, putInt32le, putLazyByteString, putWord16le, putWord32le, runPut)
+import Data.Binary
+import Data.Binary.Get
+import Data.Binary.Put
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
-import Data.Coerce (coerce)
 import Data.Functor
 import Data.Int
 import Data.String (IsString)
@@ -119,20 +118,21 @@ waylandNull = 0
 getHeader :: Get (WlUInt, Word16, Word16)
 getHeader = (,,) . WlUInt <$> getWord32le <*> getWord16le <*> getWord16le
 
+-- | `Put` a Wayland header. Reverses `getHeader`.
+putHeader :: (RawObjectID, Word16, Word16) -> Put
+putHeader (WlUInt oid, opcode, size) = putWord32le oid >> putWord16le opcode >> putWord16le size
+
 {- | Create a wayland message. It takes an objectID, operation code and a message body.
-The header is generated based on this, the size is derived automatically.
+The header is derived automatically.
 -}
-mkMessage :: WlUInt -> Word16 -> BSL.ByteString -> BSL.ByteString
-mkMessage objectID opcode messageBody =
-  runPut $ do
-    putWord32le $ coerce objectID
-    putWord16le opcode
-    putWord16le $ 8 + fromIntegral (BSL.length messageBody)
-    putLazyByteString messageBody
+encodeMessage :: RawObjectID -> Word16 -> BSL.ByteString -> BSL.ByteString
+encodeMessage oid opcode body = runPut $ do
+  putHeader (oid, opcode, headerSize + fromIntegral (BSL.length body))
+  putLazyByteString body
 
 -- | Parse a `ByteString` into a message tuple.
-extractMessage :: BS.ByteString -> Maybe (RawObjectID, Word16, BS.ByteString, BS.ByteString)
-extractMessage s = case runGetOrFail getHeader (BS.fromStrict s) of
+decodeMessage :: BS.ByteString -> Maybe (RawObjectID, Word16, BS.ByteString, BS.ByteString)
+decodeMessage s = case runGetOrFail getHeader (BS.fromStrict s) of
   Left (_, _, _) -> Nothing
   Right (rest', _, (oid, opcode, size)) -> Just (oid, opcode, BS.take payload rest, BS.drop payload rest)
     where
