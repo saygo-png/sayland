@@ -51,6 +51,28 @@ common executable-options
     -rtsopts
     -with-rtsopts=-N
 
+library sayland-wire
+  import: common-options
+  -- Boot libraries.
+  build-depends:
+    binary,
+    bytestring,
+    directory,
+    filepath,
+    mtl,
+    unix,
+
+  -- Non-boot libraries.
+  build-depends:
+    network,
+    shared-memory,
+
+  hs-source-dirs: lib-wire
+  -- cabal-gild: discover lib-wire
+  exposed-modules:
+    Sayland.Internal.Wire
+    Sayland.Wire
+
 library
   import: common-options
   -- Boot libraries.
@@ -69,6 +91,7 @@ library
   build-depends:
     ansi-terminal,
     network,
+    sayland-wire,
     shared-memory,
     xml,
 
@@ -94,7 +117,6 @@ library
     Sayland.Protocols.Wayland
     Sayland.Protocols.WlrLayerShell
     Sayland.Protocols.XdgShell
-    Sayland.Wire
 
 executable genHaddocks
   import: common-options, executable-options
@@ -141,6 +163,7 @@ test-suite sayland-tests
     random,
     relude,
     sayland,
+    sayland-wire,
     stm,
     tasty,
     tasty-hunit,

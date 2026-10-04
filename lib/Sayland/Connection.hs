@@ -121,15 +121,6 @@ clientLoop = clientLoop' ""
           Left (_, _, _) -> True
           Right (rest, _, (_, _, size')) -> fromIntegral (size' - headerSize) > BL.length rest
 
--- | Parse a `ByteString` into a message tuple.
-extractMessage :: BS.ByteString -> Maybe (RawObjectID, Word16, BS.ByteString, BS.ByteString)
-extractMessage s = case runGetOrFail getHeader (BS.fromStrict s) of
-  Left (_, _, _) -> Nothing
-  Right (rest', _, (oid, opcode, size)) -> Just (oid, opcode, BS.take payload rest, BS.drop payload rest)
-    where
-      payload = fromIntegral $ size - headerSize
-      rest = BS.toStrict rest'
-
 {- | Deal with an inbound message. Checks if the `ObjectID` reference is valid.
 if it is valid, the work is handed to `dispatchMessage`.
 -}
