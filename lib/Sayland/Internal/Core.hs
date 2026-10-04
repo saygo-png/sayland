@@ -22,8 +22,7 @@ import Data.Typeable
 import Debug.Trace (traceIO)
 import GHC.Records (HasField)
 import Network.Socket (Socket)
-import Network.Socket.ByteString (sendManyWithFds)
-import Network.Socket.ByteString.Lazy (sendAll)
+import Network.Socket.ByteString (sendAll, sendManyWithFds)
 import Sayland.Internal.Prelude
 import Sayland.Internal.Trace (getColorize)
 import Sayland.Wire
@@ -318,7 +317,7 @@ sendMessage e (TObjectID o) = do
   liftIO (traceIO $ colorize Vivid Yellow $ ("    -> " <>) $ showMessage o e)
   socket' <- (.socket) <$> getClientEnv
   let (fds, body) = runPutM (execStateT (putMessage e) [])
-      msg = encodeMessage o (getOpcode e) body
+      msg = encodeMessage o (getOpcode e) (BS.toStrict body)
   liftIO $ case reverse fds of
     [] -> sendAll socket' msg
-    fds' -> sendManyWithFds socket' [BS.toStrict msg] fds'
+    fds' -> sendManyWithFds socket' [msg] fds'

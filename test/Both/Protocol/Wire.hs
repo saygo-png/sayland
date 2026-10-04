@@ -25,7 +25,10 @@ tests =
     , testProperty "wl_array roundtrip" $ prop_roundtrip (type WlArray)
     , testProperty "wl_fd roundtrip" $ prop_roundtrip (type WlFd)
     , testProperty "wl_new_id roundtrip" $ prop_roundtrip (type WlNewId)
-    , testProperty "getHeader reverses mkMessage" prop_header
+    , testProperty "getHeader reverses putHeader" prop_header
+    , testProperty "decodeMessage reverses encodeMessage" prop_message
+    , --
+      testProperty "decodeMessage only returns non-partial messages" prop_decodePartial
     ]
 
 prop_roundtrip :: forall a -> (WireFormat a, Eq a, Show a) => a -> Property
@@ -43,11 +46,27 @@ prop_roundtrip _type x = roundtrip x === Right x
 
 prop_header :: WlUInt -> Word16 -> [Word8] -> Property
 prop_header objectID opcode body =
-  runGetOrFail getHeader (encodeMessage objectID opcode payload)
-    === Right (payload, fromIntegral headerSize, (objectID, opcode, size))
+  runGetOrFail getHeader (BS.fromStrict (encodeMessage objectID opcode payload))
+    === Right (BS.fromStrict payload, fromIntegral headerSize, (objectID, opcode, size))
   where
-    payload = BSL.pack body
-    size = headerSize + fromIntegral (BSL.length payload)
+    payload = BS.pack body
+    size = headerSize + fromIntegral (BS.length payload)
+
+prop_message :: WlUInt -> Word16 -> [Word8] -> Property
+prop_message objectID opcode body =
+  decodeMessage encodedMsg === Just (objectID, opcode, BS.pack body, "")
+  where
+    encodedMsg = encodeMessage objectID opcode (BS.pack body)
+
+{- | A message whose header has arrived but whose body has not fully arrived yet must not decode.
+The test keeps only the first @kept@ bytes of a message, anywhere from just the header to all but the last byte.
+-}
+prop_decodePartial :: WlUInt -> Word16 -> NonEmptyList Word8 -> Property
+prop_decodePartial objectID opcode (NonEmpty body) =
+  forAll (chooseInt (fromIntegral headerSize, BS.length encodedMsg - 1)) $ \kept ->
+    decodeMessage (BS.take kept encodedMsg) === Nothing
+  where
+    encodedMsg = encodeMessage objectID opcode (BS.pack body)
 
 instance Arbitrary WlInt where
   arbitrary = WlInt <$> arbitrary

@@ -125,10 +125,10 @@ putHeader (WlUInt oid, opcode, size) = putWord32le oid >> putWord16le opcode >> 
 {- | Create a wayland message. It takes an objectID, operation code and a message body.
 The header is derived automatically.
 -}
-encodeMessage :: RawObjectID -> Word16 -> BSL.ByteString -> BSL.ByteString
-encodeMessage oid opcode body = runPut $ do
-  putHeader (oid, opcode, headerSize + fromIntegral (BSL.length body))
-  putLazyByteString body
+encodeMessage :: RawObjectID -> Word16 -> BS.ByteString -> BS.ByteString
+encodeMessage oid opcode body = BSL.toStrict . runPut $ do
+  putHeader (oid, opcode, headerSize + fromIntegral (BS.length body))
+  putByteString body
 
 -- | Parse a `ByteString` into a message tuple.
 decodeMessage :: BS.ByteString -> Maybe (RawObjectID, Word16, BS.ByteString, BS.ByteString)
