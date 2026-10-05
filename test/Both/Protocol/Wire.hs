@@ -5,7 +5,7 @@
 module Both.Protocol.Wire (tests) where
 
 import Data.Binary.Get (runGetOrFail)
-import Data.Binary.Put (runPutM)
+import Data.Binary.Put (runPut, runPutM)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Relude
@@ -29,6 +29,9 @@ tests =
     , testProperty "decodeMessage reverses encodeMessage" prop_message
     , --
       testProperty "decodeMessage only returns non-partial messages" prop_decodePartial
+    , testProperty "decodeMessage does not decode a partial header" prop_decodePartialHeader
+    , testProperty "decodeMessage rejects sizes smaller than the header" prop_decodeTooSmall
+    , testProperty "decodeMessage rejects sizes that are not a multiple of 4" prop_decodeUnaligned
     ]
 
 prop_roundtrip :: forall a -> (WireFormat a, Eq a, Show a) => a -> Property
@@ -52,21 +55,50 @@ prop_header objectID opcode body =
     payload = BS.pack body
     size = headerSize + fromIntegral (BS.length payload)
 
-prop_message :: WlUInt -> Word16 -> [Word8] -> Property
-prop_message objectID opcode body =
-  decodeMessage encodedMsg === Just (objectID, opcode, BS.pack body, "")
+prop_message :: WlUInt -> Word16 -> Body -> Property
+prop_message objectID opcode (Body body) =
+  decodeMessage encodedMsg === Just (objectID, opcode, body, "")
   where
-    encodedMsg = encodeMessage objectID opcode (BS.pack body)
+    encodedMsg = encodeMessage objectID opcode body
 
 {- | A message whose header has arrived but whose body has not fully arrived yet must not decode.
 The test keeps only the first @kept@ bytes of a message, anywhere from just the header to all but the last byte.
 -}
-prop_decodePartial :: WlUInt -> Word16 -> NonEmptyList Word8 -> Property
-prop_decodePartial objectID opcode (NonEmpty body) =
-  forAll (chooseInt (fromIntegral headerSize, BS.length encodedMsg - 1)) $ \kept ->
-    decodeMessage (BS.take kept encodedMsg) === Nothing
+prop_decodePartial :: WlUInt -> Word16 -> Property
+prop_decodePartial objectID opcode =
+  forAllShrink (arbitrary `suchThat` hasBytes) (filter hasBytes . shrink) $ \(Body body) ->
+    let encodedMsg = encodeMessage objectID opcode body
+     in forAll (chooseInt (fromIntegral headerSize, BS.length encodedMsg - 1)) $ \kept ->
+          decodeMessage (BS.take kept encodedMsg) === Nothing
   where
-    encodedMsg = encodeMessage objectID opcode (BS.pack body)
+    hasBytes (Body b) = not (BS.null b)
+
+-- | Fewer bytes than a header can't decode, whatever they are.
+prop_decodePartialHeader :: [Word8] -> Property
+prop_decodePartialHeader bytes = decodeMessage (BS.pack (take (fromIntegral headerSize - 1) bytes)) === Nothing
+
+-- | A header claiming any size, unlike `encodeMessage` which derives it from the body.
+header :: WlUInt -> Word16 -> Word16 -> BS.ByteString
+header objectID opcode size = BSL.toStrict . runPut $ putHeader (objectID, opcode, size)
+
+-- | A size smaller than the header itself is malformed, whatever follows it.
+prop_decodeTooSmall :: WlUInt -> Word16 -> [Word8] -> Property
+prop_decodeTooSmall objectID opcode trailing =
+  forAll (chooseEnum (0, headerSize - 1)) $ \size ->
+    decodeMessage (header objectID opcode size <> BS.pack trailing) === Nothing
+
+-- | Arguments are all multiples of 4 bytes, so a size that isn't is malformed.
+prop_decodeUnaligned :: WlUInt -> Word16 -> Property
+prop_decodeUnaligned objectID opcode =
+  forAll (chooseEnum (headerSize, 256) `suchThat` \s -> s `mod` 4 /= 0) $ \size ->
+    decodeMessage (header objectID opcode size <> BS.replicate (fromIntegral size) 0) === Nothing
+
+-- | A message body. Every argument is a multiple of 4 bytes, so a body is too.
+newtype Body = Body BS.ByteString deriving stock (Show)
+
+instance Arbitrary Body where
+  arbitrary = chooseInt (0, 32) >>= fmap (Body . BS.pack) . vector . (* 4)
+  shrink (Body b) = [Body (BS.take n b) | n <- [0, 4 .. BS.length b - 4]]
 
 instance Arbitrary WlInt where
   arbitrary = WlInt <$> arbitrary

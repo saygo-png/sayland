@@ -1,5 +1,5 @@
 -- | Description : Decoding and encoding wire protocol values.
-module Sayland.Internal.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, runWireGet, runWirePut, decodeMessage, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, encodeMessage, RawObjectID) where
+module Sayland.Internal.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, runWireGet, runWirePut, decodeMessage, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, putHeader, encodeMessage, RawObjectID) where
 
 import Control.Monad.State.Strict (MonadTrans (lift), StateT)
 import Control.Monad.State.Strict qualified as State
