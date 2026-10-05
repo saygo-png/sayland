@@ -7,6 +7,7 @@ import Data.Map qualified as Map
 import Network.Socket
 import Relude
 import Sayland
+import Sayland.Wire
 import System.Directory (removeFile)
 import System.Timeout (timeout)
 import Test.Tasty.HUnit

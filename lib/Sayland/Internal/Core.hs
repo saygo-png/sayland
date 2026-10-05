@@ -11,10 +11,7 @@ import Control.Concurrent.STM
 import Control.Exception hiding (throwIO)
 import Control.Monad
 import Control.Monad.Reader
-import Control.Monad.State.Strict
 import Data.Binary
-import Data.Binary.Put (runPutM)
-import Data.ByteString qualified as BS
 import Data.Coerce
 import Data.Kind
 import Data.Map (Map)
@@ -22,7 +19,6 @@ import Data.Typeable
 import Debug.Trace (traceIO)
 import GHC.Records (HasField)
 import Network.Socket (Socket)
-import Network.Socket.ByteString (sendAll, sendManyWithFds)
 import Sayland.Internal.Prelude
 import Sayland.Internal.Trace (getColorize)
 import Sayland.Wire
@@ -316,8 +312,4 @@ sendMessage e (TObjectID o) = do
   colorize <- liftIO getColorize
   liftIO (traceIO $ colorize Vivid Yellow $ ("    -> " <>) $ showMessage o e)
   socket' <- (.socket) <$> getClientEnv
-  let (fds, body) = runPutM (execStateT (putMessage e) [])
-      msg = encodeMessage o (getOpcode e) (BS.toStrict body)
-  liftIO $ case reverse fds of
-    [] -> sendAll socket' msg
-    fds' -> sendManyWithFds socket' [msg] fds'
+  liftIO $ sendRaw socket' o (getOpcode e) (putMessage e)

@@ -71,6 +71,7 @@ library sayland-wire
   hs-source-dirs: lib-wire
   -- cabal-gild: discover lib-wire
   exposed-modules:
+    Sayland.Internal.Connection
     Sayland.Internal.Wire
     Sayland.Wire
 

@@ -1,5 +1,5 @@
 -- | Description : Decoding and encoding wire protocol values.
-module Sayland.Internal.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, decodeMessage, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, encodeMessage, RawObjectID) where
+module Sayland.Internal.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, runWireGet, runWirePut, decodeMessage, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, encodeMessage, RawObjectID) where
 
 import Control.Monad.State.Strict (MonadTrans (lift), StateT)
 import Control.Monad.State.Strict qualified as State
@@ -19,6 +19,18 @@ type WireGet = StateT [Fd] Get
 
 -- | WirePut monad, appends file descriptors to the PutM monad.
 type WirePut = StateT [Fd] PutM
+
+-- | Run a `WirePut`, returning the bytes and the file descriptors it put, in the order they were put.
+runWirePut :: WirePut () -> (BS.ByteString, [Fd])
+runWirePut p = (BSL.toStrict bytes, reverse fds) -- `WlFd` conses, so the state is newest first.
+  where
+    (fds, bytes) = runPutM (State.execStateT p [])
+
+-- | Run a `WireGet`, taking file descriptors from the front of the list. Returns the ones it did not take.
+runWireGet :: WireGet a -> [Fd] -> BS.ByteString -> Either String (a, [Fd])
+runWireGet g fds bytes = case runGetOrFail (State.runStateT g fds) (BS.fromStrict bytes) of
+  Left (_, _, err) -> Left err
+  Right (_, _, result) -> Right result
 
 -- | Typeclass for wire types implementing decoding and serializing.
 class WireFormat a where

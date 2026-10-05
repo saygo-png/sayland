@@ -8,21 +8,14 @@ import Control.Exception (finally)
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Reader
-import Control.Monad.State.Strict (runStateT)
 import Data.Binary (Word16)
-import Data.Binary.Get
 import Data.Bool
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BL
 import Data.Coerce
 import Data.Data (cast)
 import Data.Map qualified as Map
-import Data.String
 import Debug.Trace (traceIO)
-import Foreign (Storable (peek, sizeOf), castPtr)
-import Foreign.C
 import Network.Socket
-import Network.Socket.ByteString (recvMsg)
 import Sayland.Internal.Core
 import Sayland.Internal.Object
 import Sayland.Internal.Prelude
@@ -30,10 +23,6 @@ import Sayland.Internal.Protocols.Wayland
 import Sayland.Internal.Trace
 import Sayland.Wire
 import System.Console.ANSI (Color (Magenta), ColorIntensity (Vivid))
-import System.Directory (doesFileExist)
-import System.Environment.Blank (getEnv)
-import System.FilePath
-import System.Posix (Fd (Fd))
 
 -- Listeners {{{
 
@@ -83,18 +72,6 @@ serveClient loop =
     sendMsg (Wl_display wlDisplayId) (Event_wl_display_error e.object e.code e.message)
     throwIO e
 
--- | Get a list of file descriptors from an ancillary data bytestring.
-decodeFds :: BS.ByteString -> IO [Fd]
-decodeFds bs = map Fd <$> go bs []
-  where
-    intSize = sizeOf (0 :: CInt)
-    go b acc
-      | BS.length b < intSize = pure $ reverse acc
-      | otherwise = do
-          let (x, rest) = BS.splitAt intSize b
-          v <- BS.useAsCString x (peek . castPtr)
-          go rest (v : acc)
-
 -- | Handle communication between a server and a client in provided socket, works both on the server and the client.
 clientLoop :: (KnownPerspective p) => Socket -> Wayland p ()
 clientLoop = clientLoop' ""
@@ -102,8 +79,7 @@ clientLoop = clientLoop' ""
     clientLoop' :: (KnownPerspective p) => BS.ByteString -> Socket -> Wayland p ()
     clientLoop' bytes' sock = do
       queue <- (.fdQueue) <$> getClientEnv
-      (_, bytes'', cmsgs, _flags) <- liftIO $ recvMsg sock 8 4096 mempty
-      newFds <- liftIO $ concat <$> traverse (decodeFds . cmsgData) (filter (\x -> cmsgId x == CmsgIdFds) cmsgs)
+      (bytes'', newFds) <- liftIO $ recvChunk sock
       atomically $ mapM_ (writeTQueue queue) newFds
       let bytes = bytes' <> bytes''
       bool
@@ -115,11 +91,6 @@ clientLoop = clientLoop' ""
         )
         (clientLoop' bytes sock)
         (isPartial bytes)
-      where
-        isPartial :: BS.ByteString -> Bool
-        isPartial s = case runGetOrFail getHeader (BS.fromStrict s) of
-          Left (_, _, _) -> True
-          Right (rest, _, (_, _, size')) -> fromIntegral (size' - headerSize) > BL.length rest
 
 {- | Deal with an inbound message. Checks if the `ObjectID` reference is valid.
 if it is valid, the work is handed to `dispatchMessage`.
@@ -137,56 +108,15 @@ dispatchWith :: (Message m) => (m -> Wayland p ()) -> RawObjectID -> Word16 -> B
 dispatchWith handle oid opcode msg = do
   env <- getClientEnv
   fds <- atomically $ flushTQueue env.fdQueue
-  case runGetOrFail (runStateT (getMessage opcode) fds) (BS.fromStrict msg) of
-    Left (_, _, err) -> fail err
-    Right (_, _, (message, leftover)) -> do
+  case runWireGet (getMessage opcode) fds msg of
+    Left err -> fail err
+    Right (message, leftover) -> do
       void . atomically $ traverse (unGetTQueue env.fdQueue) (reverse leftover)
       colorize <- liftIO getColorize
       liftIO . traceIO . colorize Vivid Magenta $ ("  <- " <>) $ showMessage oid message
       handle message
       handlers <- readIORef env.eventHandlers
       forM_ handlers $ \(EventHandler f) -> forM_ (cast message) $ f oid
-
--- }}}
-
--- Socket Finding Utilities {{{
-
--- | Get an absolute socket path based from @XDG_RUNTIME_DIR@.
-getSocketPath :: IO (Maybe String) -> IO (Maybe FilePath)
-getSocketPath = liftA2 (liftA2 (</>)) $ getEnv "XDG_RUNTIME_DIR"
-
--- | Find an already existing socket, if @WAYLAND_DISPLAY@ does not exist.
-openSocketName :: IO (Maybe String)
-openSocketName = findSocketName doesFileExist
-
-{- | Find a not already existing and valid socket name.
-Does NOT care about @WAYLAND_DISPLAY@
--}
-availableSocketName :: IO (Maybe String)
-availableSocketName = scanRuntimeDir (fmap not . doesFileExist)
-
-{- | Find a socket name by predicate.
-Short circuits if 'WAYLAND_DISPLAY' exists, ignoring the predicate.
--}
-findSocketName :: (FilePath -> IO Bool) -> IO (Maybe String)
-findSocketName isAccepted = getEnv "WAYLAND_DISPLAY" `orElse'` scanRuntimeDir isAccepted
-  where
-    -- Run the second action only if the first yields Nothing.
-    orElse' :: IO (Maybe a) -> IO (Maybe a) -> IO (Maybe a)
-    orElse' a b = a >>= maybe b (pure . Just)
-
--- | Find a socket name by predicate, scanning @XDG_RUNTIME_DIR@.
-scanRuntimeDir :: (FilePath -> IO Bool) -> IO (Maybe String)
-scanRuntimeDir isAccepted =
-  getEnv "XDG_RUNTIME_DIR"
-    >>= maybe (pure Nothing) (\dir -> firstMatch (isAccepted . (dir </>)) candidates)
-  where
-    candidates :: [String] = ["wayland-" <> fromString (show i) | i <- [0 .. 99 :: Int]]
-
-    -- First element satisfying the predicate, stopping on the first match.
-    firstMatch :: (a -> IO Bool) -> [a] -> IO (Maybe a)
-    firstMatch p =
-      foldr (\x rest -> p x >>= \ok -> if ok then pure (Just x) else rest) (pure Nothing)
 
 -- }}}
 
