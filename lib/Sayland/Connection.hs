@@ -9,7 +9,6 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Reader
 import Data.Binary (Word16)
-import Data.Bool
 import Data.ByteString qualified as BS
 import Data.Coerce
 import Data.Data (cast)
@@ -82,15 +81,12 @@ clientLoop = clientLoop' ""
       (bytes'', newFds) <- liftIO $ recvChunk sock
       atomically $ mapM_ (writeTQueue queue) newFds
       let bytes = bytes' <> bytes''
-      bool
-        ( case decodeMessage bytes of
-            Just (oid, opcode, x, y) -> do
-              handleMessage oid opcode x
-              clientLoop' y sock
-            Nothing -> error "impossible/undefined edge case"
-        )
-        (clientLoop' bytes sock)
-        (isPartial bytes)
+      case decodeMessage bytes of
+        Right (oid, opcode, x, y) -> do
+          handleMessage oid opcode x
+          clientLoop' y sock
+        Left Incomplete -> clientLoop' bytes sock
+        Left malformed -> throwIO malformed
 
 {- | Deal with an inbound message. Checks if the `ObjectID` reference is valid.
 if it is valid, the work is handed to `dispatchMessage`.

@@ -2,9 +2,7 @@
 module Sayland.Internal.Connection (module Sayland.Internal.Connection) where
 
 import Data.Binary (Word16)
-import Data.Binary.Get (runGetOrFail)
 import Data.ByteString qualified as BS
-import Data.ByteString.Lazy qualified as BL
 import Data.String
 import Foreign (Storable (peek, sizeOf), castPtr)
 import Foreign.C
@@ -32,12 +30,6 @@ recvChunk sock = do
   (_, bytes, cmsgs, _flags) <- recvMsg sock 8 4096 mempty
   fds <- concat <$> traverse (decodeFds . cmsgData) (filter (\x -> cmsgId x == CmsgIdFds) cmsgs)
   pure (bytes, fds)
-
--- | Whether the bytes do not hold a whole message yet.
-isPartial :: BS.ByteString -> Bool
-isPartial s = case runGetOrFail getHeader (BS.fromStrict s) of
-  Left (_, _, _) -> True
-  Right (rest, _, (_, _, size')) -> fromIntegral (size' - headerSize) > BL.length rest
 
 -- | Get a list of file descriptors from an ancillary data bytestring.
 decodeFds :: BS.ByteString -> IO [Fd]

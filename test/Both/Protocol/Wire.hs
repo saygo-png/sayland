@@ -57,7 +57,7 @@ prop_header objectID opcode body =
 
 prop_message :: WlUInt -> Word16 -> Body -> Property
 prop_message objectID opcode (Body body) =
-  decodeMessage encodedMsg === Just (objectID, opcode, body, "")
+  decodeMessage encodedMsg === Right (objectID, opcode, body, "")
   where
     encodedMsg = encodeMessage objectID opcode body
 
@@ -69,13 +69,13 @@ prop_decodePartial objectID opcode =
   forAllShrink (arbitrary `suchThat` hasBytes) (filter hasBytes . shrink) $ \(Body body) ->
     let encodedMsg = encodeMessage objectID opcode body
      in forAll (chooseInt (fromIntegral headerSize, BS.length encodedMsg - 1)) $ \kept ->
-          decodeMessage (BS.take kept encodedMsg) === Nothing
+          decodeMessage (BS.take kept encodedMsg) === Left Incomplete
   where
     hasBytes (Body b) = not (BS.null b)
 
 -- | Fewer bytes than a header can't decode, whatever they are.
 prop_decodePartialHeader :: [Word8] -> Property
-prop_decodePartialHeader bytes = decodeMessage (BS.pack (take (fromIntegral headerSize - 1) bytes)) === Nothing
+prop_decodePartialHeader bytes = decodeMessage (BS.pack (take (fromIntegral headerSize - 1) bytes)) === Left Incomplete
 
 -- | A header claiming any size, unlike `encodeMessage` which derives it from the body.
 header :: WlUInt -> Word16 -> Word16 -> BS.ByteString
@@ -85,13 +85,13 @@ header objectID opcode size = BSL.toStrict . runPut $ putHeader (objectID, opcod
 prop_decodeTooSmall :: WlUInt -> Word16 -> [Word8] -> Property
 prop_decodeTooSmall objectID opcode trailing =
   forAll (chooseEnum (0, headerSize - 1)) $ \size ->
-    decodeMessage (header objectID opcode size <> BS.pack trailing) === Nothing
+    decodeMessage (header objectID opcode size <> BS.pack trailing) === Left (InvalidSize $ SizeTooSmall size)
 
 -- | Arguments are all multiples of 4 bytes, so a size that isn't is malformed.
 prop_decodeUnaligned :: WlUInt -> Word16 -> Property
 prop_decodeUnaligned objectID opcode =
   forAll (chooseEnum (headerSize, 256) `suchThat` \s -> s `mod` 4 /= 0) $ \size ->
-    decodeMessage (header objectID opcode size <> BS.replicate (fromIntegral size) 0) === Nothing
+    decodeMessage (header objectID opcode size <> BS.replicate (fromIntegral size) 0) === Left (InvalidSize $ SizeUnaligned size)
 
 -- | A message body. Every argument is a multiple of 4 bytes, so a body is too.
 newtype Body = Body BS.ByteString deriving stock (Show)

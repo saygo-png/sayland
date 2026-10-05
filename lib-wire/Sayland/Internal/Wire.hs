@@ -1,8 +1,10 @@
 -- | Description : Decoding and encoding wire protocol values.
-module Sayland.Internal.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, runWireGet, runWirePut, decodeMessage, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, putHeader, encodeMessage, RawObjectID) where
+module Sayland.Internal.Wire (WlInt (..), WlUInt (..), WlFixed (..), WlString (..), WlArray (..), WlFd (..), WlNewId (..), WireGet, WirePut, runWireGet, runWirePut, decodeMessage, DecodeError (..), InvalidSize (..), BodyWords, parseBodyWords, bodySize, wireGet, wirePut, WireFormat, headerSize, waylandNull, getHeader, putHeader, encodeMessage, RawObjectID) where
 
+import Control.Exception (Exception)
 import Control.Monad.State.Strict (MonadTrans (lift), StateT)
 import Control.Monad.State.Strict qualified as State
+import Data.Bifunctor
 import Data.Binary
 import Data.Binary.Get
 import Data.Binary.Put
@@ -142,11 +144,45 @@ encodeMessage oid opcode body = BSL.toStrict . runPut $ do
   putHeader (oid, opcode, headerSize + fromIntegral (BS.length body))
   putByteString body
 
--- | Parse a `ByteString` into a message tuple.
-decodeMessage :: BS.ByteString -> Maybe (RawObjectID, Word16, BS.ByteString, BS.ByteString)
+-- | Why `decodeMessage` did not return a message.
+data DecodeError
+  = -- | Not all of the message has arrived yet. On a stream, read more and try again.
+    Incomplete
+  | -- | The header claims a size no message can have.
+    InvalidSize InvalidSize
+  deriving stock (Show, Eq)
+
+instance Exception DecodeError
+
+-- | Length of a message body as a count of 32-bit words.
+newtype BodyWords = BodyWords Word16 deriving newtype (Show, Eq, Ord)
+
+-- | Why `parseBodyWords` did not return a `BodyWords`.
+data InvalidSize
+  = -- | The header claims fewer bytes than the header itself takes up.
+    SizeTooSmall Word16
+  | -- | The header claims a size that is not a multiple of 4, which no message has.
+    SizeUnaligned Word16
+  deriving stock (Show, Eq)
+
+instance Exception InvalidSize
+
+-- | Parse the size of a body.
+parseBodyWords :: Word16 -> Either InvalidSize BodyWords
+parseBodyWords size
+  | size < headerSize = Left (SizeTooSmall size)
+  | size `mod` 4 /= 0 = Left (SizeUnaligned size)
+  | otherwise = Right (BodyWords ((size - headerSize) `div` 4))
+
+-- | Size of the body in bytes.
+bodySize :: BodyWords -> Int
+bodySize (BodyWords n) = 4 * fromIntegral n
+
+-- | Parse the first message out of a `ByteString`, returning its object, opcode and body, and the bytes after it.
+decodeMessage :: BS.ByteString -> Either DecodeError (RawObjectID, Word16, BS.ByteString, BS.ByteString)
 decodeMessage s = case runGetOrFail getHeader (BS.fromStrict s) of
-  Left (_, _, _) -> Nothing
-  Right (rest', _, (oid, opcode, size)) -> Just (oid, opcode, BS.take payload rest, BS.drop payload rest)
-    where
-      payload = fromIntegral $ size - headerSize
-      rest = BS.toStrict rest'
+  Left _ -> Left Incomplete
+  Right (rest', _, (oid, opcode, rawSize)) -> do
+    bodyLength <- bimap InvalidSize bodySize (parseBodyWords rawSize)
+    let (body, rest) = BS.splitAt bodyLength (BS.toStrict rest')
+    if BS.length body < bodyLength then Left Incomplete else Right (oid, opcode, body, rest)
