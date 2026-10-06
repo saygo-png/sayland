@@ -1,11 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskellQuotes #-}
 
-{- | Description : Generate Haskell from Wayland xml protocol files.
-
-This API is internal, so it is quite messy and is highly unstable
-You can still use it if you want to implement your own protocols.
--}
+-- | Description : Generate Haskell from Wayland xml protocol files.
+--
+-- This API is internal, so it is quite messy and is highly unstable
+-- You can still use it if you want to implement your own protocols.
 module Sayland.Internal.Codegen (module Sayland.Internal.Codegen) where
 
 import Control.Applicative
@@ -55,9 +54,8 @@ createdInterfaces e =
   , Just iface <- [findAttr (qname "interface") arg]
   ]
 
-{- | Whether an interface has a usable 'Object' instance. I.e it exists, and it isn't an 'Unsatisfiable' placeholder.
-Also throw error if an object is `Unsatisfiable` but the global instance of it isn't.
--}
+-- | Whether an interface has a usable 'Object' instance. I.e it exists, and it isn't an 'Unsatisfiable' placeholder.
+-- Also throw error if an object is `Unsatisfiable` but the global instance of it isn't.
 isImplemented :: Name -> Q Bool
 isImplemented ty =
   reifyInstances ''Object [ConT ty] >>= \case
@@ -76,11 +74,10 @@ isImplemented ty =
     isUnsatisfiable (AppT (ConT n) _) = n == ''Unsatisfiable
     isUnsatisfiable _ = False
 
-{- | Generates the table for the given protocol, using formatter to format
-interface type names - as they are to be defined by the user. Only globals are
-listed: an interface created by a @new_id@ is not registry-bindable. Also emits
-the `Global` instances for those globals whose only field is @wlid@.
--}
+-- | Generates the table for the given protocol, using formatter to format
+-- interface type names - as they are to be defined by the user. Only globals are
+-- listed: an interface created by a @new_id@ is not registry-bindable. Also emits
+-- the `Global` instances for those globals whose only field is @wlid@.
 generateProtocolTable :: Bool -> Element -> (String -> String) -> Q [Dec]
 generateProtocolTable isIO e formatter = do
   protocol <- attr "name" e
@@ -125,10 +122,9 @@ generateProtocolTable isIO e formatter = do
 
 -- Haddock {{{
 
-{- | Haddock text for an XML element. its @\<description\>@ and the
-@summary@ attribute as the first paragraph and the body as the rest. Fallback
-to just @summary@ attribute.
--}
+-- | Haddock text for an XML element. its @\<description\>@ and the
+-- @summary@ attribute as the first paragraph and the body as the rest. Fallback
+-- to just @summary@ attribute.
 elemDoc :: Element -> Maybe String
 elemDoc el = escapeHaddock <$> (descDoc <|> summaryAttr el)
   where
@@ -155,9 +151,8 @@ dedent s = intercalate "\n" $ strip <$> body
 escapeHaddock :: String -> String
 escapeHaddock = concatMap $ \c -> if c `elem` ("\\/'\"@<>[]#" :: String) then ['\\', c] else [c]
 
-{- | Attach a Haddock comment to a name defined by the current splice.
-No-op under `isIO`, where there is no splice to finalize.
--}
+-- | Attach a Haddock comment to a name defined by the current splice.
+-- No-op under `isIO`, where there is no splice to finalize.
 docDecl :: Bool -> Name -> Maybe String -> Q ()
 docDecl isIO n = unless isIO . mapM_ (addModFinalizer . putDoc (DeclDoc n))
 
@@ -167,9 +162,8 @@ docArg isIO n i = unless isIO . mapM_ (addModFinalizer . putDoc (ArgDoc n i))
 
 -- }}}
 
-{- | @instance Global T@, for globals whose only field is @wlid@ the default
-method coerces the id. Reports warns for globals that need to be handwritten.
--}
+-- | @instance Global T@, for globals whose only field is @wlid@ the default
+-- method coerces the id. Reports warns for globals that need to be handwritten.
 deriveGlobal :: Name -> Q [Dec]
 deriveGlobal ty = do
   (_cn, fields) <- soleRecordCon ty
@@ -214,14 +208,13 @@ deriveGlobal ty = do
         RecC cn fields -> pure (cn, [(fieldBase f, t) | (f, _, t) <- fields])
         _ -> fail $ "sayland: " <> nameBase typ <> " is not a record"
 
-{- | Defines an enum-like along with a function to look up the value of each element.
-example output:
-data Enum_[interface]_[name] = A | B | C | D ... deriving (Eq, Ord)
-enumName' A = 1 ...
-
-if the enum is a bitfield, instead generates the following:
-data Enum_[interface]_[name] = Enum_[interface]_[name] {[name]_[entry] :: Bool, [name]_[entry2] :: Bool, ...} deriving (Eq, Ord, Generic)
--}
+-- | Defines an enum-like along with a function to look up the value of each element.
+-- example output:
+-- data Enum_[interface]_[name] = A | B | C | D ... deriving (Eq, Ord)
+-- enumName' A = 1 ...
+--
+-- if the enum is a bitfield, instead generates the following:
+-- data Enum_[interface]_[name] = Enum_[interface]_[name] {[name]_[entry] :: Bool, [name]_[entry2] :: Bool, ...} deriving (Eq, Ord, Generic)
 mkEnum :: Bool -> String -> Element -> Q [Dec]
 mkEnum isIO interfaceName enumEl = do
   bool
@@ -347,10 +340,9 @@ wlFormatter :: String -> String
 wlFormatter [] = []
 wlFormatter (x : xs) = toUpper x : xs
 
-{- | Loads all .xml files in `path` as protocols.
-Set `isIO` to True only when running the function within an IO monad. This should be used *only* for debugging purposes.
-`monad` defines the monad in which all events and requests operate in.
--}
+-- | Loads all .xml files in `path` as protocols.
+-- Set `isIO` to True only when running the function within an IO monad. This should be used *only* for debugging purposes.
+-- `monad` defines the monad in which all events and requests operate in.
 loadProtocols :: (String -> String) -> Bool -> FilePath -> Q [Dec]
 loadProtocols formatter isIO path = do
   protocol_files <- filter ((== ".xml") . takeExtension) <$> runIO (listDirectory path)

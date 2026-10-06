@@ -51,9 +51,8 @@ instance WireFormat (TObjectID a) where
 -- | The Wayland monad. Allows easy access to the Wayland environment state without threading repetitive arguments.
 type Wayland p = ReaderT (WaylandEnv p) IO
 
-{- | Type representing global names which are numbers.
-Created in order to prevent mixups between object ids and global names.
--}
+-- | Type representing global names which are numbers.
+-- Created in order to prevent mixups between object ids and global names.
 newtype GlobalName = GlobalName WlUInt
   deriving newtype (Show, Eq, Ord, Num)
 
@@ -62,9 +61,8 @@ class (Object i) => Global i where
   default global :: (Coercible (TObjectID i) i) => TObjectID i -> IO i
   global = pure . coerce
 
-{- | Sum type representing a perspective.
-Used to make things reusable for clients and servers (compositors).
--}
+-- | Sum type representing a perspective.
+-- Used to make things reusable for clients and servers (compositors).
 data Perspective = Client | Server
   deriving stock (Eq)
 
@@ -122,9 +120,8 @@ data EventHandler p where
 -- | Number representing a Wayland Client.
 type ClientID = Int
 
-{- | Class defining an Interface as a collection of events and requests which has a `TObjectID`, version and name.
-This does not include implementations of events and requests which are supplied by `Interface`.
--}
+-- | Class defining an Interface as a collection of events and requests which has a `TObjectID`, version and name.
+-- This does not include implementations of events and requests which are supplied by `Interface`.
 class
   ( Message (Event a)
   , Message (Request a)
@@ -199,9 +196,8 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
   -- ^ Stores file descriptors.
   }
 
-{- | Error saying: The connection is over. The peer reported a violation with @wl_display.error@,
-or sent something invalid. This represents a wire value so it only carries wire types. (no `TObjectID` or `ErrorCode`)
--}
+-- | Error saying: The connection is over. The peer reported a violation with @wl_display.error@,
+-- or sent something invalid. This represents a wire value so it only carries wire types. (no `TObjectID` or `ErrorCode`)
 data ProtocolError = ProtocolError
   { object :: RawObjectID
   , code :: WlUInt
@@ -217,9 +213,8 @@ instance Exception ProtocolError where
 class ErrorCode e where
   errorCode :: e -> WlUInt
 
-{- | Error saying: A message failed validation before it was sent. Nothing reached the peer and
-the connection is still usable.
--}
+-- | Error saying: A message failed validation before it was sent. Nothing reached the peer and
+-- the connection is still usable.
 newtype InvalidMessage = InvalidMessage ProtocolError
   deriving stock (Show)
 
@@ -240,19 +235,17 @@ data ConnectionError
   deriving stock (Show)
   deriving anyclass (Exception)
 
-{- | The null object.
-In the future this should be replaced by all nullable object types being `Maybe` and users passing in `Nothing`.
--}
+-- | The null object.
+-- In the future this should be replaced by all nullable object types being `Maybe` and users passing in `Nothing`.
 nullObjectID :: TObjectID a
 nullObjectID = TObjectID 0
 
 {-# WARNING in "x-stub" stub "Handled by a stub: this message is not fully implemented." #-}
 
-{- | Placeholder for a message which is not fully implemented yet.
-Avoid using this function if possible. Instead implement an interface fully or ditch it.
-Partial interfaces are worse than an unimplemented one because they have inconsistent behaviour.
-Use this instead of just `pass` or only forwarding as it warns at compile time and logs at runtime.
--}
+-- | Placeholder for a message which is not fully implemented yet.
+-- Avoid using this function if possible. Instead implement an interface fully or ditch it.
+-- Partial interfaces are worse than an unimplemented one because they have inconsistent behaviour.
+-- Use this instead of just `pass` or only forwarding as it warns at compile time and logs at runtime.
 stub :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
 stub obj msg = liftIO . traceIO $ "sayland: unimplemented: " <> showMessage (toRawObjectID obj.wlid) msg
 
@@ -260,9 +253,8 @@ stub obj msg = liftIO . traceIO $ "sayland: unimplemented: " <> showMessage (toR
 stubDeprecated :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
 stubDeprecated obj msg = liftIO . traceIO $ "sayland: unimplemented(deprecated): " <> showMessage (toRawObjectID obj.wlid) msg
 
-{- | Like `sendMessage` but meant for use inside handlers.
-It contains the logic determining if a message should be sent from the current perspective.
--}
+-- | Like `sendMessage` but meant for use inside handlers.
+-- It contains the logic determining if a message should be sent from the current perspective.
 forwardMessage :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
 forwardMessage i m = do
   me <-

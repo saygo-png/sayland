@@ -23,9 +23,8 @@ newObjectID = do
   env <- getClientEnv
   atomicModifyIORef' env.counter $ \n -> (n + 1, n + 1)
 
-{- | Create an object and tell the peer about it.
-Used by users to create objects. Should not be used in handler implementations.
--}
+-- | Create an object and tell the peer about it.
+-- Used by users to create objects. Should not be used in handler implementations.
 newObject ::
   (Object parent, Object child, KnownPerspective p) =>
   parent -> (TObjectID child -> Outgoing p parent) -> Wayland p child
@@ -35,15 +34,13 @@ newObject parent mkMsg = do
   getInterface oid
     >>= maybe (error $ "sayland bug: handler did not register object " <> show (toRawObjectID oid)) pure
 
-{- | Send a message and apply a handler associated with it. The handler changes the state.
-If necessary raw messages without state changes can be sent using the internal `sendMessage`
--}
+-- | Send a message and apply a handler associated with it. The handler changes the state.
+-- If necessary raw messages without state changes can be sent using the internal `sendMessage`
 sendMsg :: (KnownPerspective p, Object i) => i -> Outgoing p i -> Wayland p ()
 sendMsg i m = applyOutgoing i m `catchW` \(e :: ProtocolError) -> throwIO $ InvalidMessage e
 
-{- | Receive a message, applying state changes associated with it.
-Alias of `applyIncoming` for name consistency.
--}
+-- | Receive a message, applying state changes associated with it.
+-- Alias of `applyIncoming` for name consistency.
 receiveMsg :: (Object i, KnownPerspective p) => i -> Incoming p i -> Wayland p ()
 receiveMsg = applyIncoming
 

@@ -51,15 +51,13 @@ getSocketPath = liftA2 (liftA2 (</>)) $ getEnv "XDG_RUNTIME_DIR"
 openSocketName :: IO (Maybe String)
 openSocketName = findSocketName doesFileExist
 
-{- | Find a not already existing and valid socket name.
-Does NOT care about @WAYLAND_DISPLAY@
--}
+-- | Find a not already existing and valid socket name.
+-- Does NOT care about @WAYLAND_DISPLAY@
 availableSocketName :: IO (Maybe String)
 availableSocketName = scanRuntimeDir (fmap not . doesFileExist)
 
-{- | Find a socket name by predicate.
-Short circuits if @WAYLAND_DISPLAY@ exists, ignoring the predicate.
--}
+-- | Find a socket name by predicate.
+-- Short circuits if @WAYLAND_DISPLAY@ exists, ignoring the predicate.
 findSocketName :: (FilePath -> IO Bool) -> IO (Maybe String)
 findSocketName isAccepted = getEnv "WAYLAND_DISPLAY" `orElse'` scanRuntimeDir isAccepted
   where

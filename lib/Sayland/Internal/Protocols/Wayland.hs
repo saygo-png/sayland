@@ -962,11 +962,10 @@ instance Object Wl_fixes where
 
 -- Wrapper Functions, for QoL {{{
 
-{- | Bind the first advertised global of an interface. Throws 'MissingGlobal' if the global isn't advertised.
-**This function does not check if all global announcements have arrived**! You probably want to use `Request_wl_display_sync` beforehand.
-That will make the server confirm when its done sending globals.
-Use `tryBindToInterface` for a version returning Maybe instead of throwing.
--}
+-- | Bind the first advertised global of an interface. Throws 'MissingGlobal' if the global isn't advertised.
+-- **This function does not check if all global announcements have arrived**! You probably want to use `Request_wl_display_sync` beforehand.
+-- That will make the server confirm when its done sending globals.
+-- Use `tryBindToInterface` for a version returning Maybe instead of throwing.
 bindToInterface :: forall i. (Global i) => Wl_registry -> Wayland Client i
 bindToInterface registry =
   tryBindToInterface @i registry

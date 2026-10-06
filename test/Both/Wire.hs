@@ -61,9 +61,8 @@ prop_message objectID opcode (Body body) =
   where
     encodedMsg = encodeMessage objectID opcode body
 
-{- | A message whose header has arrived but whose body has not fully arrived yet must not decode.
-The test keeps only the first @kept@ bytes of a message, anywhere from just the header to all but the last byte.
--}
+-- | A message whose header has arrived but whose body has not fully arrived yet must not decode.
+-- The test keeps only the first @kept@ bytes of a message, anywhere from just the header to all but the last byte.
 prop_decodePartial :: WlUInt -> Word16 -> Property
 prop_decodePartial objectID opcode =
   forAllShrink (arbitrary `suchThat` hasBytes) (filter hasBytes . shrink) $ \(Body body) ->
@@ -155,9 +154,8 @@ word32le = BSL.toStrict . runPut . putWord32le . fromIntegral
 nulTerm :: BS.ByteString
 nulTerm = BS.singleton 0x00
 
-{- | Valid contents of a wl_string as a `String`. Characters without NUL, possibly none.
-`contentBytes` turns the content into UTF-8 bytes.
--}
+-- | Valid contents of a wl_string as a `String`. Characters without NUL, possibly none.
+-- `contentBytes` turns the content into UTF-8 bytes.
 newtype StringContents = StringContents String deriving stock (Show)
 
 instance Arbitrary StringContents where
@@ -176,9 +174,8 @@ validChar c = c /= '\0' && notSurrogate c
 notSurrogate :: Char -> Bool
 notSurrogate c = c < '\xD800' || c > '\xDFFF'
 
-{- | A wl_string is NUL terminated, so a payload containing a NUL is not
-representable on the wire. Never generate one, and never shrink towards one.
--}
+-- | A wl_string is NUL terminated, so a payload containing a NUL is not
+-- representable on the wire. Never generate one, and never shrink towards one.
 instance Arbitrary WlString where
   arbitrary = WlString . encodeContents <$> arbitrary
   shrink (WlString s) = WlString . encodeContents <$> shrink (StringContents (decodeUtf8 s))

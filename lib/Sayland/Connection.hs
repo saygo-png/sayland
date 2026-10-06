@@ -62,9 +62,8 @@ handleIncomingClient env socket' = do
       close socket'
       atomically . modifyTVar env.clients $ Map.delete serial'
 
-{- | Run one client's connection. A protocol violation is reported to the client
-before the connection is closed.
--}
+-- | Run one client's connection. A protocol violation is reported to the client
+-- before the connection is closed.
 serveClient :: Wayland Server () -> Wayland Server ()
 serveClient loop =
   loop `catchW` \(e :: ProtocolError) -> do
@@ -88,9 +87,8 @@ clientLoop = clientLoop' ""
         Left Incomplete -> clientLoop' bytes sock
         Left malformed -> throwIO malformed
 
-{- | Deal with an inbound message. Checks if the `ObjectID` reference is valid.
-if it is valid, the work is handed to `dispatchMessage`.
--}
+-- | Deal with an inbound message. Checks if the `ObjectID` reference is valid.
+-- if it is valid, the work is handed to `dispatchMessage`.
 handleMessage :: (KnownPerspective p) => RawObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 handleMessage oid opcode msg = do
   env <- getClientEnv
