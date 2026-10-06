@@ -148,7 +148,7 @@ test-suite sayland-tests
   -- cabal-gild: discover test --exclude=test/Main.hs
   other-modules:
     Both.Protocol.Codegen
-    Both.Protocol.Wire
+    Both.Wire
     Client.BasicWindow
     Client.WallpaperDaemon
     Server.BasicCompositor
