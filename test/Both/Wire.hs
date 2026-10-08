@@ -25,12 +25,19 @@ tests =
     , testProperty "wl_array roundtrip" $ prop_roundtrip putWlArray getWlArray
     , testProperty "wl_fd roundtrip" $ prop_roundtrip putWlFd (maybeToRight ("missing fd" :: String) <$> getWlFd)
     , testProperty "wl_new_id roundtrip" $ prop_roundtrip putWlNewId getWlNewId
+    , testProperty "wl_object roundtrip, null included" $ prop_roundtrip putWlObjectID getWlObjectID
+    , testProperty "the null object is 0 on the wire" prop_nullObject
+    , testProperty "wl_new_id rejects a null interface name or ID" prop_newIdRejectsNull
+    , testProperty "file descriptors come back in the order they were put" prop_fdOrder
+    , testProperty "wlText accepts exactly the text without NUL" prop_wlText
+    , truncatedTests
     , testProperty "getHeader reverses putHeader" prop_header
     , testProperty "decodeMessage reverses encodeMessage" prop_message
     , testProperty "decodeMessage only returns non-partial messages" prop_decodePartial
     , testProperty "decodeMessage does not decode a partial header" prop_decodePartialHeader
     , testProperty "decodeMessage rejects sizes smaller than the header" prop_decodeTooSmall
     , testProperty "decodeMessage rejects sizes that are not a multiple of 4" prop_decodeUnaligned
+    , testProperty "decodeMessage splits a stream into its messages" prop_decodeStream
     , wlStringTests
     ]
 
@@ -45,6 +52,59 @@ prop_roundtrip putter getter x = roundtrip x === Right x
         | otherwise -> Left "decoding left bytes or fds unread"
       where
         (bytes, fds) = runWirePut (putter y)
+
+-- | Object 0 is the null object: an object that may be null decodes it as `Nothing`, one that may not rejects it.
+prop_nullObject :: Property
+prop_nullObject =
+  once
+    $ conjoin
+      [ decode getWlObjectID === Right Nothing
+      , decode getObjectID === Left ObjectIDIsNul
+      , encodeWire putWlObjectID Nothing === word32le 0
+      ]
+  where
+    decode :: WireGet a -> a
+    decode getter = let (decoded, _, _) = runWireGet getter [] (word32le 0) in decoded
+
+-- | A @new_id@ of no fixed interface names an interface and creates an object, so neither can be null.
+prop_newIdRejectsNull :: WlText -> WlUInt -> ObjectID -> Property
+prop_newIdRejectsNull name version oid =
+  decode (putWlString Nothing >> putWlUInt version >> putObjectID oid) === Left NewIdNullName
+    .&&. decode (putWlString (Just name) >> putWlUInt version >> putWlUInt 0) === Left (NewIdObjectID ObjectIDIsNul)
+  where
+    decode p = let (decoded, _, _) = runWireGet getWlNewId [] (fst (runWirePut p)) in decoded
+
+-- | Several fds are sent alongside the bytes in the order they were put, and are taken back in that order.
+prop_fdOrder :: [WlFd] -> Property
+prop_fdOrder fds = (WlFd <$> sent, decoded, rest) === (fds, Just <$> fds, [])
+  where
+    (bytes, sent) = runWirePut (mapM_ putWlFd fds)
+    (decoded, _, rest) = runWireGet (replicateM (length fds) getWlFd) sent bytes
+
+-- | `wlText` is what keeps a `WlText` free of NUL: it accepts exactly the text without one, and says where the first one is.
+prop_wlText :: StringContents -> StringContents -> Property
+prop_wlText (StringContents prefix) (StringContents suffix) =
+  counterexample prefix (isRight (wlText (toText prefix)))
+    .&&. wlText (toText (prefix <> "\0" <> suffix)) === Left (TextContainsNul (length prefix))
+
+-- | A value cut short decodes to an error. Never an exception, and never a value read from less than was put.
+truncatedTests :: TestTree
+truncatedTests =
+  testGroup
+    "a truncated value is rejected"
+    [ testProperty "wl_uint" $ prop_truncated putWlUInt getWlUInt
+    , testProperty "wl_string" $ prop_truncated putWlString getWlString
+    , testProperty "wl_array" $ prop_truncated putWlArray getWlArray
+    , testProperty "wl_new_id" $ prop_truncated putWlNewId getWlNewId
+    ]
+
+prop_truncated :: (Show a, Show e) => (a -> WirePut ()) -> WireGet (Either e a) -> a -> Property
+prop_truncated putter getter x =
+  forAll (chooseInt (0, BS.length bytes - 1)) $ \kept ->
+    let (decoded, _, _) = runWireGet getter fds (BS.take kept bytes)
+     in counterexample (show decoded) (isLeft decoded)
+  where
+    (bytes, fds) = runWirePut (putter x)
 
 prop_header :: ObjectID -> Word16 -> [Word8] -> Property
 prop_header objectID opcode body =
@@ -91,6 +151,17 @@ prop_decodeUnaligned objectID opcode =
   forAll (chooseEnum (headerSize, 256) `suchThat` \s -> s `mod` 4 /= 0) $ \size ->
     decodeMessage (header objectID opcode size <> BS.replicate (fromIntegral size) 0) === Left (InvalidSize $ SizeUnaligned size)
 
+-- | Messages arrive back to back in one stream, and come out one at a time, in order.
+prop_decodeStream :: [(ObjectID, Word16, Body)] -> Property
+prop_decodeStream msgs =
+  decodeAll (foldMap (\(o, op, Body b) -> encodeMessage o op b) msgs) === Right [(Just o, op, b) | (o, op, Body b) <- msgs]
+  where
+    decodeAll s
+      | BS.null s = Right []
+      | otherwise = do
+          (o, op, body, rest) <- decodeMessage s
+          ((o, op, body) :) <$> decodeAll rest
+
 -- WlString {{{
 
 wlStringTests :: TestTree
@@ -101,6 +172,9 @@ wlStringTests =
     , testProperty "`WlString` must be UTF-8 encoded" prop_WlStringFromStringIsUtf8
     , testProperty "`WlString` must be NUL terminated" prop_WlStringNeedsNulTerminator
     , testProperty "`WlString` must not contain NUL inside" prop_WlStringNoEmbeddedNul
+    , testProperty "`WlString` must be padded with zero bytes to a 32-bit boundary" prop_WlStringPadding
+    , testProperty "A null `WlString` is a length of 0" prop_WlStringNull
+    , testProperty "`WlString` must decode as UTF-8" prop_WlStringRejectsInvalidUtf8
     ]
 
 -- A string in wayland:
@@ -129,9 +203,27 @@ prop_WlStringNeedsNulTerminator contents = not (BS.null bytes) ==> rejectsString
   where
     bytes = encodeContents contents
 
--- TODO: then padding to a 32-bit boundary.
+-- then padding to a 32-bit boundary.
+prop_WlStringPadding :: StringContents -> Property
+prop_WlStringPadding contents =
+  conjoin [BS.length encoded `mod` 4 === 0, counterexample (show padding) (BS.all (== 0) padding .&&. BS.length padding < 4)]
+  where
+    encoded = encodeWire putWlString (Just (contentsText contents))
+    -- After the length, the contents and the NUL terminator.
+    padding = BS.drop (4 + BS.length (encodeContents contents) + 1) encoded
 
--- TODO: A null value is represented with a length of 0.
+-- A null value is represented with a length of 0.
+prop_WlStringNull :: Property
+prop_WlStringNull = once $ encodeWire putWlString Nothing === word32le 0 .&&. decoded === Right Nothing
+  where
+    (decoded, _, _) = runWireGet getWlString [] (word32le 0)
+
+-- The contents must decode as UTF-8. A continuation byte without a lead byte never does.
+prop_WlStringRejectsInvalidUtf8 :: StringContents -> StringContents -> Property
+prop_WlStringRejectsInvalidUtf8 prefix suffix = decoded === Left NotUtf8
+  where
+    encoded = encodeWire putWlArray $ WlArray (encodeContents prefix <> BS.singleton 0x80 <> encodeContents suffix <> nulTerm)
+    (decoded, _, _) = runWireGet getWlString [] encoded
 
 -- Interior null bytes are not permitted.
 prop_WlStringNoEmbeddedNul :: StringContents -> StringContents -> Property
