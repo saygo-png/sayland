@@ -928,11 +928,11 @@ instance Object Wl_subsurface where
         state' <- readIORef parentSurface.state
         b <- atomicModifyIORef' parentSurface.pendingState $ \s ->
           let stack = fromMaybe state'.sSubsurfaces s.cuSubsurfaces
-              joint = stack.below <> stack.above
-              (before, after) = Seq.breakl (== sibling) joint
-              joint2 = (before Seq.|> fromJust (after Seq.!? 0) Seq.|> subsurface.surface) <> Seq.drop 1 after
-              (below, above) = Seq.breakl (== subsurface.parent) joint2
-           in bool (s{cuSubsurfaces = Just SubsurfaceStack{below, above}}, True) (s, False) (after == Seq.empty)
+           in case Seq.breakl (== sibling) (stack.below <> stack.above) of
+                (before, found Seq.:<| after) ->
+                  let (below, above) = Seq.breakl (== subsurface.parent) ((before Seq.|> found Seq.|> subsurface.surface) <> after)
+                   in (s{cuSubsurfaces = Just SubsurfaceStack{below, above}}, True)
+                (_, Seq.Empty) -> (s, False)
         unless b $ protocolViolation Unrecoverable msg subsurface.wlid Enum_wl_subsurface_error_bad_surface [wl|wl_surface is not a sibling or the parent|]
     forwardMessage subsurface msg
   onRequest subsurface msg@Request_wl_subsurface_set_sync = do
