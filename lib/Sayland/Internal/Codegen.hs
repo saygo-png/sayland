@@ -29,8 +29,6 @@ import Language.Haskell.TH.Syntax
 import Sayland.Internal.Core
 import Sayland.Internal.Prelude
 import Sayland.Wire
-import System.Directory (listDirectory)
-import System.FilePath (takeExtension, (</>))
 import Text.Show qualified
 import Text.XML.Light
 
@@ -80,8 +78,8 @@ isImplemented ty =
 -- interface type names - as they are to be defined by the user. Only globals are
 -- listed: an interface created by a @new_id@ is not registry-bindable. Also emits
 -- the `Global` instances for those globals whose only field is @wlid@.
-generateProtocolTable :: Bool -> Element -> (String -> String) -> Q [Dec]
-generateProtocolTable isIO e formatter = do
+generateProtocolTable :: Element -> (String -> String) -> Q [Dec]
+generateProtocolTable e formatter = do
   protocol <- attr "name" e
   names <- traverse (attr "name") (findChildren (qname "interface") e)
   let tname = mkName $ protocol <> "Table"
@@ -90,10 +88,8 @@ generateProtocolTable isIO e formatter = do
       created = createdInterfaces e
       globals = filter (\n -> n /= "wl_display" && n `notElem` created) names
      in
-      if isIO
-        then pure globals
-        else filterM (\n -> lookupTypeName (formatter n) >>= maybe (pure False) isImplemented) globals
-  instances <- if isIO then pure [] else concat <$> traverse globalInstance implementedGlobals
+      filterM (\n -> lookupTypeName (formatter n) >>= maybe (pure False) isImplemented) globals
+  instances <- concat <$> traverse globalInstance implementedGlobals
   defs <- traverse entry implementedGlobals
   pure
     $ instances
@@ -154,13 +150,12 @@ escapeHaddock :: String -> String
 escapeHaddock = concatMap $ \c -> if c `elem` ("\\/'\"@<>[]#" :: String) then ['\\', c] else [c]
 
 -- | Attach a Haddock comment to a name defined by the current splice.
--- No-op under `isIO`, where there is no splice to finalize.
-docDecl :: Bool -> Name -> Maybe String -> Q ()
-docDecl isIO n = unless isIO . mapM_ (addModFinalizer . putDoc (DeclDoc n))
+docDecl :: Name -> Maybe String -> Q ()
+docDecl n = mapM_ (addModFinalizer . putDoc (DeclDoc n))
 
 -- | Attach a Haddock comment to the @i@th argument of a function or constructor.
-docArg :: Bool -> Name -> Int -> Maybe String -> Q ()
-docArg isIO n i = unless isIO . mapM_ (addModFinalizer . putDoc (ArgDoc n i))
+docArg :: Name -> Int -> Maybe String -> Q ()
+docArg n i = mapM_ (addModFinalizer . putDoc (ArgDoc n i))
 
 -- }}}
 
@@ -217,12 +212,12 @@ deriveGlobal ty = do
 --
 -- if the enum is a bitfield, instead generates the following:
 -- data Enum_[interface]_[name] = Enum_[interface]_[name] {[name]_[entry] :: Bool, [name]_[entry2] :: Bool, ...} deriving (Eq, Ord, Generic)
-mkEnum :: Bool -> String -> Element -> Q [Dec]
-mkEnum isIO interfaceName enumEl = do
+mkEnum :: String -> Element -> Q [Dec]
+mkEnum interfaceName enumEl = do
   bool
     ( do
-        forM_ entries $ \e -> docDecl isIO (mkName $ enumName'' <> entryName e) (elemDoc e)
-        docDecl isIO (mkName enumName') (elemDoc enumEl)
+        forM_ entries $ \e -> docDecl (mkName $ enumName'' <> entryName e) (elemDoc e)
+        docDecl (mkName enumName') (elemDoc enumEl)
         docCodec
         codec <- enumCodec
         pure
@@ -237,7 +232,7 @@ mkEnum isIO interfaceName enumEl = do
           <> errorInstance
     )
     ( do
-        docDecl isIO (mkName enumName') (elemDoc enumEl)
+        docDecl (mkName enumName') (elemDoc enumEl)
         docCodec
         codec <- bitfieldCodec
         pure
@@ -266,8 +261,8 @@ mkEnum isIO interfaceName enumEl = do
     getName = mkName $ "get" <> enumName'
     enumT = conT $ mkName enumName'
     docCodec = do
-      docDecl isIO putName . Just $ "Put a t'" <> enumName' <> "'."
-      docDecl isIO getName . Just $ "Get a t'" <> enumName' <> "'."
+      docDecl putName . Just $ "Put a t'" <> enumName' <> "'."
+      docDecl getName . Just $ "Get a t'" <> enumName' <> "'."
     codecSigs =
       [ sigD putName [t|$enumT -> WirePut ()|]
       , sigD getName [t|WireGet (Either MessageError $enumT)|]
@@ -345,50 +340,42 @@ wlFormatter :: String -> String
 wlFormatter [] = []
 wlFormatter (x : xs) = toUpper x : xs
 
--- | Loads all .xml files in `path` as protocols.
--- Set `isIO` to True only when running the function within an IO monad. This should be used *only* for debugging purposes.
--- `monad` defines the monad in which all events and requests operate in.
-loadProtocols :: (String -> String) -> Bool -> FilePath -> Q [Dec]
-loadProtocols formatter isIO path = do
-  protocol_files <- filter ((== ".xml") . takeExtension) <$> runIO (listDirectory path)
-  concat <$> mapM (loadProtocolFile formatter isIO . (path </>)) protocol_files
-
 findInterfaces :: Element -> [Element]
 findInterfaces = findChildren (qname "interface")
 
--- | Load a protocol from the specified `path`. Arguments have the same meaning as in `loadProtocols`.
 -- | The @\<protocol\>@ elements of a protocol file, recompiling when it changes.
-readProtocols :: Bool -> FilePath -> Q [Element]
-readProtocols isIO path = do
-  unless isIO $ addDependentFile path
+readProtocols :: FilePath -> Q [Element]
+readProtocols path = do
+  addDependentFile path
   filter ((== qname "protocol") . elName) . onlyElems . parseXML <$> runIO (BS.readFile path)
 
-loadProtocolFile :: (String -> String) -> Bool -> FilePath -> Q [Dec]
-loadProtocolFile formatter isIO path = do
-  protocols <- readProtocols isIO path
+-- | Load the interfaces of a protocol file, using formatter to format their type names.
+loadProtocolFile :: (String -> String) -> FilePath -> Q [Dec]
+loadProtocolFile formatter path = do
+  protocols <- readProtocols path
   concat
     <$> mapM
-      ((<&> concat) . mapM (loadInterface formatter isIO) . findInterfaces)
+      ((<&> concat) . mapM (loadInterface formatter) . findInterfaces)
       protocols
 
-loadProtocolFileEnums :: Bool -> FilePath -> Q [Dec]
-loadProtocolFileEnums isIO path = do
-  protocols <- readProtocols isIO path
-  concat . concat <$> mapM (mapM (loadInterfaceEnums isIO) . findInterfaces) protocols
+loadProtocolFileEnums :: FilePath -> Q [Dec]
+loadProtocolFileEnums path = do
+  protocols <- readProtocols path
+  concat . concat <$> mapM (mapM loadInterfaceEnums . findInterfaces) protocols
 
-generateTables :: Bool -> (String -> String) -> FilePath -> Q [Dec]
-generateTables isIO formatter path = do
-  protocols <- readProtocols isIO path
-  concat <$> traverse (\p -> generateProtocolTable isIO p formatter) protocols
+generateTables :: (String -> String) -> FilePath -> Q [Dec]
+generateTables formatter path = do
+  protocols <- readProtocols path
+  concat <$> traverse (\p -> generateProtocolTable p formatter) protocols
 
 -- | Create message types (requests and events).
-mkMessages :: Bool -> (String -> String) -> String -> String -> [Element] -> Q [Dec]
-mkMessages isIO formatter interfaceName prefix events = do
-  docDecl isIO (mkName prefix') . Just $ prefix <> "s of the t'" <> formatter interfaceName <> "' interface."
+mkMessages :: (String -> String) -> String -> String -> [Element] -> Q [Dec]
+mkMessages formatter interfaceName prefix events = do
+  docDecl (mkName prefix') . Just $ prefix <> "s of the t'" <> formatter interfaceName <> "' interface."
   forM_ events $ \e -> do
-    docDecl isIO (conName e) (elemDoc e)
+    docDecl (conName e) (elemDoc e)
     forM_ (zip [0 ..] $ findChildren (qname "arg") e) $ \(i, a) ->
-      docArg isIO (conName e) i (elemDoc a)
+      docArg (conName e) i (elemDoc a)
   pure [DataD [] (mkName prefix') [] Nothing constructors []]
   where
     prefix' = prefix <> "_" <> interfaceName
@@ -487,28 +474,25 @@ mkMessageInstances formatter interfaceName prefix2 events = do
   pure [InstanceD Nothing [] (AppT (ConT ''Message) $ ConT . mkName $ prefix2 <> interfaceName) $ put' <> get' <> opc' <> show' <> sender']
 
 -- | Create all definitions for a single interface - the class, parsers, builders, enums, opcodes etc.
-loadInterface :: (String -> String) -> Bool -> Element -> Q [Dec]
-loadInterface formatter isIO int = do
+loadInterface :: (String -> String) -> Element -> Q [Dec]
+loadInterface formatter int = do
   let events = findChildren (qname "event") int
   let requests = findChildren (qname "request") int
 
   ifaceName <-
-    if isIO
-      then pure . mkName $ formatter name'
-      else
-        lookupTypeName (formatter name') >>= \case
-          Just n -> pure n
-          Nothing -> fail $ "sayland: protocol declares interface `" <> name' <> "` but no type `" <> formatter name' <> "` is in scope."
+    lookupTypeName (formatter name') >>= \case
+      Just n -> pure n
+      Nothing -> fail $ "sayland: protocol declares interface `" <> name' <> "` but no type `" <> formatter name' <> "` is in scope."
 
-  docDecl isIO ifaceName (elemDoc int)
+  docDecl ifaceName (elemDoc int)
   -- Checked while compiling to not contain NUL.
   wlName <- quoteExp wl name'
 
   concat
     <$> sequence
       [ -- WaylandEvent
-        mkMessages isIO formatter name' "Request" requests
-      , mkMessages isIO formatter name' "Event" events
+        mkMessages formatter name' "Request" requests
+      , mkMessages formatter name' "Event" events
       , mkMessageInstances formatter name' "Event_" $ zip [0 ..] events
       , mkMessageInstances formatter name' "Request_" $ zip [0 ..] requests
       , -- Interface instance
@@ -533,9 +517,9 @@ loadInterface formatter isIO int = do
     ifaceT = ConT . mkName $ formatter name'
     version' = read . fromJust $ findAttr (qname "version") int
 
-loadInterfaceEnums :: Bool -> Element -> Q [Dec]
-loadInterfaceEnums isIO int =
-  concat <$> mapM (mkEnum isIO name) enums
+loadInterfaceEnums :: Element -> Q [Dec]
+loadInterfaceEnums int =
+  concat <$> mapM (mkEnum name) enums
   where
     name = fromJust $ findAttr (qname "name") int
     enums = findChildren (qname "enum") int

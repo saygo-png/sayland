@@ -21,7 +21,7 @@ import Sayland.Internal.Prelude
 import Sayland.Internal.Protocols.Wayland
 import Sayland.Wire
 
-$(loadProtocolFileEnums False "xml-protocols/xdg-shell.xml")
+$(loadProtocolFileEnums "xml-protocols/xdg-shell.xml")
 
 -- Interfaces {{{
 
@@ -62,7 +62,7 @@ data PositionerState = PositionerState
 
 -- }}}
 
-$(loadProtocolFile wlFormatter False "xml-protocols/xdg-shell.xml")
+$(loadProtocolFile wlFormatter "xml-protocols/xdg-shell.xml")
 
 -- Implementations {{{
 -- Xdg_wm_base {{{
@@ -209,6 +209,6 @@ instance Object Xdg_popup where
 -- }}}
 -- }}}
 
-$(generateTables False wlFormatter "xml-protocols/xdg-shell.xml")
+$(generateTables wlFormatter "xml-protocols/xdg-shell.xml")
 
 -- vim: foldmethod=marker

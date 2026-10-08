@@ -36,7 +36,7 @@ import Sayland.Internal.Core
 import Sayland.Internal.Object
 import Sayland.Internal.Protocols.Wayland -- you might not need to import this one, it depends on the protocol.
 
-$(loadProtocolFileEnums False "xml-protocols/fifo-v1.xml")
+$(loadProtocolFileEnums "xml-protocols/fifo-v1.xml")
 ```
 
 Next, define interface data types following the given protocol.
@@ -57,7 +57,7 @@ After defining interfaces, we load the rest of the protocol (mostly `Event_*` an
 
 ```hs
 -- wlFormatter can be found in Sayland.Internal.Codegen
-$(loadProtocolFile wlFormatter False "xml-protocols/fifo-v1.xml")
+$(loadProtocolFile wlFormatter "xml-protocols/fifo-v1.xml")
 ```
 
 Implement an `Object` instance for all your interface data types:
@@ -100,7 +100,7 @@ instance Object Wp_fifo_v1 where
 And finally generate tables:
 
 ```hs
-$(generateTables False wlFormatter "xml-protocols/fifo-v1.xml")
+$(generateTables wlFormatter "xml-protocols/fifo-v1.xml")
 ```
 
 The ordering here matters for what the template haskell splices can see, make sure it is correct.

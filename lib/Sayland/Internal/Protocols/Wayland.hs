@@ -35,7 +35,7 @@ import Sayland.Internal.Prelude
 import Sayland.Wire
 import System.Posix (Fd, setFdSize)
 
-$(loadProtocolFileEnums False "xml-protocols/wayland.xml")
+$(loadProtocolFileEnums "xml-protocols/wayland.xml")
 
 -- | Constant representing the `Wl_display` ID which is always 1 in Wayland.
 wlDisplayId :: TObjectID Wl_display
@@ -295,7 +295,7 @@ newtype Wl_fixes = Wl_fixes {wlid :: TObjectID Wl_fixes}
 
 --- }}}
 
-$(loadProtocolFile wlFormatter False "xml-protocols/wayland.xml")
+$(loadProtocolFile wlFormatter "xml-protocols/wayland.xml")
 
 -- | Remove an object from the objects map. On a server this also sends @delete_id@.
 dropObject :: TObjectID a -> Wayland p ()
@@ -989,6 +989,6 @@ tryBindToInterface registry = do
 -- }}}
 -- }}}
 
-$(generateTables False wlFormatter "xml-protocols/wayland.xml")
+$(generateTables wlFormatter "xml-protocols/wayland.xml")
 
 -- vim: foldmethod=marker

@@ -83,8 +83,6 @@ library
     binary,
     bytestring,
     containers,
-    directory,
-    filepath,
     mtl,
     stm,
     template-haskell,
@@ -137,9 +135,9 @@ executable unrollTH
   main-is: UnrollTH.hs
   build-depends:
     base,
+    directory,
+    filepath,
     process,
-    sayland,
-    template-haskell,
 
 executable demo-basic-compositor
   import: common-options, executable-options

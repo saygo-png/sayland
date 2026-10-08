@@ -15,7 +15,7 @@ import Sayland.Internal.Prelude
 import Sayland.Internal.Protocols.Wayland
 import Sayland.Wire
 
-$(loadProtocolFileEnums False "xml-protocols/fifo-v1.xml")
+$(loadProtocolFileEnums "xml-protocols/fifo-v1.xml")
 
 -- Interfaces {{{
 newtype Wp_fifo_manager_v1 = Wp_fifo_manager_v1 {wlid :: TObjectID Wp_fifo_manager_v1}
@@ -24,7 +24,7 @@ data Wp_fifo_v1 = Wp_fifo_v1 {wlid :: TObjectID Wp_fifo_v1, fifoSurface :: TObje
 
 -- }}}
 
-$(loadProtocolFile wlFormatter False "xml-protocols/fifo-v1.xml")
+$(loadProtocolFile wlFormatter "xml-protocols/fifo-v1.xml")
 
 -- Implementations {{{
 -- Wp_fifo_manager_v1 {{{
@@ -66,6 +66,6 @@ instance Object Wp_fifo_v1 where
 -- }}}
 -- }}}
 
-$(generateTables False wlFormatter "xml-protocols/fifo-v1.xml")
+$(generateTables wlFormatter "xml-protocols/fifo-v1.xml")
 
 -- vim: foldmethod=marker

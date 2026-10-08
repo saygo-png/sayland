@@ -24,7 +24,7 @@ import Sayland.Internal.Protocols.Wayland
 import Sayland.Wire
 import System.Posix (closeFd)
 
-$(loadProtocolFileEnums False "xml-protocols/linux-dmabuf-v1.xml")
+$(loadProtocolFileEnums "xml-protocols/linux-dmabuf-v1.xml")
 
 -- Interfaces {{{
 
@@ -81,7 +81,7 @@ newFeedback wlid feedbackSurface = do
 
 -- }}}
 
-$(loadProtocolFile wlFormatter False "xml-protocols/linux-dmabuf-v1.xml")
+$(loadProtocolFile wlFormatter "xml-protocols/linux-dmabuf-v1.xml")
 
 -- Implementations {{{
 -- Zwp_linux_dmabuf_v1 {{{
@@ -193,6 +193,6 @@ instance Object Zwp_linux_dmabuf_feedback_v1 where
 -- }}}
 -- }}}
 
-$(generateTables False wlFormatter "xml-protocols/linux-dmabuf-v1.xml")
+$(generateTables wlFormatter "xml-protocols/linux-dmabuf-v1.xml")
 
 -- vim: foldmethod=marker

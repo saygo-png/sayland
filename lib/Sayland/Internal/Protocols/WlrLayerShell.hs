@@ -14,7 +14,7 @@ import Sayland.Internal.Prelude
 import Sayland.Internal.Protocols.Wayland
 import Sayland.Internal.Protocols.XdgShell
 
-$(loadProtocolFileEnums False "xml-protocols/wlr-layer-shell-unstable-v1.xml")
+$(loadProtocolFileEnums "xml-protocols/wlr-layer-shell-unstable-v1.xml")
 
 -- Interfaces {{{
 newtype Zwlr_layer_shell_v1 = Zwlr_layer_shell_v1 {wlid :: TObjectID Zwlr_layer_shell_v1}
@@ -23,7 +23,7 @@ newtype Zwlr_layer_surface_v1 = Zwlr_layer_surface_v1 {wlid :: TObjectID Zwlr_la
 
 -- }}}
 
-$(loadProtocolFile wlFormatter False "xml-protocols/wlr-layer-shell-unstable-v1.xml")
+$(loadProtocolFile wlFormatter "xml-protocols/wlr-layer-shell-unstable-v1.xml")
 
 -- Implementations {{{
 -- zwlr_layer_shell_v1 {{{
@@ -55,6 +55,6 @@ instance Object Zwlr_layer_surface_v1 where
 -- }}}
 -- }}}
 
-$(generateTables False wlFormatter "xml-protocols/wlr-layer-shell-unstable-v1.xml")
+$(generateTables wlFormatter "xml-protocols/wlr-layer-shell-unstable-v1.xml")
 
 -- vim: foldmethod=marker
