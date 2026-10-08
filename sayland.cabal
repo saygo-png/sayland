@@ -67,8 +67,7 @@ library sayland-wire
 
   -- Non-boot libraries.
   build-depends:
-    network,
-    shared-memory,
+    network
 
   hs-source-dirs: lib-wire
   -- cabal-gild: discover lib-wire
@@ -130,7 +129,6 @@ executable genHaddocks
   build-depends:
     base,
     process,
-    template-haskell,
     text,
 
 executable unrollTH
@@ -196,7 +194,6 @@ test-suite sayland-tests
     Integration
 
   build-depends:
-    QuickCheck,
     base,
     binary,
     bytestring,
