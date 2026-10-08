@@ -1,9 +1,11 @@
-module Client.BasicWindow (test) where
+-- | Description : A client that opens an xdg toplevel and draws a rainbow into it.
+module Main (main) where
 
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.STM (writeTMVar)
 import Control.Exception (bracket, finally, handle, throwTo)
 import Data.ByteString (hPut)
+import DemoUtils
 import GHC.IO.Handle
 import Network.Socket (close)
 import Relude hiding (hFlush)
@@ -11,18 +13,12 @@ import Sayland
 import Sayland.Wire
 import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import System.Random (randomIO)
-import System.Timeout (timeout)
-import Test.Tasty.HUnit
-import TestUtils
 
 table :: ProtocolTable
 table = waylandTable <> xdg_shellTable
 
-test :: Assertion
-test = main
-
 main :: IO ()
-main = void . timeout 3_000_000 $ runReaderT program =<< waylandSetup table
+main = runReaderT program =<< waylandSetup table
 
 program :: Wayland Client ()
 program = do

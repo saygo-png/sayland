@@ -19,11 +19,11 @@ or build locally using `cabal haddock` and view the html files in a browser/put 
 - https://github.com/saygo-png/Saywallpaper[saywallpaper] -- wallpaper daemon using the `wlr-layer-shell-unstable-v1` protocol.
 - https://github.com/saygo-png/saybar[saybar] -- bar using the `wlr-layer-shell-unstable-v1` protocol.
 
-You can also check out the integration tests which work like demos:
+You can also check out the demos, which run with `cabal run <name>`:
 
-- link:test/Client/BasicWindow.hs[Basic window client]
-- link:test/Client/WallpaperDaemon.hs[Wallpaper daemon]
-- link:test/Server/BasicCompositor.hs[Basic compositor]
+- link:demos/BasicWindow.hs[Basic window client] -- `demo-basic-window`
+- link:demos/WallpaperDaemon.hs[Wallpaper daemon] -- `demo-wallpaper-daemon`
+- link:demos/BasicCompositor.hs[Basic compositor] -- `demo-basic-compositor`
 
 == Building
 

@@ -143,6 +143,47 @@ executable unrollTH
     sayland,
     template-haskell,
 
+executable demo-basic-compositor
+  import: common-options, executable-options
+  hs-source-dirs: demos
+  main-is: BasicCompositor.hs
+  build-depends:
+    containers,
+    directory,
+    network,
+    relude,
+    sayland,
+    sayland-wire,
+
+executable demo-basic-window
+  import: common-options, executable-options
+  hs-source-dirs: demos
+  main-is: BasicWindow.hs
+  other-modules: DemoUtils
+  build-depends:
+    bytestring,
+    network,
+    random,
+    relude,
+    sayland,
+    sayland-wire,
+    stm,
+    unix,
+
+executable demo-wallpaper-daemon
+  import: common-options, executable-options
+  hs-source-dirs: demos
+  main-is: WallpaperDaemon.hs
+  other-modules: DemoUtils
+  build-depends:
+    bytestring,
+    network,
+    relude,
+    sayland,
+    sayland-wire,
+    stm,
+    unix,
+
 test-suite sayland-tests
   import: common-options, executable-options
   type: exitcode-stdio-1.0

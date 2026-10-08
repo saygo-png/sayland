@@ -1,4 +1,5 @@
-module Server.BasicCompositor (test) where
+-- | Description : A compositor that serves the core and xdg-shell protocols, without rendering anything.
+module Main (main) where
 
 -- THIS IS JUST A SERVER. IT DOES NOT RENDER ANYTHING.
 
@@ -9,14 +10,9 @@ import Relude
 import Sayland
 import Sayland.Wire
 import System.Directory (removeFile)
-import System.Timeout (timeout)
-import Test.Tasty.HUnit
 
 table :: ProtocolTable
 table = waylandTable <> xdg_shellTable
-
-test :: Assertion
-test = main
 
 main :: IO ()
 main = bracket env cleanup program
@@ -50,4 +46,4 @@ main = bracket env cleanup program
               }
 
 program :: ServerEnvironment -> IO ()
-program = void . timeout 3_000_000 . listenForClients
+program = listenForClients

@@ -1,12 +1,15 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 {- HLINT ignore "Use camelCase" -}
-module Client.WallpaperDaemon (test) where
+
+-- | Description : A client that draws a rainbow wallpaper with wlr-layer-shell.
+module Main (main) where
 
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.STM (writeTMVar)
 import Control.Exception
 import Data.ByteString (hPut)
+import DemoUtils
 import Network.Socket
 import Relude hiding (ByteString, get, isPrefixOf, put)
 import Sayland
@@ -14,9 +17,6 @@ import Sayland.Wire
 import System.Posix (ownerReadMode, ownerWriteMode, setFdSize, unionFileModes)
 import System.Posix.IO
 import System.Posix.SharedMem
-import System.Timeout (timeout)
-import Test.Tasty.HUnit
-import TestUtils
 
 bufferWidth, bufferHeight :: Int32
 bufferWidth = 1920
@@ -34,11 +34,8 @@ colorChannels = 4
 table :: ProtocolTable
 table = waylandTable <> wlr_layer_shell_unstable_v1Table
 
-test :: Assertion
-test = main
-
 main :: IO ()
-main = void . timeout 3_000_000 $ runReaderT program =<< waylandSetup table
+main = runReaderT program =<< waylandSetup table
 
 program :: Wayland Client ()
 program = do

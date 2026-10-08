@@ -1,4 +1,5 @@
-module TestUtils (rainbowImage, c) where
+-- | Description : Helpers shared by the demos.
+module DemoUtils (rainbowImage, c) where
 
 import Data.ByteString (pack)
 import Relude
