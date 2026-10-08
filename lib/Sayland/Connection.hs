@@ -1,10 +1,10 @@
 -- | Description : Everything that has to do with making and keeping connections.
 module Sayland.Connection (module Sayland.Connection) where
 
-import Control.Concurrent (forkIO)
+import Control.Concurrent (forkFinally)
 import Control.Concurrent.STM (flushTQueue, newTQueue, unGetTQueue, writeTQueue)
 import Control.Concurrent.STM.TVar
-import Control.Exception (finally)
+import Control.Exception (displayException, fromException)
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Reader
@@ -58,11 +58,15 @@ handleIncomingClient env socket' = do
   atomically . modifyTVar env.clients $ Map.insert serial' clientenv
   void
     . liftIO
-    . forkIO
-    $ runReaderT (serveClient $ clientLoop socket') (ClientServerEnv env clientenv serial')
-    `finally` do
+    . forkFinally (runReaderT (serveClient $ clientLoop socket') (ClientServerEnv env clientenv serial'))
+    $ \ended -> do
       close socket'
       atomically . modifyTVar env.clients $ Map.delete serial'
+      traceIO $ "Client disconnected" <> either reason (const "") ended <> "."
+  where
+    reason e
+      | Just Disconnected <- fromException e = ""
+      | otherwise = ": " <> displayException e
 
 -- | Run one client's connection. A protocol violation is reported to the client
 -- before the connection is closed.
@@ -80,6 +84,8 @@ clientLoop = clientLoop' ""
     clientLoop' bytes' sock = do
       queue <- (.fdQueue) <$> getClientEnv
       (bytes'', newFds) <- liftIO $ recvChunk sock
+      -- Nothing to read from a stream socket means the peer closed it.
+      when (BS.null bytes'') $ throwIO Disconnected
       atomically $ mapM_ (writeTQueue queue) newFds
       let bytes = bytes' <> bytes''
       case decodeMessage bytes of
@@ -119,20 +125,25 @@ dispatchWith handle oid opcode msg = do
 
 -- | Create a default client environment.
 waylandSetup :: ProtocolTable -> IO (WaylandEnv Client)
-waylandSetup protocolTable = do
-  let display = SomeObject $ Wl_display wlDisplayId
+waylandSetup protocolTable =
   getSocketPath openSocketName >>= \case
     Just path -> do
       putStrLn $ "using socket path: " <> show path
-      sock <- socket AF_UNIX Stream defaultProtocol
-      connect sock $ SockAddrUnix path
-      counter <- newIORef $ coerce wlDisplayId
-      objects <- newIORef $ Map.fromList [(coerce wlDisplayId, display)]
-      globals <- newIORef mempty
-      handlers <- newIORef mempty
-      let interfaceTable = Map.fromList protocolTable
-      fdqueue <- atomically newTQueue
-      pure $ ClientEnv $ ClientEnvironment sock counter objects globals interfaceTable handlers fdqueue
+      waylandConnect protocolTable path
     Nothing -> error "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."
+
+-- | Create a client environment connected to the compositor socket at the given path.
+waylandConnect :: ProtocolTable -> FilePath -> IO (WaylandEnv Client)
+waylandConnect protocolTable path = do
+  let display = SomeObject $ Wl_display wlDisplayId
+  sock <- socket AF_UNIX Stream defaultProtocol
+  connect sock $ SockAddrUnix path
+  counter <- newIORef $ coerce wlDisplayId
+  objects <- newIORef $ Map.fromList [(coerce wlDisplayId, display)]
+  globals <- newIORef mempty
+  handlers <- newIORef mempty
+  let interfaceTable = Map.fromList protocolTable
+  fdqueue <- atomically newTQueue
+  pure $ ClientEnv $ ClientEnvironment sock counter objects globals interfaceTable handlers fdqueue
 
 -- vim: foldmethod=marker

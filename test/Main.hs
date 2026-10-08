@@ -1,24 +1,12 @@
 module Main (main) where
 
 import Both.Wire qualified
-import Client.BasicWindow qualified
-import Client.WallpaperDaemon qualified
-import Server.BasicCompositor qualified
+import Integration qualified
 import Test.Tasty
-import Test.Tasty.HUnit
 import Prelude
 
 main :: IO ()
 main = defaultMain tests
 
 tests :: TestTree
-tests = testGroup "Tests" [integrationTests, Both.Wire.tests]
-
-integrationTests :: TestTree
-integrationTests =
-  testGroup
-    "Integration tests"
-    [ testCase "client-basic-window" Client.BasicWindow.test
-    , testCase "client-wallpaper-daemon" Client.WallpaperDaemon.test
-    , testCase "server-basic-compositor" Server.BasicCompositor.test
-    ]
+tests = testGroup "Tests" [Integration.tests, Both.Wire.tests]

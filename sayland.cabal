@@ -193,10 +193,7 @@ test-suite sayland-tests
   other-modules:
     Both.Protocol.Codegen
     Both.Wire
-    Client.BasicWindow
-    Client.WallpaperDaemon
-    Server.BasicCompositor
-    TestUtils
+    Integration
 
   build-depends:
     QuickCheck,
