@@ -82,7 +82,7 @@ program = do
 
         liftIO $ hPut fileHandle $ rainbowImage bw bh
         liftIO $ hFlush fileHandle
-        sendMsg surface $ Request_wl_surface_attach wl_buffer.wlid 0 0
+        sendMsg surface $ Request_wl_surface_attach (Just wl_buffer.wlid) 0 0
         sendMsg surface Request_wl_surface_commit
         -- Wait for exit
         takeMVar running

@@ -4,11 +4,11 @@
 -- | Description : Tests for the wire.
 module Both.Wire (tests) where
 
-import Data.Binary.Get (runGetOrFail)
-import Data.Binary.Put (putWord32le, runPut, runPutM)
+import Data.Binary.Put (putWord32le, runPut)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Relude
+import Sayland.Internal.Wire (WlText (..))
 import Sayland.Wire
 import System.Posix (Fd (Fd))
 import Test.Tasty
@@ -18,13 +18,13 @@ tests :: TestTree
 tests =
   testGroup
     "Sayland.Wire"
-    [ testProperty "wl_int roundtrip" $ prop_roundtrip (type WlInt)
-    , testProperty "wl_uint roundtrip" $ prop_roundtrip (type WlUInt)
-    , testProperty "wl_fixed roundtrip" $ prop_roundtrip (type WlFixed)
-    , testProperty "wl_string roundtrip" $ prop_roundtrip (type WlString)
-    , testProperty "wl_array roundtrip" $ prop_roundtrip (type WlArray)
-    , testProperty "wl_fd roundtrip" $ prop_roundtrip (type WlFd)
-    , testProperty "wl_new_id roundtrip" $ prop_roundtrip (type WlNewId)
+    [ testProperty "wl_int roundtrip" $ prop_roundtrip putWlInt getWlInt
+    , testProperty "wl_uint roundtrip" $ prop_roundtrip putWlUInt getWlUInt
+    , testProperty "wl_fixed roundtrip" $ prop_roundtrip putWlFixed getWlFixed
+    , testProperty "wl_string roundtrip" $ prop_roundtrip putWlString getWlString
+    , testProperty "wl_array roundtrip" $ prop_roundtrip putWlArray getWlArray
+    , testProperty "wl_fd roundtrip" $ prop_roundtrip putWlFd (maybeToRight ("missing fd" :: String) <$> getWlFd)
+    , testProperty "wl_new_id roundtrip" $ prop_roundtrip putWlNewId getWlNewId
     , testProperty "getHeader reverses putHeader" prop_header
     , testProperty "decodeMessage reverses encodeMessage" prop_message
     , testProperty "decodeMessage only returns non-partial messages" prop_decodePartial
@@ -34,36 +34,35 @@ tests =
     , wlStringTests
     ]
 
-prop_roundtrip :: forall a -> (WireFormat a, Eq a, Show a) => a -> Property
-prop_roundtrip _type x = roundtrip x === Right x
+prop_roundtrip :: (Eq a, Show a, Show e) => (a -> WirePut ()) -> WireGet (Either e a) -> a -> Property
+prop_roundtrip putter getter x = roundtrip x === Right x
   where
-    -- Encode a value and decode it again. A value that leaves bytes behind did not encode itself.
-    roundtrip :: (WireFormat a) => a -> Either String a
-    roundtrip y = case runGetOrFail (runStateT wireGet fds) bytes of
-      Left (_, _, err) -> Left err
-      Right (rest, _, (decoded, _))
-        | BSL.null rest -> Right decoded
-        | otherwise -> Left "decoding left bytes unread"
+    -- Encode a value and decode it again. A value that leaves bytes or fds behind did not encode itself.
+    roundtrip y = case runWireGet getter fds bytes of
+      (Left err, _, _) -> Left (show err :: String)
+      (Right decoded, rest, restFds)
+        | BS.null rest && null restFds -> Right decoded
+        | otherwise -> Left "decoding left bytes or fds unread"
       where
-        (fds, bytes) = runPutM $ execStateT (wirePut y) []
+        (bytes, fds) = runWirePut (putter y)
 
-prop_header :: WlUInt -> Word16 -> [Word8] -> Property
+prop_header :: ObjectID -> Word16 -> [Word8] -> Property
 prop_header objectID opcode body =
-  runGetOrFail getHeader (BS.fromStrict (encodeMessage objectID opcode payload))
-    === Right (BS.fromStrict payload, fromIntegral headerSize, (objectID, opcode, size))
+  runWireGet getHeader [] (encodeMessage objectID opcode payload)
+    === (Right (Just objectID, opcode, size), payload, [])
   where
     payload = BS.pack body
     size = headerSize + fromIntegral (BS.length payload)
 
-prop_message :: WlUInt -> Word16 -> Body -> Property
+prop_message :: ObjectID -> Word16 -> Body -> Property
 prop_message objectID opcode (Body body) =
-  decodeMessage encodedMsg === Right (objectID, opcode, body, "")
+  decodeMessage encodedMsg === Right (Just objectID, opcode, body, "")
   where
     encodedMsg = encodeMessage objectID opcode body
 
 -- | A message whose header has arrived but whose body has not fully arrived yet must not decode.
 -- The test keeps only the first @kept@ bytes of a message, anywhere from just the header to all but the last byte.
-prop_decodePartial :: WlUInt -> Word16 -> Property
+prop_decodePartial :: ObjectID -> Word16 -> Property
 prop_decodePartial objectID opcode =
   forAllShrink (arbitrary `suchThat` hasBytes) (filter hasBytes . shrink) $ \(Body body) ->
     let encodedMsg = encodeMessage objectID opcode body
@@ -77,17 +76,17 @@ prop_decodePartialHeader :: [Word8] -> Property
 prop_decodePartialHeader bytes = decodeMessage (BS.pack (take (fromIntegral headerSize - 1) bytes)) === Left Incomplete
 
 -- | A header claiming any size, unlike `encodeMessage` which derives it from the body.
-header :: WlUInt -> Word16 -> Word16 -> BS.ByteString
-header objectID opcode size = BSL.toStrict . runPut $ putHeader (objectID, opcode, size)
+header :: ObjectID -> Word16 -> Word16 -> BS.ByteString
+header objectID opcode size = fst . runWirePut $ putHeader (objectID, opcode, size)
 
 -- | A size smaller than the header itself is malformed, whatever follows it.
-prop_decodeTooSmall :: WlUInt -> Word16 -> [Word8] -> Property
+prop_decodeTooSmall :: ObjectID -> Word16 -> [Word8] -> Property
 prop_decodeTooSmall objectID opcode trailing =
   forAll (chooseEnum (0, headerSize - 1)) $ \size ->
     decodeMessage (header objectID opcode size <> BS.pack trailing) === Left (InvalidSize $ SizeTooSmall size)
 
 -- | Arguments are all multiples of 4 bytes, so a size that isn't is malformed.
-prop_decodeUnaligned :: WlUInt -> Word16 -> Property
+prop_decodeUnaligned :: ObjectID -> Word16 -> Property
 prop_decodeUnaligned objectID opcode =
   forAll (chooseEnum (headerSize, 256) `suchThat` \s -> s `mod` 4 /= 0) $ \size ->
     decodeMessage (header objectID opcode size <> BS.replicate (fromIntegral size) 0) === Left (InvalidSize $ SizeUnaligned size)
@@ -110,16 +109,19 @@ wlStringTests =
 -- Starts with an unsigned 32-bit length (including null terminator)
 prop_WlStringLengthCountsNul :: StringContents -> Property
 prop_WlStringLengthCountsNul contents =
-  BS.take 4 (encodeWire (WlString bytes)) === word32le (BS.length bytes + nullTerminatorLen)
+  BS.take 4 (encodeWire putWlString (Just (contentsText contents))) === word32le (BS.length bytes + nullTerminatorLen)
   where
     bytes = encodeContents contents
     nullTerminatorLen :: Int = 1
 
 -- followed by the UTF-8 encoded string contents
 prop_WlStringFromStringIsUtf8 :: Property
-prop_WlStringFromStringIsUtf8 = conjoin [isUtf8 "ł", isUtf8 "€", property isUtf8]
+prop_WlStringFromStringIsUtf8 = conjoin [isUtf8 "ł", isUtf8 "€", property (\(StringContents text) -> isUtf8 text)]
   where
-    isUtf8 text = fromString text === WlString (encodeContents $ StringContents text)
+    isUtf8 text = BS.drop 4 (encodeWire putWlString (Just (contentsText contents))) `startsWith` (encodeContents contents <> nulTerm)
+      where
+        contents = StringContents text
+    startsWith bytes prefix = BS.take (BS.length prefix) bytes === prefix
 
 -- including terminating null byte
 prop_WlStringNeedsNulTerminator :: StringContents -> Property
@@ -141,11 +143,11 @@ rejectsString bytes = counterexample (show decoded) (isLeft decoded)
   where
     -- A WlArray can be a valid `WlString`, but it can also be invalid.
     -- We use this to test invalid `WlString`s one violation at a time.
-    encoded = encodeWire $ WlArray bytes
-    decoded = runWireGet (wireGet @WlString) [] encoded
+    encoded = encodeWire putWlArray $ WlArray bytes
+    (decoded, _, _) = runWireGet getWlString [] encoded
 
-encodeWire :: (WireFormat a) => a -> BS.ByteString
-encodeWire = fst . runWirePut . wirePut
+encodeWire :: (a -> WirePut ()) -> a -> BS.ByteString
+encodeWire putter = fst . runWirePut . putter
 
 word32le :: Int -> BS.ByteString
 word32le = BSL.toStrict . runPut . putWord32le . fromIntegral
@@ -166,6 +168,10 @@ instance Arbitrary StringContents where
 encodeContents :: StringContents -> BS.ByteString
 encodeContents (StringContents s) = encodeUtf8 s
 
+-- | StringContents as the `WlText` it is valid for.
+contentsText :: StringContents -> WlText
+contentsText (StringContents s) = either (error . show) id $ wlText (toText s)
+
 -- | Characters allowed in a wl_string.
 validChar :: Char -> Bool
 validChar c = c /= '\0' && notSurrogate c
@@ -176,9 +182,9 @@ notSurrogate c = c < '\xD800' || c > '\xDFFF'
 
 -- | A wl_string is NUL terminated, so a payload containing a NUL is not
 -- representable on the wire. Never generate one, and never shrink towards one.
-instance Arbitrary WlString where
-  arbitrary = WlString . encodeContents <$> arbitrary
-  shrink (WlString s) = WlString . encodeContents <$> shrink (StringContents (decodeUtf8 s))
+instance Arbitrary WlText where
+  arbitrary = contentsText <$> arbitrary
+  shrink (WlText t) = contentsText <$> shrink (StringContents (toString t))
 
 -- }}}
 
@@ -188,6 +194,11 @@ newtype Body = Body BS.ByteString deriving stock (Show)
 instance Arbitrary Body where
   arbitrary = chooseInt (0, 32) >>= fmap (Body . BS.pack) . vector . (* 4)
   shrink (Body b) = [Body (BS.take n b) | n <- [0, 4 .. BS.length b - 4]]
+
+-- | Never the null object.
+instance Arbitrary ObjectID where
+  arbitrary = arbitrary `suchThatMap` mkWlObjectID
+  shrink oid = mapMaybe mkWlObjectID (shrink (fromObjectID oid))
 
 instance Arbitrary WlInt where
   arbitrary = WlInt <$> arbitrary

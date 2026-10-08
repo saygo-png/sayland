@@ -1,3 +1,5 @@
+{-# LANGUAGE QuasiQuotes #-}
+
 {- HLINT ignore "Use camelCase" -}
 module Client.WallpaperDaemon (test) where
 
@@ -76,7 +78,7 @@ program = do
 
   surface <- newObject wl_compositor Request_wl_compositor_create_surface
   layer_surface <- newObject zwlr_layer_shell_v1 $ \i ->
-    Request_zwlr_layer_shell_v1_get_layer_surface i surface.wlid nullObjectID Enum_zwlr_layer_shell_v1_layer_background "wallpaper"
+    Request_zwlr_layer_shell_v1_get_layer_surface i surface.wlid Nothing Enum_zwlr_layer_shell_v1_layer_background [wl|wallpaper|]
 
   sendMsg layer_surface $ Request_zwlr_layer_surface_v1_set_size (fromIntegral bufferWidth) (fromIntegral bufferHeight)
   sendMsg layer_surface $ Request_zwlr_layer_surface_v1_set_exclusive_zone $ -1
@@ -96,7 +98,7 @@ program = do
 
           liftIO $ hPut fileHandle (rainbowImage bufferWidth bufferHeight)
           hFlush fileHandle
-          sendMsg surface $ Request_wl_surface_attach wl_buffer.wlid 0 0
+          sendMsg surface $ Request_wl_surface_attach (Just wl_buffer.wlid) 0 0
           sendMsg surface Request_wl_surface_commit
 
           -- Wait for exit

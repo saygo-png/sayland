@@ -13,6 +13,7 @@ import Data.ByteString qualified as BS
 import Data.Coerce
 import Data.Data (cast)
 import Data.Map qualified as Map
+import Data.Maybe (fromMaybe)
 import Debug.Trace (traceIO)
 import Network.Socket
 import Sayland.Internal.Core
@@ -36,8 +37,8 @@ listenForClients env = do
 -- | Deal with an incoming client, creating a client environment and updating the server state.
 handleIncomingClient :: (MonadIO m) => ServerEnvironment -> Socket -> m ()
 handleIncomingClient env socket' = do
-  counter <- newIORef 0
-  objects <- newIORef $ Map.fromList [(1, SomeObject $ Wl_display $ TObjectID 1)]
+  counter <- newIORef $ coerce wlDisplayId
+  objects <- newIORef $ Map.fromList [(coerce wlDisplayId, SomeObject $ Wl_display wlDisplayId)]
   globals <- newIORef mempty
   fdQueue <- atomically newTQueue
   let clientenv =
@@ -67,7 +68,7 @@ handleIncomingClient env socket' = do
 serveClient :: Wayland Server () -> Wayland Server ()
 serveClient loop =
   loop `catchW` \(e :: ProtocolError) -> do
-    sendMsg (Wl_display wlDisplayId) (Event_wl_display_error e.object e.code e.message)
+    sendMsg (Wl_display wlDisplayId) (Event_wl_display_error (fromMaybe (coerce wlDisplayId) e.object) e.code (fromMaybe mempty e.message))
     throwIO e
 
 -- | Handle communication between a server and a client in provided socket, works both on the server and the client.
@@ -89,21 +90,21 @@ clientLoop = clientLoop' ""
 
 -- | Deal with an inbound message. Checks if the `ObjectID` reference is valid.
 -- if it is valid, the work is handed to `dispatchMessage`.
-handleMessage :: (KnownPerspective p) => RawObjectID -> Word16 -> BS.ByteString -> Wayland p ()
-handleMessage oid opcode msg = do
+handleMessage :: (KnownPerspective p) => WlObjectID -> Word16 -> BS.ByteString -> Wayland p ()
+handleMessage oid' opcode msg = do
   env <- getClientEnv
   objects <- readIORef env.objects
-  case Map.lookup oid objects of
-    Just (SomeObject o) -> withIncoming o $ dispatchWith (applyIncoming o) oid opcode msg
-    Nothing -> liftIO $ traceIO $ "invalid object reference with id: " <> show oid
+  case oid' >>= \oid -> (oid,) <$> Map.lookup oid objects of
+    Just (oid, SomeObject o) -> withIncoming o $ dispatchWith (applyIncoming o) oid opcode msg
+    Nothing -> liftIO $ traceIO $ "invalid object reference with id: " <> show oid'
 
 -- | Parse a message for an object and run the given handler on it, then any registered 'EventHandler's.
-dispatchWith :: (Message m) => (m -> Wayland p ()) -> RawObjectID -> Word16 -> BS.ByteString -> Wayland p ()
+dispatchWith :: (Message m) => (m -> Wayland p ()) -> ObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 dispatchWith handle oid opcode msg = do
   env <- getClientEnv
   fds <- atomically $ flushTQueue env.fdQueue
-  case runWireGet (getMessage opcode) fds msg of
-    Left err -> fail err
+  case runGetMessage opcode fds msg of
+    Left err -> throwIO err
     Right (message, leftover) -> do
       void . atomically $ traverse (unGetTQueue env.fdQueue) (reverse leftover)
       colorize <- liftIO getColorize

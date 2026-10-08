@@ -15,10 +15,16 @@ module Sayland.Core (
   Interface (..),
   SomeObject (..),
   Message (..),
+  MessageError (..),
+  runGetMessage,
   WaylandEnv (..),
   InterfaceEntry (..),
   ProtocolTable,
-  nullObjectID,
+  Strictness (..),
+  Culprit (..),
+  Severity (..),
+  getStrictness,
+  protocolViolation,
 ) where
 
 import Sayland.Internal.Core

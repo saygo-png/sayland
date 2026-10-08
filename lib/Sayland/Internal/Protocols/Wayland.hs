@@ -1,5 +1,6 @@
 {-# LANGUAGE FunctionalDependencies #-}
 {-# LANGUAGE PatternSynonyms #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -38,7 +39,7 @@ $(loadProtocolFileEnums False "xml-protocols/wayland.xml")
 
 -- | Constant representing the `Wl_display` ID which is always 1 in Wayland.
 wlDisplayId :: TObjectID Wl_display
-wlDisplayId = TObjectID 1
+wlDisplayId = TObjectID $ mkObjectID @1
 
 -- | Get the `Wl_display` object which always exists during a connection.
 getWlDisplay :: Wayland p Wl_display
@@ -51,10 +52,6 @@ pattern Err_implementation = Enum_wl_display_error_implementation
 pattern Err_invalid_object = Enum_wl_display_error_invalid_object
 pattern Err_no_memory = Enum_wl_display_error_no_memory
 
--- | Helper like `protocolError` but for throwing global errors. I.e `Wl_display` errors.
-protocolErrorG :: (MonadIO m) => Enum_wl_display_error -> WlString -> m a
-protocolErrorG err msg = throwIO $ ProtocolError (toRawObjectID wlDisplayId) (errorCode err) msg
-
 -- | A rectangle, described in pixels.
 data Rectangle = Rectangle
   { position :: (Int32, Int32)
@@ -62,16 +59,16 @@ data Rectangle = Rectangle
   }
   deriving stock (Eq, Ord)
 
--- | Nothing or empty list means no change. In order to "reset" values, set them to the defaults - ObjectID `0`, normal transform, etc.
+-- | Nothing or empty list means no change. In order to "reset" values, set them to the defaults - `Just Nothing` for the null object, normal transform, etc.
 data ContentUpdate = ContentUpdate
-  { cuSurface :: TObjectID Wl_surface
-  , cuBuffer :: Maybe (TObjectID Wl_buffer)
+  { cuSurface :: Maybe (TObjectID Wl_surface)
+  , cuBuffer :: Maybe (Maybe (TObjectID Wl_buffer))
   , cuOffset :: Maybe (Int32, Int32)
   , cuDamage :: [Rectangle]
   , cuDamageBuffer :: [Rectangle]
   , cuFrameCallbacks :: [TObjectID Wl_callback]
-  , cuOpaqueRegion :: Maybe (TObjectID Wl_region)
-  , cuInputRegion :: Maybe (TObjectID Wl_region)
+  , cuOpaqueRegion :: Maybe (Maybe (TObjectID Wl_region))
+  , cuInputRegion :: Maybe (Maybe (TObjectID Wl_region))
   , cuBufferScale :: Maybe Int32
   , cuBufferTransform :: Maybe Enum_wl_output_transform
   , cuBufferRelease :: Maybe (TObjectID Wl_callback)
@@ -86,7 +83,7 @@ data ContentUpdate = ContentUpdate
 emptyContentUpdate :: ContentUpdate
 emptyContentUpdate =
   ContentUpdate
-    { cuSurface = TObjectID 0
+    { cuSurface = Nothing
     , cuBuffer = Nothing
     , cuOffset = Just (0, 0)
     , cuDamage = []
@@ -149,11 +146,11 @@ data Wl_buffer = Wl_buffer
 
 newtype DndIcon = DndIcon Dnd
 
-type Mimetype = WlString
+type Mimetype = WlText
 
 data Wl_data_offer = Wl_data_offer
   { wlid :: TObjectID Wl_data_offer
-  , acceptedMimetypes :: IORef [Mimetype]
+  , acceptedMimetypes :: IORef [WlString]
   , offeredMimetypes :: IORef [Mimetype]
   , offer_data_device :: TObjectID Wl_data_device
   , offerSourceActions :: IORef Enum_wl_data_device_manager_dnd_action
@@ -191,17 +188,17 @@ data Dnd = Dnd
 data DndClient = DndClient
   { target :: TObjectID Wl_surface
   , dndPosition :: (WlFixed, WlFixed)
-  , offer :: TObjectID Wl_data_offer
+  , offer :: Maybe (TObjectID Wl_data_offer)
   , enterSerial :: WlUInt
   }
 
 data Selection = Selection
-  { source :: TObjectID Wl_data_source
+  { source :: Maybe (TObjectID Wl_data_source)
   , eventSerial :: WlUInt
   }
 
 newtype SelectionClient = SelectionClient
-  { offer :: TObjectID Wl_data_offer
+  { offer :: Maybe (TObjectID Wl_data_offer)
   }
 
 data Wl_data_device = Wl_data_device
@@ -270,7 +267,7 @@ newtype Wl_keyboard = Wl_keyboard {wlid :: TObjectID Wl_keyboard}
 
 newtype Wl_touch = Wl_touch {wlid :: TObjectID Wl_touch}
 
-data OutputGeometry = OutputGeometry {outputPosition :: (WlInt, WlInt), outputSize :: (WlInt, WlInt), subpixel :: Enum_wl_output_subpixel, make :: WlString, model :: WlString, outputTransform :: Enum_wl_output_transform}
+data OutputGeometry = OutputGeometry {outputPosition :: (WlInt, WlInt), outputSize :: (WlInt, WlInt), subpixel :: Enum_wl_output_subpixel, make :: WlText, model :: WlText, outputTransform :: Enum_wl_output_transform}
 
 data OutputMode = OutputMode {outputFlags :: Enum_wl_output_mode, modeWidth :: WlInt, modeHeight :: WlInt, modeRefresh :: WlInt}
 
@@ -278,8 +275,8 @@ data OutputUpdate = OutputUpdate
   { updateGeometry :: Maybe OutputGeometry
   , updateMode :: Maybe OutputMode
   , updateScale :: Maybe WlInt
-  , updateName :: Maybe WlString
-  , updateDescription :: Maybe WlString
+  , updateName :: Maybe WlText
+  , updateDescription :: Maybe WlText
   }
 
 data Wl_output = Wl_output
@@ -287,8 +284,8 @@ data Wl_output = Wl_output
   , outputGeometry :: IORef OutputGeometry
   , outputMode :: IORef OutputMode
   , outputScale :: IORef WlInt
-  , outputName :: IORef WlString
-  , outputDescription :: IORef WlString
+  , outputName :: IORef WlText
+  , outputDescription :: IORef WlText
   , outputUpdate :: IORef OutputUpdate
   }
 
@@ -305,7 +302,7 @@ dropObject :: TObjectID a -> Wayland p ()
 dropObject (TObjectID i) = do
   env <- getClientEnv
   atomicModifyIORef' env.objects $ \m -> (Map.delete i m, ())
-  onServer $ sendMessage (Event_wl_display_delete_id i) wlDisplayId
+  onServer $ sendMessage (Event_wl_display_delete_id $ fromObjectID i) wlDisplayId
 
 -- | @mmap@ a shm pool's fd, read/write and shared.
 mapShmPool :: (MonadIO m) => Fd -> WlInt -> m (Ptr ())
@@ -317,10 +314,12 @@ mapShmPool fd size =
 instance Object Wl_display where
   onEvent obj msg@(Event_wl_display_delete_id dId) = do
     env <- getClientEnv
-    atomicModifyIORef' env.objects $ \m -> (Map.delete dId m, ())
+    case mkWlObjectID dId of
+      Just oid -> atomicModifyIORef' env.objects $ \m -> (Map.delete oid m, ())
+      Nothing -> protocolViolation (Recoverable Pedantic) msg obj Err_invalid_object [wl|delete_id for the null object|]
     forwardMessage obj msg
   onEvent obj msg@(Event_wl_display_error objectId code message) = do
-    onClient . throwIO $ ProtocolError objectId code message
+    onClient . throwIO $ ProtocolError (Just objectId) code (Just message)
     forwardMessage obj msg
   onRequest obj msg@(Request_wl_display_sync callbackId) = do
     callbackObj <- Wl_callback callbackId <$> newEmptyMVar
@@ -365,22 +364,25 @@ instance Object Wl_registry where
     globals <- readIORef env.globals
 
     (iface, advertisedVersion) <- Map.lookup (coerce name) globals & whenNothing $ do
-      protocolErrorG Err_invalid_method "wl_registry: bind to a global that was not advertised"
+      protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind to a global that was not advertised|]
 
-    unless (iface == requestedIface) $
-      protocolErrorG Err_invalid_method "wl_registry: bind with the wrong interface for this global"
+    unless (Just iface == requestedIface) $
+      protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind with the wrong interface for this global|]
 
     unless (requestedVersion >= 1) $
-      protocolErrorG Err_invalid_method "wl_registry: bind version must be at least 1"
+      protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind version must be at least 1|]
 
     unless (requestedVersion <= advertisedVersion) $
-      protocolErrorG Err_invalid_method "wl_registry: bind version is higher than what is advertised"
+      protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind version is higher than what is advertised|]
 
     entry <- Map.lookup iface env.interfaceTable & whenNothing $ do
-      protocolErrorG Err_invalid_method "wl_registry: bind to an unsupported interface"
+      protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind to an unsupported interface|]
 
-    newObj <- liftIO (entry.construct newId)
-    atomicModifyIORef' env.objects $ \m -> (Map.insert newId newObj m, ())
+    newOid <- mkWlObjectID newId & whenNothing $ do
+      protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind with the null object as the new id|]
+
+    newObj <- liftIO (entry.construct newOid)
+    atomicModifyIORef' env.objects $ \m -> (Map.insert newOid newObj m, ())
     forwardMessage obj msg
 
 -- }}}
@@ -532,7 +534,7 @@ instance Object Wl_data_source where
     forwardMessage source msg
 
   onEvent source msg@(Event_wl_data_source_target mimetype) = do
-    atomicWriteIORef source.sourceTargetMimetype $ Just mimetype
+    atomicWriteIORef source.sourceTargetMimetype mimetype
     forwardMessage source msg
   onEvent source msg@Event_wl_data_source_send{} =
     -- Handling the data from this is for user made EventHandlers.
@@ -554,14 +556,14 @@ instance Object Wl_data_source where
 -- Wl_data_device {{{
 instance Object Wl_data_device where
   onRequest device msg@(Request_wl_data_device_start_drag source origin icon grabSerial) = do
-    let dnd = Dnd{source = Just source, origin, icon = Just icon, grabSerial}
+    let dnd = Dnd{source, origin, icon, grabSerial}
     onClient $ do
       isEmpty <- liftIO $ isEmptyMVar device.dnd
       unless isEmpty $ error "tried starting drag while during one"
       putMVar device.dnd dnd
     onServer $ do
       tryTakeMVar_ device.dnd
-      getInterface icon >>= \case
+      maybe (pure Nothing) getInterface icon >>= \case
         Nothing -> putMVar device.dnd dnd
         Just x -> do
           SurfaceRole role <- readIORef x.role
@@ -569,7 +571,7 @@ instance Object Wl_data_device where
             Just () -> do
               atomicWriteIORef x.role $ SurfaceRole $ DndIcon dnd
               putMVar device.dnd dnd
-            Nothing -> protocolError device Enum_wl_data_device_error_role "start_drag: icon surface already has a role"
+            Nothing -> protocolViolation Unrecoverable msg device Enum_wl_data_device_error_role [wl|start_drag: icon surface already has a role|]
     forwardMessage device msg
   onRequest device msg@(Request_wl_data_device_set_selection source eventSerial) = do
     tryTakeMVar_ device.selection
@@ -687,7 +689,7 @@ instance Object Wl_surface where
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuBufferRelease = Just release}, ())
     forwardMessage surface msg
   onRequest surface msg@Request_wl_surface_commit{} = do
-    cu <- liftIO $ atomicSwapIORef surface.pendingState emptyContentUpdate{cuSurface = surface.wlid}
+    cu <- liftIO $ atomicSwapIORef surface.pendingState emptyContentUpdate{cuSurface = Just surface.wlid}
     SurfaceRole role <- readIORef surface.role
     case cast role of
       Just (sub :: Wl_subsurface) -> do
@@ -697,7 +699,7 @@ instance Object Wl_surface where
             Just target -> atomicModifyIORef' target.pendingState $ \s -> (s{cuSlaveCUs = cu : s.cuSlaveCUs}, ())
             Nothing -> atomicWriteIORef surface.role $ SurfaceRole ()
       Nothing -> pass
-    atomicModifyIORef' surface.cuQueue $ \q -> (cu{cuSurface = surface.wlid} Seq.<| q, ())
+    atomicModifyIORef' surface.cuQueue $ \q -> (cu{cuSurface = Just surface.wlid} Seq.<| q, ())
     forwardMessage surface msg
 
   onEvent surface msg@(Event_wl_surface_enter output) = do
@@ -800,11 +802,11 @@ instance Object Wl_touch where
 -- Wl_output {{{
 instance Global Wl_output where
   global wlid = do
-    outputGeometry <- newIORef OutputGeometry{outputPosition = (0, 0), outputSize = (0, 0), subpixel = Enum_wl_output_subpixel_horizontal_rgb, make = "", model = "", outputTransform = Enum_wl_output_transform_normal}
+    outputGeometry <- newIORef OutputGeometry{outputPosition = (0, 0), outputSize = (0, 0), subpixel = Enum_wl_output_subpixel_horizontal_rgb, make = mempty, model = mempty, outputTransform = Enum_wl_output_transform_normal}
     outputMode <- newIORef OutputMode{outputFlags = Enum_wl_output_mode{mode_current = False, mode_preferred = False}, modeWidth = 0, modeHeight = 0, modeRefresh = 0}
     outputScale <- newIORef 1
-    outputName <- newIORef ""
-    outputDescription <- newIORef ""
+    outputName <- newIORef mempty
+    outputDescription <- newIORef mempty
     outputUpdate <- newIORef $ OutputUpdate Nothing Nothing Nothing Nothing Nothing
     pure Wl_output{..}
 
@@ -863,12 +865,12 @@ instance Object Wl_subcompositor where
   onRequest subcompositor msg@(Request_wl_subcompositor_get_subsurface subsurfaceId surfaceId parentId) = do
     surface <-
       getInterface surfaceId >>= \case
-        Nothing -> protocolError subcompositor Enum_wl_subcompositor_error_bad_surface "could not find surface"
+        Nothing -> protocolViolation Unrecoverable msg subcompositor Enum_wl_subcompositor_error_bad_surface [wl|could not find surface|]
         Just surface -> pure surface
     SurfaceRole role <- readIORef surface.role
     case cast role of
       Just () -> pass
-      Nothing -> protocolError subcompositor Enum_wl_subcompositor_error_bad_surface "surface already has a role assigned"
+      Nothing -> protocolViolation Unrecoverable msg subcompositor Enum_wl_subcompositor_error_bad_surface [wl|surface already has a role assigned|]
     position <- newIORef (0, 0)
     synchronized <- newIORef True
     registerObject Wl_subsurface{wlid = subsurfaceId, surface = surfaceId, parent = parentId, position, synchronized}
@@ -909,7 +911,7 @@ instance Object Wl_subsurface where
   onRequest subsurface msg@(Request_wl_subsurface_place_below sibling) = do
     parentSurface' <- getInterface subsurface.parent
     case parentSurface' of
-      Nothing -> protocolError subsurface.wlid Enum_wl_subsurface_error_bad_surface "invalid parent surface"
+      Nothing -> protocolViolation Unrecoverable msg subsurface.wlid Enum_wl_subsurface_error_bad_surface [wl|invalid parent surface|]
       Just parentSurface -> do
         state' <- readIORef parentSurface.state
         b <- atomicModifyIORef' parentSurface.pendingState $ \s ->
@@ -919,12 +921,12 @@ instance Object Wl_subsurface where
               joint2 = (before Seq.|> subsurface.surface) <> after
               (below, above) = Seq.breakl (== subsurface.parent) joint2
            in bool (s{cuSubsurfaces = Just SubsurfaceStack{below, above}}, True) (s, False) (after == Seq.empty)
-        unless b $ protocolError subsurface.wlid Enum_wl_subsurface_error_bad_surface "wl_surface is not a sibling or the parent"
+        unless b $ protocolViolation Unrecoverable msg subsurface.wlid Enum_wl_subsurface_error_bad_surface [wl|wl_surface is not a sibling or the parent|]
     forwardMessage subsurface msg
   onRequest subsurface msg@(Request_wl_subsurface_place_above sibling) = do
     parentSurface' <- getInterface subsurface.parent
     case parentSurface' of
-      Nothing -> protocolError subsurface.wlid Enum_wl_subsurface_error_bad_surface "invalid parent surface"
+      Nothing -> protocolViolation Unrecoverable msg subsurface.wlid Enum_wl_subsurface_error_bad_surface [wl|invalid parent surface|]
       Just parentSurface -> do
         state' <- readIORef parentSurface.state
         b <- atomicModifyIORef' parentSurface.pendingState $ \s ->
@@ -934,7 +936,7 @@ instance Object Wl_subsurface where
               joint2 = (before Seq.|> fromJust (after Seq.!? 0) Seq.|> subsurface.surface) <> Seq.drop 1 after
               (below, above) = Seq.breakl (== subsurface.parent) joint2
            in bool (s{cuSubsurfaces = Just SubsurfaceStack{below, above}}, True) (s, False) (after == Seq.empty)
-        unless b $ protocolError subsurface.wlid Enum_wl_subsurface_error_bad_surface "wl_surface is not a sibling or the parent"
+        unless b $ protocolViolation Unrecoverable msg subsurface.wlid Enum_wl_subsurface_error_bad_surface [wl|wl_surface is not a sibling or the parent|]
     forwardMessage subsurface msg
   onRequest subsurface msg@Request_wl_subsurface_set_sync = do
     atomicWriteIORef subsurface.synchronized True
@@ -977,14 +979,14 @@ tryBindToInterface registry = do
   let targetIface = getInterfaceName (Proxy @i)
   liftIO $ putStrLn $ "Trying to bind to " <> show targetIface <> "..."
   env <- getClientEnv
-  globals :: Map GlobalName (WlString, WlUInt) <- readIORef env.globals
+  globals :: Map GlobalName (WlText, WlUInt) <- readIORef env.globals
   let matchingIfaces = [(name, ver) | (name, (advertisedIface, ver)) <- Map.toList globals, advertisedIface == targetIface]
   case matchingIfaces of
     [] -> pure Nothing
     (name, advertisedVersion) : _ -> do
       oid <- newObjectID
       let negotiatedVersion = min advertisedVersion $ getInterfaceVersion (Proxy @i)
-      sendMsg registry $ Request_wl_registry_bind (coerce name) (WlNewId targetIface negotiatedVersion oid)
+      sendMsg registry $ Request_wl_registry_bind (coerce name) (WlNewId (Just targetIface) negotiatedVersion (fromObjectID oid))
       Just <$> (getInterface (TObjectID oid) >>= maybe (error "sayland bug: bind did not register the global") pure)
 
 -- }}}

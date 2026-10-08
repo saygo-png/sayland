@@ -1,3 +1,4 @@
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -118,7 +119,7 @@ instance Object Zwp_linux_buffer_params_v1 where
     let dmabufModifier :: Word64 = shiftL (fromIntegral modifier_hi) 32 .|. fromIntegral modifier_lo
     modifier <- readIORef params.paramsModifier
     unless (dmabufModifier == modifier)
-      $ protocolError params Enum_zwp_linux_buffer_params_v1_error_invalid_format "zwp_linux_buffer_params_v1.add: invalid format"
+      $ protocolViolation Unrecoverable msg params Enum_zwp_linux_buffer_params_v1_error_invalid_format [wl|zwp_linux_buffer_params_v1.add: invalid format|]
     atomicModifyIORef' params.dmabufSet $ \ds -> (Dmabuf{dmabufFd, dmabufOffset, dmabufStride, dmabufPlaneIdx} : ds, ())
     forwardMessage params msg
   onRequest params msg@Request_zwp_linux_buffer_params_v1_create{} =

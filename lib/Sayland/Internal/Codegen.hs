@@ -9,6 +9,7 @@ module Sayland.Internal.Codegen (module Sayland.Internal.Codegen) where
 
 import Control.Applicative
 import Control.Monad
+import Data.Bifunctor (bimap, first)
 import Data.Binary
 import Data.Bits
 import Data.Bool
@@ -17,12 +18,13 @@ import Data.Char (isSpace, toUpper)
 import Data.Functor
 import Data.List
 import Data.List qualified as L
-import Data.Maybe (catMaybes, fromJust)
+import Data.Maybe (catMaybes, fromJust, isJust)
 import Data.Proxy
 import Data.String
 import GHC.Generics (Generic)
 import GHC.TypeError (Unsatisfiable)
 import Language.Haskell.TH
+import Language.Haskell.TH.Quote (QuasiQuoter (quoteExp))
 import Language.Haskell.TH.Syntax
 import Sayland.Internal.Core
 import Sayland.Internal.Prelude
@@ -221,40 +223,32 @@ mkEnum isIO interfaceName enumEl = do
     ( do
         forM_ entries $ \e -> docDecl isIO (mkName $ enumName'' <> entryName e) (elemDoc e)
         docDecl isIO (mkName enumName') (elemDoc enumEl)
+        docCodec
+        codec <- enumCodec
         pure
-          $ [ DataD [] (mkName enumName') [] Nothing constructors [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord]]
-            , InstanceD
-                Nothing
-                []
-                (AppT (ConT ''WireFormat) $ ConT $ mkName enumName')
-                [ FunD 'wirePut clauses
-                , FunD 'wireGet clauses'
-                ]
-            , InstanceD
-                Nothing
-                []
-                (AppT (ConT ''Show) $ ConT $ mkName enumName')
-                [FunD 'Text.Show.showsPrec show_clauses]
-            ]
+          $ [DataD [] (mkName enumName') [] Nothing constructors [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord]]]
+          <> codec
+          <> [ InstanceD
+                 Nothing
+                 []
+                 (AppT (ConT ''Show) $ ConT $ mkName enumName')
+                 [FunD 'Text.Show.showsPrec show_clauses]
+             ]
           <> errorInstance
     )
     ( do
         docDecl isIO (mkName enumName') (elemDoc enumEl)
+        docCodec
+        codec <- bitfieldCodec
         pure
-          [ DataD [] (mkName enumName') [] Nothing bitfieldConstructor [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord, ConT ''Generic]]
-          , InstanceD
-              Nothing
-              []
-              (AppT (ConT ''WireFormat) $ ConT $ mkName enumName')
-              [ FunD 'wirePut bitfieldClauses
-              , FunD 'wireGet bitfieldClauses'
-              ]
-          , InstanceD
-              Nothing
-              []
-              (AppT (ConT ''Show) $ ConT $ mkName enumName')
-              [FunD 'Text.Show.showsPrec bitfield_show_clauses]
-          ]
+          $ [DataD [] (mkName enumName') [] Nothing bitfieldConstructor [DerivClause (Just StockStrategy) [ConT ''Eq, ConT ''Ord, ConT ''Generic]]]
+          <> codec
+          <> [ InstanceD
+                 Nothing
+                 []
+                 (AppT (ConT ''Show) $ ConT $ mkName enumName')
+                 [FunD 'Text.Show.showsPrec bitfield_show_clauses]
+             ]
     )
     isBitfield
   where
@@ -267,12 +261,33 @@ mkEnum isIO interfaceName enumEl = do
     enumName' = "Enum_" <> interfaceName <> "_" <> enumName
     enumName'' = enumName' <> "_"
     constructors = (`NormalC` []) . mkName . (enumName'' <>) <$> fmap fst enumKV
-    clauses = [Clause [ConP (mkName $ enumName'' <> k) [] []] (NormalB (AppE (VarE 'wirePut) $ AppE (ConE 'WlUInt) $ LitE (IntegerL v))) [] | (k, v) <- enumKV]
 
-    clauses' =
-      [Clause [] (NormalB . DoE Nothing $ [BindS (VarP $ mkName "variant") getUInt, NoBindS $ CaseE (VarE $ mkName "variant") matches]) []]
-    getUInt = SigE (VarE 'wireGet) (AppT (ConT ''WireGet) (ConT ''WlUInt))
-    matches = [Match (LitP (IntegerL v)) (NormalB (AppE (VarE 'pure) (ConE (mkName $ enumName'' <> k)))) [] | (k, v) <- enumKV]
+    putName = mkName $ "put" <> enumName'
+    getName = mkName $ "get" <> enumName'
+    enumT = conT $ mkName enumName'
+    docCodec = do
+      docDecl isIO putName . Just $ "Put a t'" <> enumName' <> "'."
+      docDecl isIO getName . Just $ "Get a t'" <> enumName' <> "'."
+    codecSigs =
+      [ sigD putName [t|$enumT -> WirePut ()|]
+      , sigD getName [t|WireGet (Either MessageError $enumT)|]
+      ]
+
+    -- putEnum_[interface]_[name] A = putWlUInt 1
+    -- getEnum_[interface]_[name] = (\case Left short -> ...; Right 1 -> Right A; Right unknown -> ...) <$> getWlUInt
+    enumCodec = do
+      short <- newName "short"
+      unknown <- newName "unknown"
+      let entryCon k = mkName $ enumName'' <> k
+          matches =
+            [match (conP 'Left [varP short]) (normalB [|Left (BodyTooShort $(varE short))|]) []]
+              <> [match (conP 'Right [litP $ integerL v]) (normalB [|Right $(conE $ entryCon k)|]) [] | (k, v) <- enumKV]
+              <> [match (conP 'Right [varP unknown]) (normalB [|Left (UnknownEnumValue $(varE unknown))|]) []]
+      sequence
+        $ codecSigs
+        <> [ funD putName [clause [conP (entryCon k) []] (normalB [|putWlUInt $(litE $ integerL v)|]) [] | (k, v) <- enumKV]
+           , valD (varP getName) (normalB [|$(lamCaseE matches) <$> getWlUInt|]) []
+           ]
 
     show_clauses =
       [ Clause
@@ -301,28 +316,18 @@ mkEnum isIO interfaceName enumEl = do
       Nothing -> False
     bitfieldConstructor = [RecC (mkName enumName') [(mkName $ enumName <> "_" <> name, Bang NoSourceUnpackedness NoSourceStrictness, ConT ''Bool) | name <- enumKeys]]
 
-    bitfieldClauses =
-      [ Clause
-          [RecP (mkName enumName') [(mkName $ enumName <> "_" <> field, VarP (mkName $ "field_" <> field)) | field <- enumKeys]]
-          (NormalB $ AppE (VarE 'wirePut) $ AppE (ConE 'WlUInt) $ AppE (VarE 'sum) $ ListE [AppE (AppE (AppE (VarE 'bool) $ LitE $ IntegerL 0) (LitE $ IntegerL value)) $ VarE $ mkName $ "field_" <> field | (field, value) <- enumKV])
-          []
-      ]
-    bitfieldClauses' =
-      [ Clause
-          []
-          ( NormalB
-              . DoE Nothing
-              $ [ BindS (ConP 'WlUInt [] [VarP $ mkName "byte"]) getUInt
-                , NoBindS
-                    $ AppE (VarE 'pure)
-                    $ foldl
-                      AppE
-                      (ConE $ mkName enumName')
-                      [bool (AppE (AppE (VarE 'testBit) $ VarE $ mkName "byte") $ LitE $ IntegerL $ round (logBase (2 :: Float) $ fromIntegral v)) (ConE 'True) (v == 0) | (_, v) <- enumKV]
-                ]
-          )
-          []
-      ]
+    -- putEnum_[interface]_[name] (Enum_[interface]_[name] a b) = putWlUInt (sum [bool 0 1 a, bool 0 2 b])
+    -- getEnum_[interface]_[name] = bimap BodyTooShort (\(WlUInt byte) -> Enum_[interface]_[name] (testBit byte 0) (testBit byte 1)) <$> getWlUInt
+    bitfieldCodec = do
+      fields <- traverse (newName . ("field_" <>)) enumKeys
+      byte <- newName "byte"
+      let flags = listE [[|bool 0 $(litE $ integerL v) $(varE f)|] | (f, (_, v)) <- zip fields enumKV]
+          bits = [if v == 0 then [|True|] else [|testBit $(varE byte) $(litE . integerL . round $ logBase (2 :: Float) (fromIntegral v))|] | (_, v) <- enumKV]
+      sequence
+        $ codecSigs
+        <> [ funD putName [clause [conP (mkName enumName') (varP <$> fields)] (normalB [|putWlUInt (sum $flags)|]) []]
+           , valD (varP getName) (normalB [|bimap BodyTooShort $(lamE [conP 'WlUInt [varP byte]] $ foldl appE (conE $ mkName enumName') bits) <$> getWlUInt|]) []
+           ]
     bitfield_show_clauses =
       [ Clause
           [WildP, RecP (mkName enumName') [(mkName $ enumName <> "_" <> field, VarP (mkName $ "field_" <> field)) | field <- enumKeys]]
@@ -393,10 +398,10 @@ mkShow :: String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkShow interfaceName prefix prefix2 events =
   mapM (pure . mkShowC) (fmap snd events) <&> \m ->
     bool
-      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''RawObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
+      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''ObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
       , FunD (mkName prefix) m
       ]
-      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''RawObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
+      [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''ObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
       , FunD (mkName prefix) [Clause [WildP, WildP] (NormalB $ LitE $ StringL $ mconcat [arrow, interfaceName, "@?"]) []]
       ]
       (null m)
@@ -442,7 +447,7 @@ mkOpcodeGetter interfaceName prefix prefix2 events =
         eventName = fromJust $ findAttr (qname "name") element
         args = findChildren (qname "arg") element
 
-mkPut :: String -> String -> String -> [(Word16, Element)] -> [Dec]
+mkPut :: String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkPut interfaceName prefix prefix2 events =
   ( \m ->
       bool
@@ -454,59 +459,55 @@ mkPut interfaceName prefix prefix2 events =
         ]
         (null m)
   )
-    $ mkClause
-    <$> events
+    <$> traverse mkClause events
   where
     nestPutters [] = AppE (VarE 'pure) $ ConE '()
     nestPutters [x] = x
     nestPutters (x : xs) = InfixE (Just $ nestPutters xs) (VarE '(>>)) (Just x)
-    mkClause :: (Word16, Element) -> Clause
-    mkClause (_opcode, element) =
-      Clause
-        [ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [] $ fmap (VarP . mkName . ("arg_" <>)) argNames]
-        (NormalB $ nestPutters $ reverse $ (\n -> AppE (VarE 'wirePut) (VarE $ mkName $ "arg_" <> n)) <$> argNames)
-        []
+    mkClause :: (Word16, Element) -> Q Clause
+    mkClause (_opcode, element) = do
+      putters <- traverse (argPut interfaceName) args
+      pure
+        $ Clause
+          [ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [] $ fmap (VarP . mkName . ("arg_" <>)) argNames]
+          (NormalB $ nestPutters $ reverse $ zipWith (\p n -> AppE p (VarE $ mkName $ "arg_" <> n)) putters argNames)
+          []
       where
         args = findChildren (qname "arg") element
         argNames = fromJust . findAttr (qname "name") <$> args
         eventName = fromJust $ findAttr (qname "name") element
 
-mkParser :: String -> String -> String -> [(Word16, Element)] -> [Dec]
-mkParser interfaceName prefix prefix2 events =
-  ( \m ->
-      bool
-        [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''Word16) $ AppT (ConT ''WireGet) $ ConT $ mkName $ prefix2 <> interfaceName)
-        , FunD (mkName prefix) m
-        ]
-        [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''Word16) $ AppT (ConT ''WireGet) $ ConT $ mkName $ prefix2 <> interfaceName)
-        , FunD (mkName prefix) [Clause [] (NormalB $ AppE (VarE (mkName "error")) $ LitE $ StringL "no events (empty mkEvents output)") []]
-        ]
-        (null m)
-  )
-    $ mkClause
-    <$> events
+mkParser :: String -> String -> String -> [(Word16, Element)] -> Q [Dec]
+mkParser interfaceName prefix prefix2 events = do
+  opcode <- newName "opcode"
+  sequence
+    [ sigD name [t|Word16 -> WireGet (Either MessageError $(conT $ mkName $ prefix2 <> interfaceName))|]
+    , funD name $ fmap mkClause events <> [clause [varP opcode] (normalB [|pure (Left (UnknownOpcode $(varE opcode)))|]) []]
+    ]
   where
-    mkClause :: (Word16, Element) -> Clause
-    mkClause (opcode, element) =
-      Clause
-        [LitP $ IntegerL $ fromIntegral opcode]
-        (NormalB $ nestGetters $ reverse $ ConE (mkName $ prefix2 <> interfaceName <> "_" <> eventName) : (VarE 'wireGet <$ args))
-        []
+    name = mkName prefix
+    -- Every arg is got, then the first error (if any) is the result:
+    -- getMessage <opcode> = do
+    --   arg1 <- <get arg 1>
+    --   arg2 <- <get arg 2>
+    --   pure (pure <Constructor> <*> arg1 <*> arg2) -- inner pure and <*> in Either
+    mkClause :: (Word16, Element) -> Q Clause
+    mkClause (opcode, element) = do
+      vars <- traverse (const $ newName "arg") args
+      let binds = zipWith (\v a -> bindS (varP v) (argGet interfaceName a)) vars args
+          built = foldl' (\acc v -> [|$acc <*> $(varE v)|]) [|pure $(conE con)|] vars
+      clause [litP . integerL $ fromIntegral opcode] (normalB . doE $ binds <> [noBindS [|pure $built|]]) []
       where
         args = findChildren (qname "arg") element
         eventName = fromJust $ findAttr (qname "name") element
-
-    nestGetters [] = undefined
-    nestGetters [x] = AppE (VarE 'pure) x
-    nestGetters [x, y] = InfixE (Just y) (VarE '(<$>)) (Just x)
-    nestGetters (x : xs) = InfixE (Just $ nestGetters xs) (VarE '(<*>)) (Just x)
+        con = mkName $ prefix2 <> interfaceName <> "_" <> eventName
 
 -- | Create message instances for messages of an interface.
 mkMessageInstances :: String -> String -> [(Word16, Element)] -> Q [Dec]
 mkMessageInstances interfaceName prefix2 events = do
-  let put' = mkPut interfaceName "putMessage" prefix2 events
-      get' = mkParser interfaceName "getMessage" prefix2 events
-      sender' = [FunD 'sender [Clause [WildP] (NormalB . ConE $ if prefix2 == "Request_" then 'Client else 'Server) []]]
+  put' <- mkPut interfaceName "putMessage" prefix2 events
+  get' <- mkParser interfaceName "getMessage" prefix2 events
+  let sender' = [FunD 'sender [Clause [WildP] (NormalB . ConE $ if prefix2 == "Request_" then 'Client else 'Server) []]]
   opc' <- mkOpcodeGetter interfaceName "getOpcode" prefix2 events
   show' <- mkShow interfaceName "showMessage" prefix2 events
   pure [InstanceD Nothing [] (AppT (ConT ''Message) $ ConT . mkName $ prefix2 <> interfaceName) $ put' <> get' <> opc' <> show' <> sender']
@@ -526,6 +527,8 @@ loadInterface formatter isIO int = do
           Nothing -> fail $ "sayland: protocol declares interface `" <> name' <> "` but no type `" <> formatter name' <> "` is in scope."
 
   docDecl isIO ifaceName (elemDoc int)
+  -- Checked while compiling to not contain NUL.
+  wlName <- quoteExp wl name'
 
   concat
     <$> sequence
@@ -547,7 +550,7 @@ loadInterface formatter isIO int = do
                   [Clause [WildP] (NormalB $ AppE (ConE 'WlUInt) (LitE $ IntegerL version')) []]
               , FunD
                   'getInterfaceName
-                  [Clause [WildP] (NormalB $ AppE (VarE 'fromString) (LitE $ StringL name')) []]
+                  [Clause [WildP] (NormalB wlName) []]
               ]
           ]
       ]
@@ -563,15 +566,25 @@ loadInterfaceEnums isIO int =
     name = fromJust $ findAttr (qname "name") int
     enums = findChildren (qname "enum") int
 
+-- | Whether an @\<arg\>@ may be null, from its @allow-null@ attribute. Only strings and objects can be.
+isNullable :: Element -> Bool
+isNullable element = case findAttr (qname "allow-null") element of
+  Just "true"
+    | findAttr (qname "type") element `elem` [Just "string", Just "object"] -> True
+    | otherwise -> error $ "allow-null on an arg that is not a string or object: " <> show element
+  _ -> False
+
+-- | Name of the type of an enum argument. @enum="iface.name"@ refers to another interface's enum.
+enumTypeName :: String -> String -> String
+enumTypeName intName enumName =
+  "Enum_" <> case span (/= '.') enumName of
+    (a, "") -> intName <> "_" <> a
+    (a, _ : b) -> a <> "_" <> b
+
+-- | Haskell type of an @\<arg\>@. `argPut` and `argGet` must agree with it.
 argType :: (String -> String) -> String -> Element -> Type
 argType formatter intName element = case findAttr (qname "enum") element of
-  Just enumName ->
-    ConT
-      $ mkName
-      $ "Enum_"
-      <> case span (/= '.') enumName of
-        (a, "") -> intName <> "_" <> a
-        (a, _ : b) -> a <> "_" <> b
+  Just enumName -> ConT . mkName $ enumTypeName intName enumName
   Nothing -> case findAttr (qname "type") element of
     Nothing -> error $ "arg without a type discovered" <> show element
     Just "new_id" -> case findAttr (qname "interface") element of
@@ -580,12 +593,60 @@ argType formatter intName element = case findAttr (qname "enum") element of
     Just "int" -> ConT ''WlInt
     Just "uint" -> ConT ''WlUInt
     Just "fixed" -> ConT ''WlFixed
-    Just "string" -> ConT ''WlString
+    Just "string" -> nullable $ ConT ''WlText
     Just "array" -> ConT ''WlArray
     Just "fd" -> ConT ''WlFd
-    Just "object" -> case findAttr (qname "interface") element of
+    Just "object" -> nullable $ case findAttr (qname "interface") element of
       Just x -> AppT (ConT ''TObjectID) . ConT . mkName $ formatter x
-      Nothing -> ConT ''RawObjectID
+      Nothing -> ConT ''ObjectID
     Just y -> error $ "unknown type: " <> fromString y
+  where
+    -- WlString is Maybe WlText and WlObjectID is Maybe ObjectID.
+    nullable t = if isNullable element then AppT (ConT ''Maybe) t else t
+
+-- | @argType -> WirePut ()@, putting an @\<arg\>@.
+argPut :: String -> Element -> Q Exp
+argPut intName element = case findAttr (qname "enum") element of
+  Just enumName -> varE . mkName $ "put" <> enumTypeName intName enumName
+  Nothing -> case (findAttr (qname "type") element, hasInterface, isNullable element) of
+    (Just "new_id", True, _) -> [|putTObjectID|]
+    (Just "new_id", False, _) -> [|putWlNewId|]
+    (Just "int", _, _) -> [|putWlInt|]
+    (Just "uint", _, _) -> [|putWlUInt|]
+    (Just "fixed", _, _) -> [|putWlFixed|]
+    (Just "string", _, True) -> [|putWlString|]
+    (Just "string", _, False) -> [|putWlString . Just|]
+    (Just "array", _, _) -> [|putWlArray|]
+    (Just "fd", _, _) -> [|putWlFd|]
+    (Just "object", True, True) -> [|putWlObjectID . fmap toObjectID|]
+    (Just "object", True, False) -> [|putTObjectID|]
+    (Just "object", False, True) -> [|putWlObjectID|]
+    (Just "object", False, False) -> [|putObjectID|]
+    _ -> fail $ "sayland: cannot put arg " <> show element
+  where
+    hasInterface = isJust $ findAttr (qname "interface") element
+
+-- | @WireGet (Either MessageError argType)@, getting an @\<arg\>@.
+-- `Left` on anything `argType` rules out, e.g. null where the protocol does not allow it.
+argGet :: String -> Element -> Q Exp
+argGet intName element = case findAttr (qname "enum") element of
+  Just enumName -> varE . mkName $ "get" <> enumTypeName intName enumName
+  Nothing -> case (findAttr (qname "type") element, hasInterface, isNullable element) of
+    (Just "new_id", True, _) -> [|bimap InvalidObjectID TObjectID <$> getObjectID|]
+    (Just "new_id", False, _) -> [|first InvalidNewId <$> getWlNewId|]
+    (Just "int", _, _) -> [|first BodyTooShort <$> getWlInt|]
+    (Just "uint", _, _) -> [|first BodyTooShort <$> getWlUInt|]
+    (Just "fixed", _, _) -> [|first BodyTooShort <$> getWlFixed|]
+    (Just "string", _, True) -> [|first InvalidString <$> getWlString|]
+    (Just "string", _, False) -> [|(>>= maybe (Left NullString) Right) . first InvalidString <$> getWlString|]
+    (Just "array", _, _) -> [|first BodyTooShort <$> getWlArray|]
+    (Just "fd", _, _) -> [|maybe (Left MissingFd) Right <$> getWlFd|]
+    (Just "object", True, True) -> [|bimap BodyTooShort (fmap TObjectID) <$> getWlObjectID|]
+    (Just "object", True, False) -> [|bimap InvalidObjectID TObjectID <$> getObjectID|]
+    (Just "object", False, True) -> [|first BodyTooShort <$> getWlObjectID|]
+    (Just "object", False, False) -> [|first InvalidObjectID <$> getObjectID|]
+    _ -> fail $ "sayland: cannot get arg " <> show element
+  where
+    hasInterface = isJust $ findAttr (qname "interface") element
 
 -- vim: foldmethod=marker

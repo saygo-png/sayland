@@ -1,4 +1,5 @@
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# OPTIONS_HADDOCK not-home #-}
@@ -6,12 +7,13 @@
 -- | Description: Internals of Sayland.Protocols.Fifo
 module Sayland.Internal.Protocols.Fifo (module Sayland.Internal.Protocols.Fifo) where
 
-import Data.String (fromString)
+import Data.Text qualified as T
 import Sayland.Internal.Codegen
 import Sayland.Internal.Core
 import Sayland.Internal.Object
 import Sayland.Internal.Prelude
 import Sayland.Internal.Protocols.Wayland
+import Sayland.Wire
 
 $(loadProtocolFileEnums False "xml-protocols/fifo-v1.xml")
 
@@ -35,7 +37,7 @@ instance Object Wp_fifo_manager_v1 where
       Just _ -> do
         registerObject Wp_fifo_v1{wlid = fifoId, fifoSurface = surfaceId}
         forwardMessage manager msg
-      Nothing -> protocolErrorG Err_invalid_object $ "wp_fifo_manager_v1.get_fifo: surface `" <> fromString (show surfaceId) <> "` does not exist"
+      Nothing -> protocolViolation Unrecoverable msg wlDisplayId Err_invalid_object . wlTextLossy $ "wp_fifo_manager_v1.get_fifo: surface `" <> T.pack (show surfaceId) <> "` does not exist"
 
   onEvent _ = \case {}
 
@@ -48,13 +50,13 @@ instance Object Wp_fifo_v1 where
       Just surface -> do
         atomicModifyIORef' surface.pendingState $ \state -> (state{cuFifoBarrier = True}, ())
         forwardMessage fifo msg
-      Nothing -> protocolError fifo Enum_wp_fifo_v1_error_surface_destroyed "set_barrier: the associated surface no longer exists"
+      Nothing -> protocolViolation Unrecoverable msg fifo Enum_wp_fifo_v1_error_surface_destroyed [wl|set_barrier: the associated surface no longer exists|]
   onRequest fifo msg@Request_wp_fifo_v1_wait_barrier = do
     getInterface fifo.fifoSurface >>= \case
       Just surface -> do
         atomicModifyIORef' surface.pendingState $ \state -> (state{cuFifoWaitBarrier = True}, ())
         forwardMessage fifo msg
-      Nothing -> protocolError fifo Enum_wp_fifo_v1_error_surface_destroyed "wait_barrier: the associated surface no longer exists"
+      Nothing -> protocolViolation Unrecoverable msg fifo Enum_wp_fifo_v1_error_surface_destroyed [wl|wait_barrier: the associated surface no longer exists|]
   onRequest fifo msg@Request_wp_fifo_v1_destroy = do
     forwardMessage fifo msg
     dropObject fifo.wlid

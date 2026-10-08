@@ -1,8 +1,10 @@
+{-# LANGUAGE DeriveAnyClass #-}
 {-# OPTIONS_HADDOCK not-home #-}
 
 -- | Description : Internals of Sayland.Object.
 module Sayland.Internal.Object (module Sayland.Internal.Object) where
 
+import Control.Exception (Exception)
 import Control.Monad
 import Data.Data
 import Data.Map qualified as Map
@@ -14,14 +16,23 @@ import Sayland.Wire
 registerObject :: (Object i) => i -> Wayland p ()
 registerObject obj = do
   env <- getClientEnv
-  atomicModifyIORef' env.objects $ \m -> (Map.insert (toRawObjectID obj.wlid) (SomeObject obj) m, ())
+  atomicModifyIORef' env.objects $ \m -> (Map.insert (toObjectID obj.wlid) (SomeObject obj) m, ())
 
 -- | Increases the counter by 1 and returns it's new value.
-newObjectID :: Wayland p RawObjectID
+newObjectID :: Wayland p ObjectID
 newObjectID = do
-  -- TODO: There is an upper bound to object ids that this does not yet enforce.
+  -- TODO: There is an upper bound to object ids per client/server that this does not yet enforce.
   env <- getClientEnv
-  atomicModifyIORef' env.counter $ \n -> (n + 1, n + 1)
+  next <- atomicModifyIORef' env.counter $ \current -> case succObjectID current of
+    Just n -> (n, Just n)
+    Nothing -> (current, Nothing)
+  maybe (throwIO ObjectIDsExhausted) pure next
+
+-- | Error saying: Sayland ran out of numbers for `objectID`'s.
+-- Will be thrown when there are IDs that were used, but got freed as we don't implement object ID reuse.
+data ObjectIDsExhausted = ObjectIDsExhausted
+  deriving stock (Show)
+  deriving anyclass (Exception)
 
 -- | Create an object and tell the peer about it.
 -- Used by users to create objects. Should not be used in handler implementations.
@@ -32,7 +43,7 @@ newObject parent mkMsg = do
   oid <- TObjectID <$> newObjectID
   sendMsg parent (mkMsg oid)
   getInterface oid
-    >>= maybe (error $ "sayland bug: handler did not register object " <> show (toRawObjectID oid)) pure
+    >>= maybe (error $ "sayland bug: handler did not register object " <> show (toObjectID oid)) pure
 
 -- | Send a message and apply a handler associated with it. The handler changes the state.
 -- If necessary raw messages without state changes can be sent using the internal `sendMessage`

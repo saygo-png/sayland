@@ -1,5 +1,6 @@
 {-# LANGUAGE DefaultSignatures #-}
 {-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -39,7 +40,7 @@ data Xdg_toplevel = Xdg_toplevel
 data Xdg_popup = Xdg_popup
   { popup_xdg_surface :: TObjectID Xdg_surface
   , wlid :: TObjectID Xdg_popup
-  , parent :: TObjectID Xdg_surface
+  , parent :: Maybe (TObjectID Xdg_surface)
   , positioner :: TObjectID Xdg_positioner
   }
 
@@ -81,7 +82,7 @@ instance Object Xdg_wm_base where
         ref <- newIORef Nothing
         registerObject Xdg_surface{wlid = xdgSurfaceId, wl_surface = surfaceId, xdgRole = ref}
         forwardMessage wm_base msg
-      Nothing -> protocolErrorG Err_invalid_object "xdg_wm_base: get_xdg_surface called on a non-surface object"
+      Nothing -> protocolViolation Unrecoverable msg wlDisplayId Err_invalid_object [wl|xdg_wm_base: get_xdg_surface called on a non-surface object|]
   onRequest wm_base msg@Request_xdg_wm_base_pong{} =
     forwardMessage wm_base msg
 
@@ -99,13 +100,13 @@ instance Object Xdg_positioner where
     dropObject positioner.wlid
   onRequest positioner msg = do
     let set f = atomicModifyIORef' positioner.state $ \s -> (f s, ())
-        invalidInput = protocolError positioner Enum_xdg_positioner_error_invalid_input
+        invalidInput = protocolViolation Unrecoverable msg positioner Enum_xdg_positioner_error_invalid_input
     case msg of
       Request_xdg_positioner_set_size (WlInt w) (WlInt h) -> do
-        when (w <= 0 || h <= 0) $ invalidInput "xdg_positioner.set_size: size must be positive"
+        when (w <= 0 || h <= 0) $ invalidInput [wl|xdg_positioner.set_size: size must be positive|]
         set $ \s -> s{psSize = Just (w, h)}
       Request_xdg_positioner_set_anchor_rect (WlInt x) (WlInt y) (WlInt w) (WlInt h) -> do
-        when (w < 0 || h < 0) $ invalidInput "xdg_positioner.set_anchor_rect: size must not be negative"
+        when (w < 0 || h < 0) $ invalidInput [wl|xdg_positioner.set_anchor_rect: size must not be negative|]
         set $ \s -> s{psAnchorRect = Just Rectangle{position = (x, y), size = (w, h)}}
       Request_xdg_positioner_set_anchor a -> set $ \s -> s{psAnchor = Just a}
       Request_xdg_positioner_set_gravity g -> set $ \s -> s{psGravity = Just g}
@@ -130,17 +131,17 @@ instance Object Xdg_surface where
         Just (XDGToplevel toplevel) -> isJust <$> getInterface toplevel.wlid
         Just (XDGPopup popup) -> isJust <$> getInterface popup.wlid
     when roleAlive
-      $ protocolError xdg_surface Enum_xdg_surface_error_defunct_role_object "destroyed before its role object"
+      $ protocolViolation Unrecoverable msg xdg_surface Enum_xdg_surface_error_defunct_role_object [wl|destroyed before its role object|]
     forwardMessage xdg_surface msg
     dropObject xdg_surface.wlid
     getInterface xdg_surface.wl_surface >>= \case
       Just surfaceObj -> atomicWriteIORef surfaceObj.role $ SurfaceRole ()
       Nothing -> pass
   onRequest xdg_surface msg@(Request_xdg_surface_get_toplevel toplevelId) = do
-    surfaceObj <- getInterface xdg_surface.wl_surface >>= maybe (protocolErrorG Err_invalid_object "xdg_surface: wl_surface no longer exists") pure
+    surfaceObj <- getInterface xdg_surface.wl_surface >>= maybe (protocolViolation Unrecoverable msg wlDisplayId Err_invalid_object [wl|xdg_surface: wl_surface no longer exists|]) pure
     SurfaceRole role <- readIORef surfaceObj.role
     unless (isJust (cast role :: Maybe ()))
-      $ protocolError xdg_surface Enum_xdg_surface_error_already_constructed "surface already has a role"
+      $ protocolViolation Unrecoverable msg xdg_surface Enum_xdg_surface_error_already_constructed [wl|surface already has a role|]
     size <- newIORef (0, 0)
     parent <- newIORef Nothing
     let toplevelObject = Xdg_toplevel{wlid = toplevelId, toplevel_xdg_surface = xdg_surface.wlid, size, parent}
@@ -149,10 +150,10 @@ instance Object Xdg_surface where
     atomicWriteIORef surfaceObj.role $ SurfaceRole toplevelObject
     forwardMessage xdg_surface msg
   onRequest xdg_surface msg@(Request_xdg_surface_get_popup popupId popupParent popupPositioner) = do
-    surfaceObj <- getInterface xdg_surface.wl_surface >>= maybe (protocolErrorG Err_invalid_object "xdg_surface: wl_surface no longer exists") pure
+    surfaceObj <- getInterface xdg_surface.wl_surface >>= maybe (protocolViolation Unrecoverable msg wlDisplayId Err_invalid_object [wl|xdg_surface: wl_surface no longer exists|]) pure
     SurfaceRole role <- readIORef surfaceObj.role
     unless (isJust (cast role :: Maybe ()))
-      $ protocolError xdg_surface Enum_xdg_surface_error_already_constructed "xdg_surface: surface already has a role"
+      $ protocolViolation Unrecoverable msg xdg_surface Enum_xdg_surface_error_already_constructed [wl|xdg_surface: surface already has a role|]
     let popupObject = Xdg_popup{wlid = popupId, parent = popupParent, positioner = popupPositioner, popup_xdg_surface = xdg_surface.wlid}
     registerObject popupObject
     atomicWriteIORef xdg_surface.xdgRole $ Just $ XDGPopup popupObject
@@ -179,7 +180,7 @@ instance Object Xdg_toplevel where
   onRequest toplevel msg = do
     case msg of
       -- A null parent (id 0) unsets it.
-      Request_xdg_toplevel_set_parent parent -> atomicWriteIORef toplevel.parent $ if toRawObjectID parent == 0 then Nothing else Just parent
+      Request_xdg_toplevel_set_parent parent -> atomicWriteIORef toplevel.parent parent
       _ -> stub toplevel msg
     forwardMessage toplevel msg
 

@@ -16,7 +16,7 @@ import System.Posix (Fd (Fd))
 import Prelude
 
 -- | Send one message to an object, along with any file descriptors the `WirePut` puts.
-sendRaw :: Socket -> RawObjectID -> Word16 -> WirePut () -> IO ()
+sendRaw :: Socket -> ObjectID -> Word16 -> WirePut () -> IO ()
 sendRaw sock oid opcode put = case fds of
   [] -> sendAll sock msg
   _ -> sendManyWithFds sock [msg] fds
