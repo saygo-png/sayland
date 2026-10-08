@@ -133,9 +133,9 @@ newtype WlArray = WlArray BS.ByteString deriving newtype (Show, Eq, Ord)
 -- This is the reason why we don't use a `Binary` instance for wire types, as we need additional state to house fds.
 newtype WlFd = WlFd Fd deriving newtype (Show, Eq, Ord)
 
--- | Wayland @new_id@.
--- A 32-bit unspecified object ID. Preceded by a `WlString` specifying the interface name, and a `WlUInt` specifying the version.
-data WlNewId = WlNewId WlString WlUInt WlUInt deriving stock (Show, Eq)
+-- | Wayland @new_id@ of no fixed interface.
+-- A 32-bit object ID. Preceded by a non null @string@ specifying the interface name, and a `WlUInt` specifying the version.
+data WlNewId = WlNewId WlText WlUInt ObjectID deriving stock (Show, Eq)
 
 -- | Put a `WlUInt`.
 putWlUInt :: WlUInt -> WirePut ()
@@ -197,15 +197,15 @@ getWlString =
 
 -- | Put a `WlNewId`: its interface name, version and ID.
 putWlNewId :: WlNewId -> WirePut ()
-putWlNewId (WlNewId n v i) = putWlString n >> putWlUInt v >> putWlUInt i
+putWlNewId (WlNewId n v i) = putWlString (Just n) >> putWlUInt v >> putObjectID i
 
 -- | Get a `WlNewId`, or what is wrong with it.
 getWlNewId :: WireGet (Either NewIdError WlNewId)
 getWlNewId = do
   name <- getWlString
   version <- getWlUInt
-  newId <- getWlUInt
-  pure $ WlNewId <$> first NewIdName name <*> first NewIdTooShort version <*> first NewIdTooShort newId
+  newId <- getObjectID
+  pure $ WlNewId <$> (first NewIdName name >>= maybe (Left NewIdNullName) Right) <*> first NewIdTooShort version <*> first NewIdObjectID newId
 
 -- | Put a `WlFd`. Its file descriptor is sent alongside the bytes, not in them.
 putWlFd :: WlFd -> WirePut ()
@@ -287,18 +287,24 @@ instance Exception InvalidSize
 
 -- | What decoding a wl_string can get wrong.
 data StringError
-  = StringTooShort NotEnoughBytes -- wraps getWlArray's error, no copy
+  = StringTooShort NotEnoughBytes
   | NotTerminated
   | NotUtf8
-  | ContainsNul TextContainsNul -- wraps wlText's error, no copy
+  | ContainsNul TextContainsNul
   deriving stock (Show, Eq)
 
 instance Exception StringError
 
 -- | What decoding a wl_new_id without a fixed interface can get wrong.
 data NewIdError
-  = NewIdTooShort NotEnoughBytes -- the version or ID ran out of bytes
-  | NewIdName StringError -- wraps getWlString's error for the interface name, no copy
+  = -- | The version ran out of bytes
+    NewIdTooShort NotEnoughBytes
+  | -- | Wraps getWlString's error for the interface name.
+    NewIdName StringError
+  | -- | The interface name was null.
+    NewIdNullName
+  | -- | Wraps getObjectID's error for the ID.
+    NewIdObjectID ObjectIDError
   deriving stock (Show, Eq)
 
 instance Exception NewIdError
@@ -306,7 +312,7 @@ instance Exception NewIdError
 -- | What decoding a non null object can get wrong.
 data ObjectIDError
   = ObjectIDTooShort NotEnoughBytes
-  | -- | expected a non null object but a null one was received
+  | -- | Expected a non null object but a null one was received.
     ObjectIDIsNul
   deriving stock (Show, Eq)
 

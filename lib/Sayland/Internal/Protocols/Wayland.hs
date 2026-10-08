@@ -366,7 +366,7 @@ instance Object Wl_registry where
     (iface, advertisedVersion) <- Map.lookup (coerce name) globals & whenNothing $ do
       protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind to a global that was not advertised|]
 
-    unless (Just iface == requestedIface) $
+    unless (iface == requestedIface) $
       protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind with the wrong interface for this global|]
 
     unless (requestedVersion >= 1) $
@@ -378,11 +378,8 @@ instance Object Wl_registry where
     entry <- Map.lookup iface env.interfaceTable & whenNothing $ do
       protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind to an unsupported interface|]
 
-    newOid <- mkWlObjectID newId & whenNothing $ do
-      protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind with the null object as the new id|]
-
-    newObj <- liftIO (entry.construct newOid)
-    atomicModifyIORef' env.objects $ \m -> (Map.insert newOid newObj m, ())
+    newObj <- liftIO (entry.construct newId)
+    atomicModifyIORef' env.objects $ \m -> (Map.insert newId newObj m, ())
     forwardMessage obj msg
 
 -- }}}
@@ -986,7 +983,7 @@ tryBindToInterface registry = do
     (name, advertisedVersion) : _ -> do
       oid <- newObjectID
       let negotiatedVersion = min advertisedVersion $ getInterfaceVersion (Proxy @i)
-      sendMsg registry $ Request_wl_registry_bind (coerce name) (WlNewId (Just targetIface) negotiatedVersion (fromObjectID oid))
+      sendMsg registry $ Request_wl_registry_bind (coerce name) (WlNewId targetIface negotiatedVersion oid)
       Just <$> (getInterface (TObjectID oid) >>= maybe (error "sayland bug: bind did not register the global") pure)
 
 -- }}}

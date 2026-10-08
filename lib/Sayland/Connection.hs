@@ -14,6 +14,7 @@ import Data.Coerce
 import Data.Data (cast)
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
+import Data.Text qualified as T
 import Debug.Trace (traceIO)
 import Network.Socket
 import Sayland.Internal.Core
@@ -104,7 +105,8 @@ dispatchWith handle oid opcode msg = do
   env <- getClientEnv
   fds <- atomically $ flushTQueue env.fdQueue
   case runGetMessage opcode fds msg of
-    Left err -> throwIO err
+    -- Malformed for the protocol: reported like a violation the handler found, which a server sends to the client.
+    Left err -> throwIO . ProtocolError (Just oid) (errorCode Err_invalid_method) . Just . wlTextLossy . T.pack $ "malformed message with opcode " <> show opcode <> ": " <> show err
     Right (message, leftover) -> do
       void . atomically $ traverse (unGetTQueue env.fdQueue) (reverse leftover)
       colorize <- liftIO getColorize
