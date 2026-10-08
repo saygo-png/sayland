@@ -42,12 +42,6 @@ instance ToObjectID (TObjectID a) where
 instance {-# OVERLAPPABLE #-} (Interface o) => ToObjectID o where
   toObjectID o = toObjectID o.wlid
 
--- getTObjectID :: _
--- getTObjectID = TObjectID <$> wireGet
-
-putTObjectID :: TObjectID a -> WirePut ()
-putTObjectID (TObjectID o) = putObjectID o
-
 -- | The Wayland monad. Allows easy access to the Wayland environment state without threading repetitive arguments.
 type Wayland p = ReaderT (WaylandEnv p) IO
 

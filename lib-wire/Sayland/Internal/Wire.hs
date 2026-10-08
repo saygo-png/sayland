@@ -223,7 +223,7 @@ getObjectID :: WireGet (Either ObjectIDError ObjectID)
 getObjectID =
   getWlObjectID <&> \case
     Left short -> Left (ObjectIDTooShort short)
-    Right Nothing -> Left (ObjectIDIsNul ObjectIsNul)
+    Right Nothing -> Left ObjectIDIsNul
     Right (Just oid) -> Right oid
 
 -- | Put a non null `ObjectID`.
@@ -246,10 +246,6 @@ padTo4 n = negate n `mod` 4
 -- | The header size is always 8 in Wayland.
 headerSize :: Word16
 headerSize = 8
-
--- | Constant representing the Wayland null, which is just 0.
-waylandNull :: Word32
-waylandNull = 0
 
 -- | `WireGet` parser for a Wayland header.
 getHeader :: WireGet (Either NotEnoughBytes (WlObjectID, Word16, Word16))
@@ -277,11 +273,6 @@ newtype BodyWords = BodyWords Word16 deriving newtype (Show, Eq, Ord)
 newtype TextContainsNul = TextContainsNul Int deriving stock (Show, Eq)
 
 instance Exception TextContainsNul
-
--- | Returned when expecting a non null object but a null one is received.
-data ObjectIsNul = ObjectIsNul deriving stock (Show, Eq)
-
-instance Exception ObjectIsNul
 
 -- | Returned when the bytes run out before a `WireGet` is done.
 data NotEnoughBytes = NotEnoughBytes deriving stock (Show, Eq)
@@ -315,7 +306,8 @@ instance Exception NewIdError
 -- | What decoding a non null object can get wrong.
 data ObjectIDError
   = ObjectIDTooShort NotEnoughBytes
-  | ObjectIDIsNul ObjectIsNul
+  | -- | expected a non null object but a null one was received
+    ObjectIDIsNul
   deriving stock (Show, Eq)
 
 instance Exception ObjectIDError
