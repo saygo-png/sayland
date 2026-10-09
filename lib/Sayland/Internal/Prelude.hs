@@ -1,8 +1,9 @@
--- | Description : Internal custom Prelude.
---
--- Not meant for use by users of the library. It is here to avoid a whole Relude dependency.
--- Some of the module is directly copy pasted from Relude.
--- It is an exposed module in case someone does find some use in them.
+{- | Description : Internal custom Prelude.
+
+Not meant for use by users of the library. It is here to avoid a whole Relude dependency.
+Some of the module is directly copy pasted from Relude.
+It is an exposed module in case someone does find some use in them.
+-}
 module Sayland.Internal.Prelude (
   module Sayland.Internal.Prelude,
   module Data.IORef,
@@ -11,7 +12,7 @@ module Sayland.Internal.Prelude (
   module Control.Monad.STM,
 ) where
 
-import Control.Concurrent.MVar hiding (newEmptyMVar, putMVar, tryTakeMVar)
+import Control.Concurrent.MVar hiding (newEmptyMVar, newMVar, putMVar, takeMVar, tryTakeMVar)
 import Control.Concurrent.MVar qualified as CCM
 import Control.Exception (Exception)
 import Control.Exception qualified as CE
@@ -64,6 +65,18 @@ putMVar :: (MonadIO m) => MVar a -> a -> m ()
 putMVar m a = liftIO $ CCM.putMVar m a
 {-# INLINE putMVar #-}
 {-# SPECIALIZE putMVar :: MVar a -> a -> IO () #-}
+
+-- | Lifted version of 'CCM.takeMVar'.
+takeMVar :: (MonadIO m) => MVar a -> m a
+takeMVar a = liftIO $ CCM.takeMVar a
+{-# INLINE takeMVar #-}
+{-# SPECIALIZE takeMVar :: MVar a -> IO a #-}
+
+-- | Lifted to version of 'CCM.newMVar'.
+newMVar :: (MonadIO m) => a -> m (MVar a)
+newMVar = liftIO . CCM.newMVar
+{-# INLINE newMVar #-}
+{-# SPECIALIZE newMVar :: a -> IO (MVar a) #-}
 
 -- | Lifted to version of 'CCM.newEmptyMVar'.
 newEmptyMVar :: (MonadIO m) => m (MVar a)

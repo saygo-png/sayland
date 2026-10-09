@@ -42,9 +42,11 @@ handleIncomingClient env socket' = do
   objects <- newIORef $ Map.fromList [(coerce wlDisplayId, SomeObject $ Wl_display wlDisplayId)]
   globals <- newIORef mempty
   fdQueue <- atomically newTQueue
+  writeLock <- newMVar ()
   let clientenv =
         ClientEnvironment
           { socket = socket'
+          , writeLock
           , counter
           , objects
           , eventHandlers = env.eventHandlers
@@ -68,8 +70,9 @@ handleIncomingClient env socket' = do
       | Just Disconnected <- fromException e = ""
       | otherwise = ": " <> displayException e
 
--- | Run one client's connection. A protocol violation is reported to the client
--- before the connection is closed.
+{- | Run one client's connection. A protocol violation is reported to the client
+before the connection is closed.
+-}
 serveClient :: Wayland Server () -> Wayland Server ()
 serveClient loop =
   loop `catchW` \(e :: ProtocolError) -> do
@@ -95,8 +98,9 @@ clientLoop = clientLoop' ""
         Left Incomplete -> clientLoop' bytes sock
         Left malformed -> throwIO malformed
 
--- | Deal with an inbound message. Checks if the `ObjectID` reference is valid.
--- if it is valid, the work is handed to `dispatchMessage`.
+{- | Deal with an inbound message. Checks if the `ObjectID` reference is valid.
+if it is valid, the work is handed to `dispatchMessage`.
+-}
 handleMessage :: (KnownPerspective p) => WlObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 handleMessage oid' opcode msg = do
   env <- getClientEnv
@@ -142,8 +146,9 @@ waylandConnect protocolTable path = do
   objects <- newIORef $ Map.fromList [(coerce wlDisplayId, display)]
   globals <- newIORef mempty
   handlers <- newIORef mempty
+  writeLock <- newMVar ()
   let interfaceTable = Map.fromList protocolTable
   fdqueue <- atomically newTQueue
-  pure $ ClientEnv $ ClientEnvironment sock counter objects globals interfaceTable handlers fdqueue
+  pure $ ClientEnv $ ClientEnvironment sock writeLock counter objects globals interfaceTable handlers fdqueue
 
 -- vim: foldmethod=marker
