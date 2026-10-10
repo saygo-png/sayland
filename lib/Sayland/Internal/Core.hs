@@ -45,9 +45,8 @@ instance {-# OVERLAPPABLE #-} (Interface o) => ToObjectID o where
 -- | The Wayland monad. Allows easy access to the Wayland environment state without threading repetitive arguments.
 type Wayland p = ReaderT (WaylandEnv p) IO
 
-{- | Type representing global names which are numbers.
-Created in order to prevent mixups between object ids and global names.
--}
+-- | Type representing global names which are numbers.
+-- Created in order to prevent mixups between object ids and global names.
 newtype GlobalName = GlobalName WlUInt
   deriving newtype (Show, Eq, Ord, Num)
 
@@ -56,9 +55,8 @@ class (Object i) => Global i where
   default global :: (Coercible (TObjectID i) i) => TObjectID i -> IO i
   global = pure . coerce
 
-{- | Sum type representing a perspective.
-Used to make things reusable for clients and servers (compositors).
--}
+-- | Sum type representing a perspective.
+-- Used to make things reusable for clients and servers (compositors).
 data Perspective = Client | Server
   deriving stock (Eq)
 
@@ -116,9 +114,8 @@ data EventHandler p where
 -- | Number representing a Wayland Client.
 type ClientID = Int
 
-{- | Class defining an Interface as a collection of events and requests which has a `TObjectID`, version and name.
-This does not include implementations of events and requests which are supplied by `Interface`.
--}
+-- | Class defining an Interface as a collection of events and requests which has a `TObjectID`, version and name.
+-- This does not include implementations of events and requests which are supplied by `Interface`.
 class
   ( Message (Event a)
   , Message (Request a)
@@ -146,9 +143,8 @@ class (Typeable m) => Message m where
   getOpcode :: m -> Word16
   showMessage :: ObjectID -> m -> String
 
-{- | What decoding a message body can get wrong.
-Wraps the errors of the wire getters and adds protocol based errors.
--}
+-- | What decoding a message body can get wrong.
+-- Wraps the errors of the wire getters and adds protocol based errors.
 data MessageError
   = -- | The interface has no message with this opcode.
     UnknownOpcode Word16
@@ -232,9 +228,8 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
   -- ^ Stores file descriptors.
   }
 
-{- | Error saying: The connection is over. The peer reported a violation with @wl_display.error@,
-or sent something invalid. This represents a wire value so it only carries wire types. (no `TObjectID` or `ErrorCode`)
--}
+-- | Error saying: The connection is over. The peer reported a violation with @wl_display.error@,
+-- or sent something invalid. This represents a wire value so it only carries wire types. (no `TObjectID` or `ErrorCode`)
 data ProtocolError = ProtocolError
   { object :: WlObjectID
   , code :: WlUInt
@@ -250,9 +245,8 @@ instance Exception ProtocolError where
 class ErrorCode e where
   errorCode :: e -> WlUInt
 
-{- | Error saying: A message failed validation before it was sent. Nothing reached the peer and
-the connection is still usable.
--}
+-- | Error saying: A message failed validation before it was sent. Nothing reached the peer and
+-- the connection is still usable.
 newtype InvalidMessage = InvalidMessage ProtocolError
   deriving stock (Show)
 
@@ -275,11 +269,10 @@ data ConnectionError
 
 {-# WARNING in "x-stub" stub "Handled by a stub: this message is not fully implemented." #-}
 
-{- | Placeholder for a message which is not fully implemented yet.
-Avoid using this function if possible. Instead implement an interface fully or ditch it.
-Partial interfaces are worse than an unimplemented one because they have inconsistent behaviour.
-Use this instead of just `pass` or only forwarding as it warns at compile time and logs at runtime.
--}
+-- | Placeholder for a message which is not fully implemented yet.
+-- Avoid using this function if possible. Instead implement an interface fully or ditch it.
+-- Partial interfaces are worse than an unimplemented one because they have inconsistent behaviour.
+-- Use this instead of just `pass` or only forwarding as it warns at compile time and logs at runtime.
 stub :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
 stub obj msg = liftIO . traceIO $ "sayland: unimplemented: " <> showMessage (toObjectID obj.wlid) msg
 
@@ -287,9 +280,8 @@ stub obj msg = liftIO . traceIO $ "sayland: unimplemented: " <> showMessage (toO
 stubDeprecated :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
 stubDeprecated obj msg = liftIO . traceIO $ "sayland: unimplemented(deprecated): " <> showMessage (toObjectID obj.wlid) msg
 
-{- | Like `sendMessage` but meant for use inside handlers.
-It contains the logic determining if a message should be sent from the current perspective.
--}
+-- | Like `sendMessage` but meant for use inside handlers.
+-- It contains the logic determining if a message should be sent from the current perspective.
 forwardMessage :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
 forwardMessage i m = do
   me <- getPerspective
@@ -308,9 +300,8 @@ catchW act handler = do
   env <- ask
   liftIO $ runReaderT act env `catch` \e -> runReaderT (handler e) env
 
-{- | How much of what breaks the protocol the library rejects. Ordered from least to most strict.
-Only matters for `Recoverable` violations: `Unrecoverable` ones are always rejected.
--}
+-- | How much of what breaks the protocol the library rejects. Ordered from least to most strict.
+-- Only matters for `Recoverable` violations: `Unrecoverable` ones are always rejected.
 data Strictness
   = -- | Reject only the violations marked @Recoverable Lenient@.
     Lenient
@@ -326,9 +317,8 @@ data Culprit
     Own
   deriving stock (Show, Eq)
 
-{- | The strictness this side runs with for messages of the given culprit.
-Stub: always `Pedantic`, until the strictness is configurable.
--}
+-- | The strictness this side runs with for messages of the given culprit.
+-- Stub: always `Pedantic`, until the strictness is configurable.
 getStrictness :: Culprit -> Wayland p Strictness
 getStrictness _ = pure Pedantic
 
@@ -338,22 +328,20 @@ type role Severity nominal
 data Severity r where
   -- | This side cannot carry on: always rejected, and `protocolViolation` does not return.
   Unrecoverable :: Severity a
-  {- | This side can carry on: rejected from the given strictness up.
-  Otherwise `protocolViolation` logs it and returns, and the caller carries on with its fallback.
-  -}
+  -- | This side can carry on: rejected from the given strictness up.
+  --   Otherwise `protocolViolation` logs it and returns, and the caller carries on with its fallback.
   Recoverable :: Strictness -> Severity ()
 
-{- | Report that a message broke the protocol. The one place handlers report protocol errors.
-
-A rejected violation throws a `ProtocolError`. In the peer's message that ends the connection.
-In this side's own message, `sendMsg` turns it into an `InvalidMessage` and nothing is sent.
-
-> Event_wl_display_delete_id n -> case mkWlObjectID n of
->   Just oid -> forget oid
->   Nothing -> protocolViolation (Recoverable Pedantic) msg display Err_invalid_object [wl|delete_id for the null object|]
->
-> surface <- getInterface surfaceId >>= maybe (protocolViolation Unrecoverable msg obj Err_invalid_object [wl|no such surface|]) pure
--}
+-- | Report that a message broke the protocol. The one place handlers report protocol errors.
+--
+-- A rejected violation throws a `ProtocolError`. In the peer's message that ends the connection.
+-- In this side's own message, `sendMsg` turns it into an `InvalidMessage` and nothing is sent.
+--
+-- > Event_wl_display_delete_id n -> case mkWlObjectID n of
+-- >   Just oid -> forget oid
+-- >   Nothing -> protocolViolation (Recoverable Pedantic) msg display Err_invalid_object [wl|delete_id for the null object|]
+-- >
+-- > surface <- getInterface surfaceId >>= maybe (protocolViolation Unrecoverable msg obj Err_invalid_object [wl|no such surface|]) pure
 protocolViolation :: (Message m, ToObjectID o, ErrorCode e) => Severity r -> m -> o -> e -> WlText -> Wayland p r
 protocolViolation severity msg o code text = case severity of
   Unrecoverable -> reject

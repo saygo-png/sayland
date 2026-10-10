@@ -120,9 +120,8 @@ data Session = Session
   -- ^ Filled when the client's event loop ends, which it only does with an exception.
   }
 
-{- | Run a client against a compositor. Both from this library.
-A test that does not finish in time fails which catches hangs.
--}
+-- | Run a client against a compositor. Both from this library.
+-- A test that does not finish in time fails which catches hangs.
 withSession :: (Session -> Wayland Client ()) -> Assertion
 withSession test = do
   tmp <- getTemporaryDirectory
