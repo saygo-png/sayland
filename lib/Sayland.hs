@@ -1,5 +1,6 @@
--- | Description: Re-exports all public modules of Sayland.
+-- | Description: Re-exports all public modules of Sayland and Sayland-wire.
 module Sayland (
+  module Sayland.Wire,
   module Sayland.Connection,
   module Sayland.Core,
   module Sayland.Log,
@@ -20,3 +21,4 @@ import Sayland.Protocols.Fifo
 import Sayland.Protocols.Wayland
 import Sayland.Protocols.WlrLayerShell
 import Sayland.Protocols.XdgShell
+import Sayland.Wire
