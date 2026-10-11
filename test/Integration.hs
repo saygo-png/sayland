@@ -14,7 +14,6 @@ import Network.Socket
 import Relude hiding (hFlush)
 import Sayland
 import Sayland.Internal.Core (InvalidMessage, ProtocolError (..), TObjectID (..), catchW, errorCode, sendMessage)
-import Sayland.Wire
 import System.Directory (createDirectory, getTemporaryDirectory, removeDirectoryRecursive)
 import System.Posix (ShmOpenFlags (..), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import System.Random (randomIO)
@@ -186,7 +185,7 @@ serverEnvironment sock socketPath = do
   eventHandlers <- newIORef []
   clientSerial <- newTVarIO 0
   logger <- quietUnlessDebugging <$> defaultLogger Server
-  pure ServerEnvironment{socket = sock, socketPath, clients, interfaceTable = Map.fromList table, eventHandlers, clientSerial, logger}
+  pure ServerEnvironment{socket = sock, socketPath, clients, interfaceTable = Map.fromList table, eventHandlers, clientSerial, logger, onRecoverable = Reject}
 
 -- | Silence the logger, unless @WAYLAND_DEBUG@ asks for this side. Some tests break the protocol on purpose,
 -- and the errors the compositor logs for that would garble the test report.

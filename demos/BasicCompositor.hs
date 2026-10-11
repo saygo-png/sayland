@@ -44,6 +44,7 @@ main = bracket env cleanup program
               , interfaceTable = Map.fromList table
               , eventHandlers
               , clientSerial
+              , onRecoverable = Reject
               , logger
               }
 

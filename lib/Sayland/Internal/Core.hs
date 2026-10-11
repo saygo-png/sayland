@@ -200,6 +200,8 @@ data ServerEnvironment = ServerEnvironment
   -- ^ Table of interfaces supported by the server. This allows for adding in custom protocols.
   , eventHandlers :: IORef [EventHandler Server]
   -- ^ Server-side event handlers.
+  , onRecoverable :: OnRecoverable
+  -- ^ What to do with the `Recoverable` protocol violations of the server and its clients.
   , logger :: Logger
   -- ^ Where the server and its clients log to.
   }
@@ -224,6 +226,8 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
   -- ^ Custom event handlers that run on received events.
   , fdQueue :: TQueue Fd
   -- ^ Stores file descriptors.
+  , onRecoverable :: OnRecoverable
+  -- ^ What to do with this connection's `Recoverable` protocol violations.
   , logger :: Logger
   -- ^ Where this connection logs to.
   }
@@ -300,27 +304,13 @@ catchW act handler = do
   env <- ask
   liftIO $ runReaderT act env `catch` \e -> runReaderT (handler e) env
 
--- | How much of what breaks the protocol the library rejects. Ordered from least to most strict.
--- Only matters for `Recoverable` violations: `Unrecoverable` ones are always rejected.
-data Strictness
-  = -- | Reject only the violations marked @Recoverable Lenient@.
-    Lenient
-  | -- | Reject every violation the library detects.
-    Pedantic
-  deriving stock (Show, Eq, Ord, Enum, Bounded)
-
--- | Whose message broke the protocol. Each has its own `Strictness`.
-data Culprit
-  = -- | The peer's: a message this side received.
-    Peer
-  | -- | This side's own: a message it is about to send.
-    Own
+-- | What `protocolViolation` does with a `Recoverable` violation. `Unrecoverable` ones are always rejected.
+data OnRecoverable
+  = -- | Reject it like an `Unrecoverable` one.
+    Reject
+  | -- | Log it as a warning, and carry on.
+    Warn
   deriving stock (Show, Eq)
-
--- | The strictness this side runs with for messages of the given culprit.
--- Stub: always `Pedantic`, until the strictness is configurable.
-getStrictness :: Culprit -> Wayland p Strictness
-getStrictness _ = pure Pedantic
 
 type role Severity nominal
 
@@ -328,9 +318,9 @@ type role Severity nominal
 data Severity r where
   -- | This side cannot carry on: always rejected, and `protocolViolation` does not return.
   Unrecoverable :: Severity a
-  -- | This side can carry on: rejected from the given strictness up.
-  --   Otherwise `protocolViolation` logs it and returns, and the caller carries on with its fallback.
-  Recoverable :: Strictness -> Severity ()
+  -- | This side can carry on: handled as the environment's `OnRecoverable` says.
+  --   If it is only logged, `protocolViolation` returns and the caller carries on with its fallback.
+  Recoverable :: Severity ()
 
 -- | Report that a message broke the protocol. The one place handlers report protocol errors.
 --
@@ -339,24 +329,22 @@ data Severity r where
 --
 -- > Event_wl_display_delete_id n -> case mkWlObjectID n of
 -- >   Just oid -> forget oid
--- >   Nothing -> protocolViolation (Recoverable Pedantic) msg display Err_invalid_object [wl|delete_id for the null object|]
+-- >   Nothing -> protocolViolation Recoverable msg display Err_invalid_object [wl|delete_id for the null object|]
 -- >
 -- > surface <- getInterface surfaceId >>= maybe (protocolViolation Unrecoverable msg obj Err_invalid_object [wl|no such surface|]) pure
 protocolViolation :: (Message m, ToObjectID o, ErrorCode e) => Severity r -> m -> o -> e -> WlText -> Wayland p r
 protocolViolation severity msg o code text = case severity of
   Unrecoverable -> reject
-  Recoverable rejectFrom -> do
-    me <- getPerspective
-    let culprit = if sender msg == me then Own else Peer
-    strictness <- getStrictness culprit
-    if strictness >= rejectFrom
-      then reject
-      else logWarn $ "ignored protocol violation in " <> whose culprit <> " on object " <> show (toObjectID o) <> ": " <> show text
+  Recoverable ->
+    (.onRecoverable) <$> getClientEnv >>= \case
+      Reject -> reject
+      Warn -> do
+        me <- getPerspective
+        logWarn $ "ignored protocol violation in " <> whose (sender msg == me) <> " on object " <> show (toObjectID o) <> ": " <> show text
   where
     reject :: Wayland p a
     reject = throwIO $ ProtocolError (Just $ toObjectID o) (errorCode code) (Just text)
-    whose Peer = "a message from the peer"
-    whose Own = "this side's own message, which is sent anyway,"
+    whose own = if own then "this side's own message, which is sent anyway," else "a message from the peer"
 
 -- | Helper. The value in a 'Maybe', or the fallback action if there's none.
 whenNothing :: (Applicative f) => Maybe a -> f a -> f a

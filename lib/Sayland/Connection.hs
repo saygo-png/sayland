@@ -50,6 +50,7 @@ handleIncomingClient env socket' = do
           , globals
           , interfaceTable = env.interfaceTable
           , fdQueue
+          , onRecoverable = env.onRecoverable
           , logger = env.logger
           }
   serial' <- atomically $ do
@@ -146,6 +147,6 @@ waylandConnect protocolTable path = do
   writeLock <- newMVar ()
   let interfaceTable = Map.fromList protocolTable
   fdqueue <- atomically newTQueue
-  ClientEnv . ClientEnvironment sock writeLock counter objects globals interfaceTable handlers fdqueue <$> defaultLogger Client
+  ClientEnv . ClientEnvironment sock writeLock counter objects globals interfaceTable handlers fdqueue Reject <$> defaultLogger Client
 
 -- vim: foldmethod=marker

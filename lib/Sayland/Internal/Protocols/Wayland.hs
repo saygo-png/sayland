@@ -332,7 +332,7 @@ instance Object Wl_display where
     env <- getClientEnv
     case mkWlObjectID dId of
       Just oid -> atomicModifyIORef' env.objects $ \m -> (Map.delete oid m, ())
-      Nothing -> protocolViolation (Recoverable Pedantic) msg obj Err_invalid_object [wl|delete_id for the null object|]
+      Nothing -> protocolViolation Recoverable msg obj Err_invalid_object [wl|delete_id for the null object|]
     forwardMessage obj msg
   onEvent obj msg@(Event_wl_display_error objectId code message) = do
     onClient . throwIO $ ProtocolError (Just objectId) code (Just message)
