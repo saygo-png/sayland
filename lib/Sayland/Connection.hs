@@ -15,15 +15,13 @@ import Data.Data (cast)
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
-import Debug.Trace (traceIO)
 import Network.Socket
 import Sayland.Internal.Core
 import Sayland.Internal.Object
 import Sayland.Internal.Prelude
 import Sayland.Internal.Protocols.Wayland
-import Sayland.Internal.Trace
+import Sayland.Log
 import Sayland.Wire
-import System.Console.ANSI (Color (Magenta), ColorIntensity (Vivid))
 
 -- Listeners {{{
 
@@ -31,7 +29,6 @@ import System.Console.ANSI (Color (Magenta), ColorIntensity (Vivid))
 listenForClients :: (MonadIO m) => ServerEnvironment -> m ()
 listenForClients env = do
   (sock, _) <- liftIO $ accept env.socket
-  liftIO $ traceIO "New client connected."
   handleIncomingClient env sock
   listenForClients env
 
@@ -53,22 +50,24 @@ handleIncomingClient env socket' = do
           , globals
           , interfaceTable = env.interfaceTable
           , fdQueue
+          , logger = env.logger
           }
   serial' <- atomically $ do
     modifyTVar env.clientSerial (+ 1)
     readTVar env.clientSerial
   atomically . modifyTVar env.clients $ Map.insert serial' clientenv
+  let logClient level = logWith env.logger level (Just serial')
+  liftIO $ logClient LogDebug "connected"
   void
     . liftIO
     . forkFinally (runReaderT (serveClient $ clientLoop socket') (ClientServerEnv env clientenv serial'))
     $ \ended -> do
       close socket'
       atomically . modifyTVar env.clients $ Map.delete serial'
-      traceIO $ "Client disconnected" <> either reason (const "") ended <> "."
-  where
-    reason e
-      | Just Disconnected <- fromException e = ""
-      | otherwise = ": " <> displayException e
+      case ended of
+        Left e | Just Disconnected <- fromException e -> logClient LogDebug "disconnected"
+        Left e -> logClient LogError $ "disconnected: " <> displayException e
+        Right () -> logClient LogDebug "disconnected"
 
 -- | Run one client's connection. A protocol violation is reported to the client
 -- before the connection is closed.
@@ -105,7 +104,7 @@ handleMessage oid' opcode msg = do
   objects <- readIORef env.objects
   case oid' >>= \oid -> (oid,) <$> Map.lookup oid objects of
     Just (oid, SomeObject o) -> withIncoming o $ dispatchWith (applyIncoming o) oid opcode msg
-    Nothing -> liftIO $ traceIO $ "invalid object reference with id: " <> show oid'
+    Nothing -> logWarn $ "ignored a message to unknown object " <> show oid'
 
 -- | Parse a message for an object and run the given handler on it, then any registered 'EventHandler's.
 dispatchWith :: (Message m) => (m -> Wayland p ()) -> ObjectID -> Word16 -> BS.ByteString -> Wayland p ()
@@ -117,8 +116,7 @@ dispatchWith handle oid opcode msg = do
     Left err -> throwIO . ProtocolError (Just oid) (errorCode Err_invalid_method) . Just . wlTextLossy . T.pack $ "malformed message with opcode " <> show opcode <> ": " <> show err
     Right (message, leftover) -> do
       void . atomically $ traverse (unGetTQueue env.fdQueue) (reverse leftover)
-      colorize <- liftIO getColorize
-      liftIO . traceIO . colorize Vivid Magenta $ ("  <- " <>) $ showMessage oid message
+      logMessage Received oid message
       handle message
       handlers <- readIORef env.eventHandlers
       forM_ handlers $ \(EventHandler f) -> forM_ (cast message) $ f oid
@@ -130,8 +128,9 @@ waylandSetup :: ProtocolTable -> IO (WaylandEnv Client)
 waylandSetup protocolTable =
   getSocketPath openSocketName >>= \case
     Just path -> do
-      putStrLn $ "using socket path: " <> show path
-      waylandConnect protocolTable path
+      env <- waylandConnect protocolTable path
+      runReaderT (logDebug $ "connected to " <> show path) env
+      pure env
     Nothing -> error "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."
 
 -- | Create a client environment connected to the compositor socket at the given path.
@@ -147,6 +146,6 @@ waylandConnect protocolTable path = do
   writeLock <- newMVar ()
   let interfaceTable = Map.fromList protocolTable
   fdqueue <- atomically newTQueue
-  pure $ ClientEnv $ ClientEnvironment sock writeLock counter objects globals interfaceTable handlers fdqueue
+  ClientEnv . ClientEnvironment sock writeLock counter objects globals interfaceTable handlers fdqueue <$> defaultLogger Client
 
 -- vim: foldmethod=marker

@@ -35,6 +35,7 @@ main = bracket env cleanup program
           clients <- newTVarIO Map.empty
           eventHandlers <- newIORef []
           clientSerial <- newTVarIO 0
+          logger <- defaultLogger Server
           pure
             ServerEnvironment
               { socket = socket'
@@ -43,6 +44,7 @@ main = bracket env cleanup program
               , interfaceTable = Map.fromList table
               , eventHandlers
               , clientSerial
+              , logger
               }
 
 program :: ServerEnvironment -> IO ()

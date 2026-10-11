@@ -23,7 +23,6 @@ import Data.Map qualified as Map
 import Data.Maybe
 import Data.Sequence qualified as Seq
 import Data.Typeable
-import Debug.Trace (traceIO)
 import Foreign (Ptr, nullPtr)
 import GHC.IORef (atomicSwapIORef)
 import GHC.TypeError
@@ -654,7 +653,7 @@ instance Object Wl_surface where
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuBuffer = Just bufferId, cuOffset = Just (x, y)}, ())
     forwardMessage surface msg
   onRequest surface msg@(Request_wl_surface_damage (WlInt x) (WlInt y) (WlInt w) (WlInt h)) = do
-    onClient . liftIO $ traceIO "New clients should not use this request (wl_surface.damage). Instead damage can be posted with wl_surface.damage_buffer which uses buffer coordinates instead of surface coordinates."
+    onClient $ logDebug "New clients should not use this request (wl_surface.damage). Instead damage can be posted with wl_surface.damage_buffer which uses buffer coordinates instead of surface coordinates."
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuDamage = Rectangle{position = (x, y), size = (w, h)} : s.cuDamage}, ())
     forwardMessage surface msg
   onRequest surface msg@(Request_wl_surface_frame cb) = do
@@ -974,7 +973,7 @@ bindToInterface registry =
 tryBindToInterface :: forall i. (Global i) => Wl_registry -> Wayland Client (Maybe i)
 tryBindToInterface registry = do
   let targetIface = getInterfaceName (Proxy @i)
-  liftIO $ putStrLn $ "Trying to bind to " <> show targetIface <> "..."
+  logInfo $ "binding to " <> show targetIface
   env <- getClientEnv
   globals :: Map GlobalName (WlText, WlUInt) <- readIORef env.globals
   let matchingIfaces = [(name, ver) | (name, (advertisedIface, ver)) <- Map.toList globals, advertisedIface == targetIface]

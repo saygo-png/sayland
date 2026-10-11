@@ -1,2 +1,5 @@
 packages: .
 multi-repl: True
+-- Don't optimize for the sake of faster builds.
+-- Nix ignores this.
+optimization: 0

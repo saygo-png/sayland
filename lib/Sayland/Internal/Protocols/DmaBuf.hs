@@ -12,7 +12,6 @@ import Control.Monad
 import Control.Monad.IO.Class (liftIO)
 import Data.Binary
 import Data.Bits (Bits (shiftL), (.|.))
-import Debug.Trace (traceIO)
 import Foreign (Storable (peek), castPtr, nullPtr, plusPtr)
 import GHC.Exception
 import MMAP (mapShared, mkMmapFlags, mmap, protRead, protWrite)
@@ -104,8 +103,8 @@ instance Object Zwp_linux_dmabuf_v1 where
 
   onEvent dmabuf msg = do
     case msg of
-      Event_zwp_linux_dmabuf_v1_format{} -> liftIO $ traceIO "deprecated since v4, superseded by feedback"
-      Event_zwp_linux_dmabuf_v1_modifier{} -> liftIO $ traceIO "deprecated since v4, superseded by feedback"
+      Event_zwp_linux_dmabuf_v1_format{} -> logDebug "deprecated since v4, superseded by feedback"
+      Event_zwp_linux_dmabuf_v1_modifier{} -> logDebug "deprecated since v4, superseded by feedback"
     forwardMessage dmabuf msg
 
 -- }}}

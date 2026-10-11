@@ -91,7 +91,6 @@ library
 
   -- Non-boot libraries.
   build-depends:
-    ansi-terminal,
     network,
     sayland-wire,
     shared-memory,
@@ -105,6 +104,7 @@ library
     Sayland.Core
     Sayland.Internal.Codegen
     Sayland.Internal.Core
+    Sayland.Internal.Log
     Sayland.Internal.Object
     Sayland.Internal.Prelude
     Sayland.Internal.Protocols.DmaBuf
@@ -112,7 +112,7 @@ library
     Sayland.Internal.Protocols.Wayland
     Sayland.Internal.Protocols.WlrLayerShell
     Sayland.Internal.Protocols.XdgShell
-    Sayland.Internal.Trace
+    Sayland.Log
     Sayland.Object
     Sayland.Protocols.DmaBuf
     Sayland.Protocols.Fifo

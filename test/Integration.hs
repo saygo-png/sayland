@@ -162,7 +162,13 @@ serverEnvironment sock socketPath = do
   clients <- newTVarIO Map.empty
   eventHandlers <- newIORef []
   clientSerial <- newTVarIO 0
-  pure ServerEnvironment{socket = sock, socketPath, clients, interfaceTable = Map.fromList table, eventHandlers, clientSerial}
+  logger <- quietUnlessDebugging <$> defaultLogger Server
+  pure ServerEnvironment{socket = sock, socketPath, clients, interfaceTable = Map.fromList table, eventHandlers, clientSerial, logger}
+
+-- | Silence the logger, unless @WAYLAND_DEBUG@ asks for this side. Some tests break the protocol on purpose,
+-- and the errors the compositor logs for that would garble the test report.
+quietUnlessDebugging :: Logger -> Logger
+quietUnlessDebugging logger = if logger.minLevel == LogDebug then logger else silentLogger
 
 -- | Wait until the compositor has handled every request sent before: Wayland's own round trip.
 roundtrip :: Session -> Wayland Client ()

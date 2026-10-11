@@ -17,13 +17,11 @@ import Data.Coerce
 import Data.Kind
 import Data.Map (Map)
 import Data.Typeable
-import Debug.Trace (traceIO)
 import GHC.Records (HasField)
 import Network.Socket (Socket)
+import Sayland.Internal.Log
 import Sayland.Internal.Prelude
-import Sayland.Internal.Trace (getColorize)
 import Sayland.Wire
-import System.Console.ANSI
 import System.Posix (Fd)
 
 -- | Type representing an `objectID` of a certain object.
@@ -110,9 +108,6 @@ type role EventHandler nominal
 -- | EventHandlers, called whenever an event is received.
 data EventHandler p where
   EventHandler :: (Typeable m, Message m) => (ObjectID -> m -> Wayland p ()) -> EventHandler p
-
--- | Number representing a Wayland Client.
-type ClientID = Int
 
 -- | Class defining an Interface as a collection of events and requests which has a `TObjectID`, version and name.
 -- This does not include implementations of events and requests which are supplied by `Interface`.
@@ -204,6 +199,8 @@ data ServerEnvironment = ServerEnvironment
   -- ^ Table of interfaces supported by the server. This allows for adding in custom protocols.
   , eventHandlers :: IORef [EventHandler Server]
   -- ^ Server-side event handlers.
+  , logger :: Logger
+  -- ^ Where the server and its clients log to.
   }
 
 type role ClientEnvironment nominal
@@ -226,6 +223,8 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
   -- ^ Custom event handlers that run on received events.
   , fdQueue :: TQueue Fd
   -- ^ Stores file descriptors.
+  , logger :: Logger
+  -- ^ Where this connection logs to.
   }
 
 -- | Error saying: The connection is over. The peer reported a violation with @wl_display.error@,
@@ -274,11 +273,11 @@ data ConnectionError
 -- Partial interfaces are worse than an unimplemented one because they have inconsistent behaviour.
 -- Use this instead of just `pass` or only forwarding as it warns at compile time and logs at runtime.
 stub :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
-stub obj msg = liftIO . traceIO $ "sayland: unimplemented: " <> showMessage (toObjectID obj.wlid) msg
+stub obj msg = logWarn $ "unimplemented: " <> showMessage (toObjectID obj.wlid) msg
 
 -- | Placeholder for a message which are not implemented and not planned to be due to being deprecated.
 stubDeprecated :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
-stubDeprecated obj msg = liftIO . traceIO $ "sayland: unimplemented(deprecated): " <> showMessage (toObjectID obj.wlid) msg
+stubDeprecated obj msg = logInfo $ "unimplemented (deprecated): " <> showMessage (toObjectID obj.wlid) msg
 
 -- | Like `sendMessage` but meant for use inside handlers.
 -- It contains the logic determining if a message should be sent from the current perspective.
@@ -351,7 +350,7 @@ protocolViolation severity msg o code text = case severity of
     strictness <- getStrictness culprit
     if strictness >= rejectFrom
       then reject
-      else liftIO . traceIO $ "sayland: ignored protocol violation in " <> whose culprit <> " on object " <> show (toObjectID o) <> ": " <> show text
+      else logWarn $ "ignored protocol violation in " <> whose culprit <> " on object " <> show (toObjectID o) <> ": " <> show text
   where
     reject :: Wayland p a
     reject = throwIO $ ProtocolError (Just $ toObjectID o) (errorCode code) (Just text)
@@ -368,6 +367,40 @@ getClientEnv =
   asks $ \case
     ClientEnv env -> env
     ClientServerEnv _ env _ -> env
+
+-- | The logger, and the client this connection serves if this is the server.
+getLogger :: Wayland p (Logger, Maybe ClientID)
+getLogger =
+  asks $ \case
+    ClientEnv env -> (env.logger, Nothing)
+    ClientServerEnv _ env client -> (env.logger, Just client)
+
+-- | Log a line at the given level. On the server, it is tagged with the client this connection serves.
+logAt :: LogLevel -> String -> Wayland p ()
+logAt level text = getLogger >>= \(logger, client) -> logWith logger level client text
+
+-- | Log a line at the level in the name. See `logAt`.
+logDebug, logInfo, logWarn, logError :: String -> Wayland p ()
+logDebug = logAt LogDebug
+logInfo = logAt LogInfo
+logWarn = logAt LogWarn
+logError = logAt LogError
+
+-- | Log a message that went over the wire in the given direction, at `LogDebug`.
+logMessage :: (Message m) => Direction -> ObjectID -> m -> Wayland p ()
+logMessage direction oid msg = do
+  (logger, client) <- getLogger
+  when (LogDebug >= logger.minLevel) . liftIO . logger.writeMessage direction client $ showMessage oid msg
+
+-- | Log to stderr from `LogWarn` up, or from `LogDebug` up (every message included) when @WAYLAND_DEBUG@ names
+-- the given side: @1@ for both, @client@ or @server@ for one.
+--
+-- Reads the environment, so it is NOT safe to call while another thread sets environment variables.
+-- Blame C: <https://www.evanjones.ca/setenv-is-not-thread-safe.html>
+defaultLogger :: Perspective -> IO Logger
+defaultLogger = \case
+  Client -> defaultLoggerFor (.client)
+  Server -> defaultLoggerFor (.server)
 
 -- | Run something only on the server side. Used for implementing interfaces.
 onServer :: Wayland Server () -> Wayland p ()
@@ -386,8 +419,7 @@ onClient k =
 -- | Send a raw message over the wire.
 sendMessage :: (Message m) => m -> TObjectID i -> Wayland p ()
 sendMessage e (TObjectID o) = do
-  colorize <- liftIO getColorize
-  liftIO (traceIO $ colorize Vivid Yellow $ ("    -> " <>) $ showMessage o e)
+  logMessage Sent o e
   env <- getClientEnv
   takeMVar env.writeLock
   liftIO $ sendRaw env.socket o (getOpcode e) (putMessage e)

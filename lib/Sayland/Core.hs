@@ -25,6 +25,10 @@ module Sayland.Core (
   Severity (..),
   getStrictness,
   protocolViolation,
+  logDebug,
+  logInfo,
+  logWarn,
+  logError,
 ) where
 
 import Sayland.Internal.Core
