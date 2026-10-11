@@ -391,14 +391,16 @@ mkShow interfaceName prefix prefix2 events =
     , FunD (mkName prefix) $ bool m [Clause [WildP, WildP] (NormalB $ LitE $ StringL $ interfaceName <> "@?") []] (null m)
     ]
   where
-    -- showMessage oid (Con a b) = "<interface>@" <> show oid <> ".<message>: " <> " a: " <> show a <> " b: " <> show b
+    -- showMessage oid (Con a b) = "<interface>@" <> show oid <> ".<message>" <> " { " <> L.intercalate ", " ["a: " <> show a, "b: " <> show b] <> " }"
+    -- Messages without arguments get no braces.
     mkShowC :: Element -> Q Clause
     mkShowC e = do
       oid <- newName "oid"
       vars <- traverse newName argNames
-      let header = [|$(stringE $ interfaceName <> "@") <> show $(varE oid) <> $(stringE $ "." <> eventName <> bool ": " "" (null argNames))|]
-          single acc (n, v) = [|$acc <> $(stringE $ " " <> n <> ": ") <> show $(varE v)|]
-      clause [varP oid, conP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) (varP <$> vars)] (normalB . foldl' single header $ zip argNames vars) []
+      let header = [|$(stringE $ interfaceName <> "@") <> show $(varE oid) <> $(stringE $ "." <> eventName)|]
+          field (n, v) = [|$(stringE $ n <> ": ") <> show $(varE v)|]
+          fields = [|" { " <> L.intercalate ", " $(listE $ field <$> zip argNames vars) <> " }"|]
+      clause [varP oid, conP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) (varP <$> vars)] (normalB $ bool [|$header <> $fields|] header (null argNames)) []
       where
         argNames = fromJust . findAttr (qname "name") <$> findChildren (qname "arg") e
         eventName = fromJust $ findAttr (qname "name") e

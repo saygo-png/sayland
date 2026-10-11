@@ -273,7 +273,7 @@ data ConnectionError
 -- Partial interfaces are worse than an unimplemented one because they have inconsistent behaviour.
 -- Use this instead of just `pass` or only forwarding as it warns at compile time and logs at runtime.
 stub :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
-stub obj msg = logWarn $ "unimplemented: " <> showMessage (toObjectID obj.wlid) msg
+stub obj msg = logWarn $ "unimplemented " <> showMessage (toObjectID obj.wlid) msg
 
 -- | Placeholder for a message which are not implemented and not planned to be due to being deprecated.
 stubDeprecated :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
