@@ -84,7 +84,7 @@ clientLoop = clientLoop' ""
     clientLoop' :: (KnownPerspective p) => BS.ByteString -> Socket -> Wayland p ()
     clientLoop' bytes' sock = do
       queue <- (.fdQueue) <$> getClientEnv
-      (bytes'', newFds) <- liftIO $ recvChunk sock
+      (bytes'', newFds) <- liftIO . peerGone $ recvChunk sock
       -- Nothing to read from a stream socket means the peer closed it.
       when (BS.null bytes'') $ throwIO Disconnected
       atomically $ mapM_ (writeTQueue queue) newFds

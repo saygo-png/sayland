@@ -22,6 +22,7 @@ import Network.Socket (Socket)
 import Sayland.Internal.Log
 import Sayland.Internal.Prelude
 import Sayland.Wire
+import System.IO.Error (isResourceVanishedError)
 import System.Posix (Fd)
 
 -- | Type representing an `objectID` of a certain object.
@@ -421,6 +422,8 @@ sendMessage :: (Message m) => m -> TObjectID i -> Wayland p ()
 sendMessage e (TObjectID o) = do
   logMessage Sent o e
   env <- getClientEnv
-  takeMVar env.writeLock
-  liftIO $ sendRaw env.socket o (getOpcode e) (putMessage e)
-  putMVar env.writeLock ()
+  liftIO . withMVar env.writeLock $ \_ -> peerGone $ sendRaw env.socket o (getOpcode e) (putMessage e)
+
+-- | Report the socket errors that mean the peer hung up (@EPIPE@, @ECONNRESET@) as `Disconnected`.
+peerGone :: IO a -> IO a
+peerGone act = catchJust (guard . isResourceVanishedError) act $ \_ -> throwIO Disconnected
