@@ -12,7 +12,7 @@ instance Object Wp_fifo_manager_v1 where
   onRequest manager msg@(Request_wp_fifo_manager_v1_get_fifo fifoId surfaceId) = do
     getInterface surfaceId >>= \case
       Just _ -> do
-        registerObject Wp_fifo_v1{wlid = fifoId, fifoSurface = surfaceId}
+        registerObject msg Wp_fifo_v1{wlid = fifoId, fifoSurface = surfaceId}
         forwardMessage manager msg
       Nothing -> protocolErrorG Err_invalid_object $ "wp_fifo_manager_v1.get_fifo: surface `" <> fromString (show surfaceId) <> "` does not exist"
 

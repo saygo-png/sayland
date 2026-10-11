@@ -12,12 +12,6 @@ import Sayland.Internal.Core
 import Sayland.Internal.Prelude
 import Sayland.Wire
 
--- | Enter an object in this side's object map.
-registerObject :: (Object i) => i -> Wayland p ()
-registerObject obj = do
-  env <- getClientEnv
-  atomicModifyIORef' env.objects $ \m -> (Map.insert (toObjectID obj.wlid) (SomeObject obj) m, ())
-
 -- | Takes the next `ObjectID` from the counter.
 newObjectID :: (IDRange p) => Wayland p (ObjectID p)
 newObjectID = do

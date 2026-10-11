@@ -17,7 +17,6 @@ import GHC.Exception
 import MMAP (mapShared, mkMmapFlags, mmap, protRead, protWrite)
 import Sayland.Internal.Codegen
 import Sayland.Internal.Core
-import Sayland.Internal.Object
 import Sayland.Internal.Prelude
 import Sayland.Internal.Protocols.Wayland
 import Sayland.Wire
@@ -92,13 +91,13 @@ instance Object Zwp_linux_dmabuf_v1 where
     dmabufSet <- newIORef []
     paramsModifier <- newIORef 0
     sampling_device <- newIORef Nothing
-    registerObject Zwp_linux_buffer_params_v1{wlid = paramsId, ..}
+    registerObject msg Zwp_linux_buffer_params_v1{wlid = paramsId, ..}
     forwardMessage dmabuf msg
   onRequest dmabuf msg@(Request_zwp_linux_dmabuf_v1_get_surface_feedback feedbackId surfaceId) = do
-    registerObject =<< newFeedback feedbackId (Just surfaceId)
+    registerObject msg =<< newFeedback feedbackId (Just surfaceId)
     forwardMessage dmabuf msg
   onRequest dmabuf msg@(Request_zwp_linux_dmabuf_v1_get_default_feedback feedbackId) = do
-    registerObject =<< newFeedback feedbackId Nothing
+    registerObject msg =<< newFeedback feedbackId Nothing
     forwardMessage dmabuf msg
 
   onEvent dmabuf msg = do
@@ -127,7 +126,7 @@ instance Object Zwp_linux_buffer_params_v1 where
     onClient $ do
       modifier <- readIORef params.paramsModifier
       dmabufs <- atomicModifyIORef' params.dmabufSet ([],)
-      registerObject Wl_buffer{wlid = bufferId, width, height, buffer = Buffer DmabufBuffer{..}}
+      registerObject msg Wl_buffer{wlid = bufferId, width, height, buffer = Buffer DmabufBuffer{..}}
     forwardMessage params msg
   onRequest params msg@(Request_zwp_linux_buffer_params_v1_set_sampling_device dev) = do
     atomicWriteIORef params.sampling_device $ Just dev

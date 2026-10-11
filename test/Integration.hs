@@ -32,6 +32,7 @@ tests =
     , testCase "the compositor reports a protocol violation to the client" reportsViolation
     , testCase "the compositor reports a malformed message to the client" reportsMalformed
     , testCase "Client and Server IDs don't collide" serverIDsDoNotCollide
+    , testCase "the compositor rejects an ID that is still in use" rejectsReusedID
     ]
 
 table :: ProtocolTable
@@ -135,6 +136,12 @@ serverIDsDoNotCollide = withSession $ \s -> do
   getInterface s.registry.wlid >>= liftIO . assertBool "the client's registry was replaced" . isJust
   void $ bindToInterface @Wl_compositor s.registry -- the registry still works
   roundtrip s
+
+-- | A new object with the ID of an object that still exists ends the connection, instead of replacing that object.
+rejectsReusedID :: Assertion
+rejectsReusedID = withSession $ \s -> do
+  sendMessage (Request_wl_display_get_registry s.registry.wlid) s.display.wlid
+  liftIO $ expectProtocolError s Err_invalid_object
 
 -- | Run a client against a compositor. Both from this library.
 -- A test that does not finish in time fails which catches hangs.

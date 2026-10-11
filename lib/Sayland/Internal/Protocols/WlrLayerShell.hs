@@ -9,7 +9,6 @@ module Sayland.Internal.Protocols.WlrLayerShell (module Sayland.Internal.Protoco
 
 import Sayland.Internal.Codegen
 import Sayland.Internal.Core
-import Sayland.Internal.Object
 import Sayland.Internal.Prelude
 import Sayland.Internal.Protocols.Wayland
 import Sayland.Internal.Protocols.XdgShell
@@ -29,7 +28,7 @@ $(loadProtocolFile wlFormatter "xml-protocols/wlr-layer-shell-unstable-v1.xml")
 -- zwlr_layer_shell_v1 {{{
 instance Object Zwlr_layer_shell_v1 where
   onRequest shell msg@(Request_zwlr_layer_shell_v1_get_layer_surface layerSurfaceId _surfaceId _outputId _layer _namespace) = do
-    registerObject Zwlr_layer_surface_v1{wlid = layerSurfaceId}
+    registerObject msg Zwlr_layer_surface_v1{wlid = layerSurfaceId}
     forwardMessage shell msg
   onRequest shell msg@Request_zwlr_layer_shell_v1_destroy = do
     forwardMessage shell msg

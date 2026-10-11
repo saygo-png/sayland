@@ -22,6 +22,7 @@ import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.Maybe
 import Data.Sequence qualified as Seq
+import Data.Text qualified as T
 import Data.Typeable
 import Foreign (Ptr, nullPtr)
 import GHC.IORef (atomicSwapIORef)
@@ -296,6 +297,22 @@ newtype Wl_fixes = Wl_fixes {wlid :: TObjectID Wl_fixes}
 
 $(loadProtocolFile wlFormatter "xml-protocols/wayland.xml")
 
+-- | Enter an object the message creates in this side's object map. An ID that is still in use is a protocol violation.
+registerObject :: (Message m, Object i) => m -> i -> Wayland p ()
+registerObject msg obj = registerSomeObject msg (toObjectID obj.wlid) (SomeObject obj)
+
+-- | `registerObject` for an object of any interface.
+registerSomeObject :: (Message m) => m -> AnyObjectID -> SomeObject -> Wayland p ()
+registerSomeObject msg oid obj = do
+  env <- getClientEnv
+  inserted <- atomicModifyIORef' env.objects $ \m ->
+    if Map.member oid m then (m, False) else (Map.insert oid obj m, True)
+  unless inserted
+    . protocolViolation Unrecoverable msg wlDisplayId Err_invalid_object
+    . wlTextLossy
+    . T.pack
+    $ "object ID " <> show (fromAnyObjectID oid) <> " is still in use"
+
 -- | Remove an object from the objects map. On a server this also sends @delete_id@.
 dropObject :: TObjectID a -> Wayland p ()
 dropObject (TObjectID i) = do
@@ -322,12 +339,12 @@ instance Object Wl_display where
     forwardMessage obj msg
   onRequest obj msg@(Request_wl_display_sync callbackId) = do
     callbackObj <- Wl_callback callbackId <$> newEmptyMVar
-    registerObject callbackObj
+    registerObject msg callbackObj
     onServer $ sendMsg callbackObj (Event_wl_callback_done 0)
     forwardMessage obj msg
   onRequest obj msg@(Request_wl_display_get_registry registryId) = do
     let registryObj = Wl_registry registryId
-    registerObject registryObj
+    registerObject msg registryObj
     onServer $ do
       env <- getClientEnv
       let entries = zip [0 ..] $ Map.toList env.interfaceTable
@@ -377,8 +394,7 @@ instance Object Wl_registry where
     entry <- Map.lookup iface env.interfaceTable & whenNothing $ do
       protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind to an unsupported interface|]
 
-    newObj <- liftIO (entry.construct $ FromClient newId)
-    atomicModifyIORef' env.objects $ \m -> (Map.insert (FromClient newId) newObj m, ())
+    registerSomeObject msg (FromClient newId) =<< liftIO (entry.construct $ FromClient newId)
     forwardMessage obj msg
 
 -- }}}
@@ -406,14 +422,14 @@ instance Object Wl_compositor where
             , sFifoBarrier = False
             }
       pure Wl_surface{..}
-    registerObject wl_surface
+    registerObject msg wl_surface
     forwardMessage obj msg
   onRequest obj msg@(Request_wl_compositor_create_region wlid) = do
     wl_regionObj <- do
       included <- newIORef []
       excluded <- newIORef []
       pure Wl_region{..}
-    registerObject wl_regionObj
+    registerObject msg wl_regionObj
     forwardMessage obj msg
   onRequest obj msg@Request_wl_compositor_release = do
     forwardMessage obj msg
@@ -428,6 +444,7 @@ instance Object Wl_shm_pool where
   onRequest pool msg@(Request_wl_shm_pool_create_buffer bufId offset width height stride format) = do
     atomicModifyIORef' pool.references $ \x -> (x + 1, ())
     registerObject
+      msg
       Wl_buffer
         { wlid = bufId
         , width
@@ -463,7 +480,7 @@ instance Object Wl_shm where
     sizeRef <- newIORef size
     ptrRef <- newIORef =<< mapShmPool fd size
     references <- newIORef 1
-    registerObject Wl_shm_pool{wlid = poolId, fd, size = sizeRef, ptr = ptrRef, references}
+    registerObject msg Wl_shm_pool{wlid = poolId, fd, size = sizeRef, ptr = ptrRef, references}
     forwardMessage shm msg
   onRequest shm msg@Request_wl_shm_release = do
     forwardMessage shm msg
@@ -584,7 +601,7 @@ instance Object Wl_data_device where
     offerActions <- newIORef noDndAction
     selectedAction <- newIORef noDndAction
     offerPreferredAction <- newIORef noDndAction
-    registerObject Wl_data_offer{wlid = offerId, offer_data_device = device.wlid, ..}
+    registerObject msg Wl_data_offer{wlid = offerId, offer_data_device = device.wlid, ..}
     forwardMessage device msg
   onEvent device msg@(Event_wl_data_device_enter enterSerial target x y offer) = do
     tryTakeMVar_ device.dndClient
@@ -613,7 +630,7 @@ instance Object Wl_data_device_manager where
     sourceActions <- newIORef noDndAction
     sourceSelectedAction <- newIORef noDndAction
     sourceTargetMimetype <- newIORef Nothing
-    registerObject Wl_data_source{wlid = sourceId, ..}
+    registerObject msg Wl_data_source{wlid = sourceId, ..}
     forwardMessage mgr msg
   onRequest mgr msg@(Request_wl_data_device_manager_get_data_device deviceId seat) = do
     sources <- newIORef []
@@ -622,7 +639,7 @@ instance Object Wl_data_device_manager where
     dndClient <- newEmptyMVar
     selection <- newEmptyMVar
     selectionClient <- newEmptyMVar
-    registerObject Wl_data_device{wlid = deviceId, ..}
+    registerObject msg Wl_data_device{wlid = deviceId, ..}
     forwardMessage mgr msg
   onRequest mgr msg@Request_wl_data_device_manager_release = do
     forwardMessage mgr msg
@@ -658,7 +675,7 @@ instance Object Wl_surface where
     forwardMessage surface msg
   onRequest surface msg@(Request_wl_surface_frame cb) = do
     done <- newEmptyMVar
-    registerObject Wl_callback{wlid = cb, done}
+    registerObject msg Wl_callback{wlid = cb, done}
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuFrameCallbacks = cb : s.cuFrameCallbacks}, ())
     forwardMessage surface msg
   onRequest surface msg@(Request_wl_surface_set_opaque_region region) = do
@@ -681,7 +698,7 @@ instance Object Wl_surface where
     forwardMessage surface msg
   onRequest surface msg@(Request_wl_surface_get_release release) = do
     done <- newEmptyMVar
-    registerObject Wl_callback{wlid = release, done}
+    registerObject msg Wl_callback{wlid = release, done}
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuBufferRelease = Just release}, ())
     forwardMessage surface msg
   onRequest surface msg@Request_wl_surface_commit{} = do
@@ -713,13 +730,13 @@ instance Object Wl_surface where
 -- Wl_seat {{{
 instance Object Wl_seat where
   onRequest seat msg@(Request_wl_seat_get_pointer wlid) = do
-    registerObject Wl_pointer{wlid}
+    registerObject msg Wl_pointer{wlid}
     forwardMessage seat msg
   onRequest seat msg@(Request_wl_seat_get_keyboard wlid) = do
-    registerObject Wl_keyboard{wlid}
+    registerObject msg Wl_keyboard{wlid}
     forwardMessage seat msg
   onRequest seat msg@(Request_wl_seat_get_touch wlid) = do
-    registerObject Wl_touch{wlid}
+    registerObject msg Wl_touch{wlid}
     forwardMessage seat msg
   onRequest seat msg@Request_wl_seat_release{} = do
     forwardMessage seat msg
@@ -869,7 +886,7 @@ instance Object Wl_subcompositor where
       Nothing -> protocolViolation Unrecoverable msg subcompositor Enum_wl_subcompositor_error_bad_surface [wl|surface already has a role assigned|]
     position <- newIORef (0, 0)
     synchronized <- newIORef True
-    registerObject Wl_subsurface{wlid = subsurfaceId, surface = surfaceId, parent = parentId, position, synchronized}
+    registerObject msg Wl_subsurface{wlid = subsurfaceId, surface = surfaceId, parent = parentId, position, synchronized}
     atomicWriteIORef surface.role $ SurfaceRole subsurfaceId
     forwardMessage subcompositor msg
 

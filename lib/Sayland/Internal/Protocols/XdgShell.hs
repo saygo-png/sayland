@@ -73,14 +73,14 @@ instance Object Xdg_wm_base where
     dropObject wm_base.wlid
   onRequest wm_base msg@(Request_xdg_wm_base_create_positioner positionerId) = do
     state <- newIORef $ PositionerState Nothing Nothing Nothing Nothing Nothing Nothing Nothing False Nothing
-    registerObject Xdg_positioner{wlid = positionerId, state}
+    registerObject msg Xdg_positioner{wlid = positionerId, state}
     forwardMessage wm_base msg
   onRequest wm_base msg@(Request_xdg_wm_base_get_xdg_surface xdgSurfaceId surfaceId) = do
     getInterface surfaceId >>= \case
       Just _ -> do
         -- TODO there are 3 checks to be made beforehand.
         ref <- newIORef Nothing
-        registerObject Xdg_surface{wlid = xdgSurfaceId, wl_surface = surfaceId, xdgRole = ref}
+        registerObject msg Xdg_surface{wlid = xdgSurfaceId, wl_surface = surfaceId, xdgRole = ref}
         forwardMessage wm_base msg
       Nothing -> protocolViolation Unrecoverable msg wlDisplayId Err_invalid_object [wl|xdg_wm_base: get_xdg_surface called on a non-surface object|]
   onRequest wm_base msg@Request_xdg_wm_base_pong{} =
@@ -145,7 +145,7 @@ instance Object Xdg_surface where
     size <- newIORef (0, 0)
     parent <- newIORef Nothing
     let toplevelObject = Xdg_toplevel{wlid = toplevelId, toplevel_xdg_surface = xdg_surface.wlid, size, parent}
-    registerObject toplevelObject
+    registerObject msg toplevelObject
     atomicWriteIORef xdg_surface.xdgRole $ Just $ XDGToplevel toplevelObject
     atomicWriteIORef surfaceObj.role $ SurfaceRole toplevelObject
     forwardMessage xdg_surface msg
@@ -155,7 +155,7 @@ instance Object Xdg_surface where
     unless (isJust (cast role :: Maybe ()))
       $ protocolViolation Unrecoverable msg xdg_surface Enum_xdg_surface_error_already_constructed [wl|xdg_surface: surface already has a role|]
     let popupObject = Xdg_popup{wlid = popupId, parent = popupParent, positioner = popupPositioner, popup_xdg_surface = xdg_surface.wlid}
-    registerObject popupObject
+    registerObject msg popupObject
     atomicWriteIORef xdg_surface.xdgRole $ Just $ XDGPopup popupObject
     atomicWriteIORef surfaceObj.role $ SurfaceRole popupObject
     forwardMessage xdg_surface msg
