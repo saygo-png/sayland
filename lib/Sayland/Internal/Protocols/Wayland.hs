@@ -38,7 +38,7 @@ $(loadProtocolFileEnums "xml-protocols/wayland.xml")
 
 -- | Constant representing the `Wl_display` ID which is always 1 in Wayland.
 wlDisplayId :: TObjectID Wl_display
-wlDisplayId = TObjectID $ mkObjectID @1
+wlDisplayId = TObjectID . FromClient $ mkObjectID @Client @1
 
 -- | Get the `Wl_display` object which always exists during a connection.
 getWlDisplay :: Wayland p Wl_display
@@ -301,7 +301,7 @@ dropObject :: TObjectID a -> Wayland p ()
 dropObject (TObjectID i) = do
   env <- getClientEnv
   atomicModifyIORef' env.objects $ \m -> (Map.delete i m, ())
-  onServer $ sendMessage (Event_wl_display_delete_id $ fromObjectID i) wlDisplayId
+  onServer $ sendMessage (Event_wl_display_delete_id $ fromAnyObjectID i) wlDisplayId
 
 -- | @mmap@ a shm pool's fd, read/write and shared.
 mapShmPool :: (MonadIO m) => Fd -> WlInt -> m (Ptr ())
@@ -377,8 +377,8 @@ instance Object Wl_registry where
     entry <- Map.lookup iface env.interfaceTable & whenNothing $ do
       protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind to an unsupported interface|]
 
-    newObj <- liftIO (entry.construct newId)
-    atomicModifyIORef' env.objects $ \m -> (Map.insert newId newObj m, ())
+    newObj <- liftIO (entry.construct $ FromClient newId)
+    atomicModifyIORef' env.objects $ \m -> (Map.insert (FromClient newId) newObj m, ())
     forwardMessage obj msg
 
 -- }}}
@@ -983,7 +983,7 @@ tryBindToInterface registry = do
       oid <- newObjectID
       let negotiatedVersion = min advertisedVersion $ getInterfaceVersion (Proxy @i)
       sendMsg registry $ Request_wl_registry_bind (coerce name) (WlNewId targetIface negotiatedVersion oid)
-      Just <$> (getInterface (TObjectID oid) >>= maybe (error "sayland bug: bind did not register the global") pure)
+      Just <$> (getInterface (TObjectID $ FromClient oid) >>= maybe (error "sayland bug: bind did not register the global") pure)
 
 -- }}}
 -- }}}

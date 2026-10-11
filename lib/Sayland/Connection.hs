@@ -35,7 +35,7 @@ listenForClients env = do
 -- | Deal with an incoming client, creating a client environment and updating the server state.
 handleIncomingClient :: (MonadIO m) => ServerEnvironment -> Socket -> m ()
 handleIncomingClient env socket' = do
-  counter <- newIORef $ coerce wlDisplayId
+  counter <- newIORef . Just $ mkObjectID @Server @0xff000000
   objects <- newIORef $ Map.fromList [(coerce wlDisplayId, SomeObject $ Wl_display wlDisplayId)]
   globals <- newIORef mempty
   fdQueue <- atomically newTQueue
@@ -107,7 +107,7 @@ handleMessage oid' opcode msg = do
     Nothing -> logWarn $ "ignored a message to unknown object " <> show oid'
 
 -- | Parse a message for an object and run the given handler on it, then any registered 'EventHandler's.
-dispatchWith :: (Message m) => (m -> Wayland p ()) -> ObjectID -> Word16 -> BS.ByteString -> Wayland p ()
+dispatchWith :: (Message m) => (m -> Wayland p ()) -> AnyObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 dispatchWith handle oid opcode msg = do
   env <- getClientEnv
   fds <- atomically $ flushTQueue env.fdQueue
@@ -139,7 +139,7 @@ waylandConnect protocolTable path = do
   let display = SomeObject $ Wl_display wlDisplayId
   sock <- socket AF_UNIX Stream defaultProtocol
   connect sock $ SockAddrUnix path
-  counter <- newIORef $ coerce wlDisplayId
+  counter <- newIORef . Just $ mkObjectID @Client @2
   objects <- newIORef $ Map.fromList [(coerce wlDisplayId, display)]
   globals <- newIORef mempty
   handlers <- newIORef mempty

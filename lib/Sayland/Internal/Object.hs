@@ -18,14 +18,11 @@ registerObject obj = do
   env <- getClientEnv
   atomicModifyIORef' env.objects $ \m -> (Map.insert (toObjectID obj.wlid) (SomeObject obj) m, ())
 
--- | Increases the counter by 1 and returns it's new value.
-newObjectID :: Wayland p ObjectID
+-- | Takes the next `ObjectID` from the counter.
+newObjectID :: (IDRange p) => Wayland p (ObjectID p)
 newObjectID = do
-  -- TODO: There is an upper bound to object ids per client/server that this does not yet enforce.
   env <- getClientEnv
-  next <- atomicModifyIORef' env.counter $ \current -> case succObjectID current of
-    Just n -> (n, Just n)
-    Nothing -> (current, Nothing)
+  next <- atomicModifyIORef' env.counter $ \current -> (current >>= succObjectID, current)
   maybe (throwIO ObjectIDsExhausted) pure next
 
 -- | Error saying: Sayland ran out of numbers for `objectID`'s.
@@ -37,10 +34,10 @@ data ObjectIDsExhausted = ObjectIDsExhausted
 -- | Create an object and tell the peer about it.
 -- Used by users to create objects. Should not be used in handler implementations.
 newObject ::
-  (Object parent, Object child, KnownPerspective p) =>
+  (Object parent, Object child, KnownPerspective p, IDRange p) =>
   parent -> (TObjectID child -> Outgoing p parent) -> Wayland p child
 newObject parent mkMsg = do
-  oid <- TObjectID <$> newObjectID
+  oid <- TObjectID . toAnyObjectID <$> newObjectID
   sendMsg parent (mkMsg oid)
   getInterface oid
     >>= maybe (error $ "sayland bug: handler did not register object " <> show (toObjectID oid)) pure
@@ -57,9 +54,9 @@ receiveMsg = applyIncoming
 
 -- | Get an Interface using its id.
 getInterface :: (Typeable i) => TObjectID i -> Wayland p (Maybe i)
-getInterface (TObjectID objectID) = do
+getInterface (TObjectID oid) = do
   env <- getClientEnv
-  (proxyInterface <=< Map.lookup objectID) <$> readIORef env.objects
+  (proxyInterface <=< Map.lookup oid) <$> readIORef env.objects
 
 -- | Cast provided interface into proxied type.
 proxyInterface :: forall i. (Typeable i) => SomeObject -> Maybe i

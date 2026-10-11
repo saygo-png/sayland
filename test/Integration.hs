@@ -14,7 +14,6 @@ import Network.Socket
 import Relude hiding (hFlush)
 import Sayland
 import Sayland.Internal.Core (InvalidMessage, ProtocolError (..), TObjectID (..), catchW, errorCode, sendMessage)
-import Sayland.Internal.Object (proxyInterface)
 import Sayland.Wire
 import System.Directory (createDirectory, getTemporaryDirectory, removeDirectoryRecursive)
 import System.Posix (ShmOpenFlags (..), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
@@ -32,6 +31,7 @@ tests =
     , testCase "a request the client rejects is never sent" rejectsOwnRequest
     , testCase "the compositor reports a protocol violation to the client" reportsViolation
     , testCase "the compositor reports a malformed message to the client" reportsMalformed
+    , testCase "Client and Server IDs don't collide" serverIDsDoNotCollide
     ]
 
 table :: ProtocolTable
@@ -86,7 +86,7 @@ rejectsOwnRequest = withSession $ \s -> do
   liftIO $ do
     ended <- tryReadMVar s.clientLoopEnded
     assertBool ("the connection ended: " <> show ended) (isNothing ended)
-    compositorObject @Wl_compositor s (TObjectID oid) >>= assertBool "the compositor has the object" . isNothing
+    compositorObject @Wl_compositor s (TObjectID $ FromClient oid) >>= assertBool "the compositor has the object" . isNothing
 
 -- | A request that breaks the protocol, sent without this side's checks, ends the connection with a @wl_display.error@.
 reportsViolation :: Assertion
@@ -119,6 +119,22 @@ data Session = Session
   , clientLoopEnded :: MVar SomeException
   -- ^ Filled when the client's event loop ends, which it only does with an exception.
   }
+
+-- | An object the compositor creates gets an ID from the server's range and does not replace one of the client's.
+serverIDsDoNotCollide :: Assertion
+serverIDsDoNotCollide = withSession $ \s -> do
+  seat <- bindToInterface @Wl_seat s.registry
+  manager <- bindToInterface @Wl_data_device_manager s.registry
+  device <- newObject manager $ \i -> Request_wl_data_device_manager_get_data_device i seat.wlid
+  roundtrip s
+  offer <- liftIO . asCompositor s $ do
+    compositorDevice <- getInterface device.wlid >>= maybe (error "the compositor has no wl_data_device") pure
+    newObject compositorDevice Event_wl_data_device_data_offer
+  roundtrip s
+  liftIO $ assertBool "the offer's ID is not in the server's range" (fromAnyObjectID (toObjectID offer.wlid) >= 0xff000000)
+  getInterface s.registry.wlid >>= liftIO . assertBool "the client's registry was replaced" . isJust
+  void $ bindToInterface @Wl_compositor s.registry -- the registry still works
+  roundtrip s
 
 -- | Run a client against a compositor. Both from this library.
 -- A test that does not finish in time fails which catches hangs.
@@ -174,15 +190,16 @@ quietUnlessDebugging logger = if logger.minLevel == LogDebug then logger else si
 roundtrip :: Session -> Wayland Client ()
 roundtrip s = newObject s.display Request_wl_display_sync >>= takeMVar . (.done)
 
+-- | Run something as the compositor, on its connection to its only client.
+asCompositor :: Session -> Wayland Server a -> IO a
+asCompositor s act =
+  readTVarIO s.compositor.clients >>= \clients -> case Map.toList clients of
+    [(serial, client)] -> usingReaderT (ClientServerEnv s.compositor client serial) act
+    _ -> assertFailure $ "the compositor has " <> show (Map.size clients) <> " clients, not 1"
+
 -- | Get an object from the compositor from its only client.
-compositorObject :: forall i. (Typeable i) => Session -> TObjectID i -> IO (Maybe i)
-compositorObject s (TObjectID oid) =
-  readTVarIO s.compositor.clients
-    >>= ( \case
-            [client] -> (proxyInterface <=< Map.lookup oid) <$> readIORef client.objects
-            clients -> assertFailure $ "the compositor has " <> show (length clients) <> " clients, not 1"
-        )
-    . Map.elems
+compositorObject :: (Typeable i) => Session -> TObjectID i -> IO (Maybe i)
+compositorObject s = asCompositor s . getInterface
 
 -- | The client's connection ends with a @wl_display.error@ about the display, with this code.
 expectProtocolError :: Session -> Enum_wl_display_error -> Assertion

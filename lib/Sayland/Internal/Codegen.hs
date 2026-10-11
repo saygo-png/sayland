@@ -380,14 +380,14 @@ mkMessages formatter interfaceName prefix events = do
   where
     prefix' = prefix <> "_" <> interfaceName
     conName x = mkName $ prefix' <> "_" <> fromJust (findAttr (qname "name") x)
-    buildBang x = (Bang NoSourceUnpackedness NoSourceStrictness, (argCodec formatter interfaceName x).argTy)
+    buildBang x = (Bang NoSourceUnpackedness NoSourceStrictness, (argCodec formatter (senderOf prefix) interfaceName x).argTy)
     buildRecord x = NormalC (conName x) $ buildBang <$> findChildren (qname "arg") x
     constructors = fmap buildRecord events
 
 mkShow :: String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkShow interfaceName prefix prefix2 events =
   mapM (mkShowC . snd) events <&> \m ->
-    [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''ObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
+    [ SigD (mkName prefix) (AppT (AppT ArrowT $ ConT ''AnyObjectID) $ AppT (AppT ArrowT $ ConT $ mkName $ prefix2 <> interfaceName) $ ConT ''String)
     , FunD (mkName prefix) $ bool m [Clause [WildP, WildP] (NormalB $ LitE $ StringL $ interfaceName <> "@?") []] (null m)
     ]
   where
@@ -429,7 +429,7 @@ mkPut formatter interfaceName prefix prefix2 events =
   where
     mkClause :: (Word16, Element) -> Q Clause
     mkClause (_opcode, element) = do
-      putters <- traverse (\a -> (argCodec formatter interfaceName a).putter) args
+      putters <- traverse (\a -> (argCodec formatter (senderOf prefix2) interfaceName a).putter) args
       pure
         $ Clause
           [ConP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) [] $ fmap (VarP . mkName . ("arg_" <>)) argNames]
@@ -457,7 +457,7 @@ mkParser formatter interfaceName prefix prefix2 events = do
     mkClause :: (Word16, Element) -> Q Clause
     mkClause (opcode, element) = do
       vars <- traverse (const $ newName "arg") args
-      let binds = zipWith (\v a -> bindS (varP v) (argCodec formatter interfaceName a).getter) vars args
+      let binds = zipWith (\v a -> bindS (varP v) (argCodec formatter (senderOf prefix2) interfaceName a).getter) vars args
           built = foldl' (\acc v -> [|$acc <*> $(varE v)|]) [|pure $(conE con)|] vars
       clause [litP . integerL $ fromIntegral opcode] (normalB . doE $ binds <> [noBindS [|pure $built|]]) []
       where
@@ -545,13 +545,17 @@ enumTypeName intName enumName =
 -- and a getter @WireGet (Either MessageError type)@ that fails on anything the type rules out.
 data ArgCodec = ArgCodec {argTy :: Type, putter :: Q Exp, getter :: Q Exp}
 
--- | The `ArgCodec` of an @\<arg\>@ of the interface with the given name.
-argCodec :: (String -> String) -> String -> Element -> ArgCodec
-argCodec formatter intName element = case findAttr (qname "enum") element of
+-- | Which side sends the messages of a @Request@ or @Event@ prefix.
+senderOf :: String -> Perspective
+senderOf prefix = if "Request" `isPrefixOf` prefix then Client else Server
+
+-- | The `ArgCodec` of an @\<arg\>@ sent by the given side, of the interface with the given name.
+argCodec :: (String -> String) -> Perspective -> String -> Element -> ArgCodec
+argCodec formatter from intName element = case findAttr (qname "enum") element of
   Just enumName -> let n = enumTypeName intName enumName in ArgCodec (ConT $ mkName n) (varE . mkName $ "put" <> n) (varE . mkName $ "get" <> n)
   Nothing -> case (findAttr (qname "type") element, findAttr (qname "interface") element, isNullable element) of
-    (Just "new_id", Just x, _) -> ArgCodec (tObject x) [|putObjectID . toObjectID|] [|bimap InvalidObjectID TObjectID <$> getObjectID|]
-    (Just "new_id", Nothing, _) -> ArgCodec (ConT ''WlNewId) [|putWlNewId|] [|first InvalidNewId <$> getWlNewId|]
+    (Just "new_id", Just x, _) -> ArgCodec (tObject x) [|putWlObjectID . Just . toObjectID|] [|bimap InvalidObjectID (TObjectID . $fromCon) <$> getObjectID|]
+    (Just "new_id", Nothing, _) -> ArgCodec (AppT (ConT ''WlNewId) fromT) [|putWlNewId|] [|first InvalidNewId <$> getWlNewId|]
     (Just "int", _, _) -> mayRunOut ''WlInt [|putWlInt|] [|getWlInt|]
     (Just "uint", _, _) -> mayRunOut ''WlUInt [|putWlUInt|] [|getWlUInt|]
     (Just "fixed", _, _) -> mayRunOut ''WlFixed [|putWlFixed|] [|getWlFixed|]
@@ -560,12 +564,16 @@ argCodec formatter intName element = case findAttr (qname "enum") element of
     (Just "string", _, True) -> ArgCodec (ConT ''WlString) [|putWlString|] [|first InvalidString <$> getWlString|]
     (Just "string", _, False) -> ArgCodec (ConT ''WlText) [|putWlString . Just|] [|(>>= maybe (Left NullString) Right) . first InvalidString <$> getWlString|]
     (Just "object", Just x, True) -> ArgCodec (AppT (ConT ''Maybe) $ tObject x) [|putWlObjectID . fmap toObjectID|] [|bimap BodyTooShort (fmap TObjectID) <$> getWlObjectID|]
-    (Just "object", Just x, False) -> ArgCodec (tObject x) [|putObjectID . toObjectID|] [|bimap InvalidObjectID TObjectID <$> getObjectID|]
+    (Just "object", Just x, False) -> ArgCodec (tObject x) [|putWlObjectID . Just . toObjectID|] [|bimap InvalidObjectID TObjectID <$> getAnyObjectID|]
     (Just "object", Nothing, True) -> mayRunOut ''WlObjectID [|putWlObjectID|] [|getWlObjectID|]
-    (Just "object", Nothing, False) -> ArgCodec (ConT ''ObjectID) [|putObjectID|] [|first InvalidObjectID <$> getObjectID|]
+    (Just "object", Nothing, False) -> ArgCodec (ConT ''AnyObjectID) [|putWlObjectID . Just|] [|first InvalidObjectID <$> getAnyObjectID|]
     _ -> error $ "sayland: unsupported arg " <> show element
   where
     tObject = AppT (ConT ''TObjectID) . ConT . mkName . formatter
+    -- A @new_id@ is in the range of the side that sends it.
+    (fromCon, fromT) = case from of
+      Client -> (conE 'FromClient, PromotedT 'Client)
+      Server -> (conE 'FromServer, PromotedT 'Server)
     -- A getter that can only run out of bytes.
     mayRunOut ty p g = ArgCodec (ConT ty) p [|first BodyTooShort <$> $g|]
 

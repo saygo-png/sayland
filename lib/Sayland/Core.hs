@@ -1,7 +1,6 @@
 -- | Description : Core of the library that most other modules depend on.
 module Sayland.Core (
   Wayland,
-  Perspective (..),
   GlobalName (..),
   Object (..),
   TObjectID,

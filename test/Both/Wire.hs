@@ -24,7 +24,7 @@ tests =
     , testProperty "wl_string roundtrip" $ prop_roundtrip putWlString getWlString
     , testProperty "wl_array roundtrip" $ prop_roundtrip putWlArray getWlArray
     , testProperty "wl_fd roundtrip" $ prop_roundtrip putWlFd (maybeToRight ("missing fd" :: String) <$> getWlFd)
-    , testProperty "wl_new_id roundtrip" $ prop_roundtrip putWlNewId getWlNewId
+    , testProperty "wl_new_id roundtrip" $ prop_roundtrip putWlNewId (getWlNewId @Client)
     , testProperty "wl_object roundtrip, null included" $ prop_roundtrip putWlObjectID getWlObjectID
     , testProperty "the null object is 0 on the wire" prop_nullObject
     , testProperty "wl_new_id rejects a null interface name or ID" prop_newIdRejectsNull
@@ -59,7 +59,7 @@ prop_nullObject =
   once
     $ conjoin
       [ decode getWlObjectID === Right Nothing
-      , decode getObjectID === Left ObjectIDIsNul
+      , decode getAnyObjectID === Left ObjectIDIsNul
       , encodeWire putWlObjectID Nothing === word32le 0
       ]
   where
@@ -67,12 +67,12 @@ prop_nullObject =
     decode getter = let (decoded, _, _) = runWireGet getter [] (word32le 0) in decoded
 
 -- | A @new_id@ of no fixed interface names an interface and creates an object, so neither can be null.
-prop_newIdRejectsNull :: WlText -> WlUInt -> ObjectID -> Property
+prop_newIdRejectsNull :: WlText -> WlUInt -> ObjectID Client -> Property
 prop_newIdRejectsNull name version oid =
   decode (putWlString Nothing >> putWlUInt version >> putObjectID oid) === Left NewIdNullName
-    .&&. decode (putWlString (Just name) >> putWlUInt version >> putWlUInt 0) === Left (NewIdObjectID ObjectIDIsNul)
+    .&&. decode (putWlString (Just name) >> putWlUInt version >> putWlUInt 0) === Left (NewIdObjectID (ObjectIDOutOfRange 0))
   where
-    decode p = let (decoded, _, _) = runWireGet getWlNewId [] (fst (runWirePut p)) in decoded
+    decode p = let (decoded, _, _) = runWireGet (getWlNewId @Client) [] (fst (runWirePut p)) in decoded
 
 -- | Several fds are sent alongside the bytes in the order they were put, and are taken back in that order.
 prop_fdOrder :: [WlFd] -> Property
@@ -95,7 +95,7 @@ truncatedTests =
     [ testProperty "wl_uint" $ prop_truncated putWlUInt getWlUInt
     , testProperty "wl_string" $ prop_truncated putWlString getWlString
     , testProperty "wl_array" $ prop_truncated putWlArray getWlArray
-    , testProperty "wl_new_id" $ prop_truncated putWlNewId getWlNewId
+    , testProperty "wl_new_id" $ prop_truncated putWlNewId (getWlNewId @Client)
     ]
 
 prop_truncated :: (Show a, Show e) => (a -> WirePut ()) -> WireGet (Either e a) -> a -> Property
@@ -106,7 +106,7 @@ prop_truncated putter getter x =
   where
     (bytes, fds) = runWirePut (putter x)
 
-prop_header :: ObjectID -> Word16 -> [Word8] -> Property
+prop_header :: AnyObjectID -> Word16 -> [Word8] -> Property
 prop_header objectID opcode body =
   runWireGet getHeader [] (encodeMessage objectID opcode payload)
     === (Right (Just objectID, opcode, size), payload, [])
@@ -114,7 +114,7 @@ prop_header objectID opcode body =
     payload = BS.pack body
     size = headerSize + fromIntegral (BS.length payload)
 
-prop_message :: ObjectID -> Word16 -> Body -> Property
+prop_message :: AnyObjectID -> Word16 -> Body -> Property
 prop_message objectID opcode (Body body) =
   decodeMessage encodedMsg === Right (Just objectID, opcode, body, "")
   where
@@ -122,7 +122,7 @@ prop_message objectID opcode (Body body) =
 
 -- | A message whose header has arrived but whose body has not fully arrived yet must not decode.
 -- The test keeps only the first @kept@ bytes of a message, anywhere from just the header to all but the last byte.
-prop_decodePartial :: ObjectID -> Word16 -> Property
+prop_decodePartial :: AnyObjectID -> Word16 -> Property
 prop_decodePartial objectID opcode =
   forAllShrink (arbitrary `suchThat` hasBytes) (filter hasBytes . shrink) $ \(Body body) ->
     let encodedMsg = encodeMessage objectID opcode body
@@ -136,23 +136,23 @@ prop_decodePartialHeader :: [Word8] -> Property
 prop_decodePartialHeader bytes = decodeMessage (BS.pack (take (fromIntegral headerSize - 1) bytes)) === Left Incomplete
 
 -- | A header claiming any size, unlike `encodeMessage` which derives it from the body.
-header :: ObjectID -> Word16 -> Word16 -> BS.ByteString
+header :: AnyObjectID -> Word16 -> Word16 -> BS.ByteString
 header objectID opcode size = fst . runWirePut $ putHeader (objectID, opcode, size)
 
 -- | A size smaller than the header itself is malformed, whatever follows it.
-prop_decodeTooSmall :: ObjectID -> Word16 -> [Word8] -> Property
+prop_decodeTooSmall :: AnyObjectID -> Word16 -> [Word8] -> Property
 prop_decodeTooSmall objectID opcode trailing =
   forAll (chooseEnum (0, headerSize - 1)) $ \size ->
     decodeMessage (header objectID opcode size <> BS.pack trailing) === Left (InvalidSize $ SizeTooSmall size)
 
 -- | Arguments are all multiples of 4 bytes, so a size that isn't is malformed.
-prop_decodeUnaligned :: ObjectID -> Word16 -> Property
+prop_decodeUnaligned :: AnyObjectID -> Word16 -> Property
 prop_decodeUnaligned objectID opcode =
   forAll (chooseEnum (headerSize, 256) `suchThat` \s -> s `mod` 4 /= 0) $ \size ->
     decodeMessage (header objectID opcode size <> BS.replicate (fromIntegral size) 0) === Left (InvalidSize $ SizeUnaligned size)
 
 -- | Messages arrive back to back in one stream, and come out one at a time, in order.
-prop_decodeStream :: [(ObjectID, Word16, Body)] -> Property
+prop_decodeStream :: [(AnyObjectID, Word16, Body)] -> Property
 prop_decodeStream msgs =
   decodeAll (foldMap (\(o, op, Body b) -> encodeMessage o op b) msgs) === Right [(Just o, op, b) | (o, op, Body b) <- msgs]
   where
@@ -288,9 +288,13 @@ instance Arbitrary Body where
   shrink (Body b) = [Body (BS.take n b) | n <- [0, 4 .. BS.length b - 4]]
 
 -- | Never the null object.
-instance Arbitrary ObjectID where
+instance Arbitrary AnyObjectID where
   arbitrary = arbitrary `suchThatMap` mkWlObjectID
-  shrink oid = mapMaybe mkWlObjectID (shrink (fromObjectID oid))
+  shrink oid = mapMaybe mkWlObjectID (shrink (fromAnyObjectID oid))
+
+instance Arbitrary (ObjectID Client) where
+  arbitrary = arbitrary `suchThatMap` objectID
+  shrink oid = mapMaybe objectID (shrink (fromObjectID oid))
 
 instance Arbitrary WlInt where
   arbitrary = WlInt <$> arbitrary
@@ -313,7 +317,7 @@ instance Arbitrary WlFd where
   arbitrary = WlFd . Fd . fromIntegral <$> chooseInt (0, 1023)
   shrink _ = []
 
-instance Arbitrary WlNewId where
+instance Arbitrary (WlNewId Client) where
   arbitrary = WlNewId <$> arbitrary <*> arbitrary <*> arbitrary
   shrink (WlNewId n v i) = [WlNewId n' v' i' | (n', v', i') <- shrink (n, v, i)]
 

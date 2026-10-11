@@ -26,13 +26,13 @@ import System.IO.Error (isResourceVanishedError)
 import System.Posix (Fd)
 
 -- | Type representing an `objectID` of a certain object.
-newtype TObjectID (a :: Type) = TObjectID ObjectID deriving newtype (Show, Eq, Ord)
+newtype TObjectID (a :: Type) = TObjectID AnyObjectID deriving newtype (Show, Eq, Ord)
 
 type role TObjectID phantom
 
 -- | Internal class for converting shit to a rawObjectID.
 class ToObjectID o where
-  toObjectID :: o -> ObjectID
+  toObjectID :: o -> AnyObjectID
 
 instance ToObjectID (TObjectID a) where
   toObjectID = coerce
@@ -53,11 +53,6 @@ class (Object i) => Global i where
   global :: TObjectID i -> IO i
   default global :: (Coercible (TObjectID i) i) => TObjectID i -> IO i
   global = pure . coerce
-
--- | Sum type representing a perspective.
--- Used to make things reusable for clients and servers (compositors).
-data Perspective = Client | Server
-  deriving stock (Eq)
 
 -- | Incoming message to Client/Server's object
 type Incoming :: Perspective -> Type -> Type
@@ -94,21 +89,26 @@ class KnownPerspective (p :: Perspective) where
   -- | Typeclass bs. Bring the 'Message' instance of the messages this side receives for @i@ into scope.
   withIncoming :: (Object i) => i -> ((Message (Incoming p i)) => Wayland p r) -> Wayland p r
 
+  -- | An ID this side allocated, as an `AnyObjectID`.
+  toAnyObjectID :: ObjectID p -> AnyObjectID
+
 instance KnownPerspective Client where
   applyIncoming = onEvent
   applyOutgoing = onRequest
   withIncoming _ k = k -- Incoming Client i = Event i, Message via Interface
+  toAnyObjectID = FromClient
 
 instance KnownPerspective Server where
   applyIncoming = onRequest
   applyOutgoing = onEvent
   withIncoming _ k = k -- Incoming Server i = Request i, Message via Interface
+  toAnyObjectID = FromServer
 
 type role EventHandler nominal
 
 -- | EventHandlers, called whenever an event is received.
 data EventHandler p where
-  EventHandler :: (Typeable m, Message m) => (ObjectID -> m -> Wayland p ()) -> EventHandler p
+  EventHandler :: (Typeable m, Message m) => (AnyObjectID -> m -> Wayland p ()) -> EventHandler p
 
 -- | Class defining an Interface as a collection of events and requests which has a `TObjectID`, version and name.
 -- This does not include implementations of events and requests which are supplied by `Interface`.
@@ -137,7 +137,7 @@ class (Typeable m) => Message m where
 
   putMessage :: m -> WirePut ()
   getOpcode :: m -> Word16
-  showMessage :: ObjectID -> m -> String
+  showMessage :: AnyObjectID -> m -> String
 
 -- | What decoding a message body can get wrong.
 -- Wraps the errors of the wire getters and adds protocol based errors.
@@ -175,7 +175,7 @@ runGetMessage opcode fds body = case runWireGet (getMessage opcode) fds body of
 -- | Everything needed to advertise and construct one interface.
 data InterfaceEntry = InterfaceEntry
   { version :: WlUInt
-  , construct :: ObjectID -> IO SomeObject
+  , construct :: AnyObjectID -> IO SomeObject
   }
 
 type ProtocolTable = [(WlText, InterfaceEntry)]
@@ -212,9 +212,9 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
   -- ^ Socket the client connects to.
   , writeLock :: MVar ()
   -- ^ write lock used to avoid race conditions.
-  , counter :: IORef ObjectID
-  -- ^ Mutable counter used to derive `objectID`s with increasing values.
-  , objects :: IORef (Map ObjectID SomeObject)
+  , counter :: IORef (Maybe (ObjectID p))
+  -- ^ The next `ObjectID` this side allocates. `Nothing` once its range is used up.
+  , objects :: IORef (Map AnyObjectID SomeObject)
   -- ^ Mutable `Map` of `objectID`s to interfaces they represent.
   , globals :: IORef (Map GlobalName (WlText, WlUInt))
   -- ^ `Map` of global interfaces and their versions advertised by a compositor.
@@ -388,7 +388,7 @@ logWarn = logAt LogWarn
 logError = logAt LogError
 
 -- | Log a message that went over the wire in the given direction, at `LogDebug`.
-logMessage :: (Message m) => Direction -> ObjectID -> m -> Wayland p ()
+logMessage :: (Message m) => Direction -> AnyObjectID -> m -> Wayland p ()
 logMessage direction oid msg = do
   (logger, client) <- getLogger
   when (LogDebug >= logger.minLevel) . liftIO . logger.writeMessage direction client $ showMessage oid msg
