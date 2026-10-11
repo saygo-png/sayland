@@ -8,7 +8,6 @@ import Data.Binary.Put (putWord32le, runPut)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as BSL
 import Relude
-import Sayland.Internal.Wire (WlText (..))
 import Sayland.Wire
 import System.Posix (Fd (Fd))
 import Test.Tasty
@@ -276,7 +275,7 @@ notSurrogate c = c < '\xD800' || c > '\xDFFF'
 -- representable on the wire. Never generate one, and never shrink towards one.
 instance Arbitrary WlText where
   arbitrary = contentsText <$> arbitrary
-  shrink (WlText t) = contentsText <$> shrink (StringContents (toString t))
+  shrink w = contentsText <$> shrink (StringContents (toString (fromWlText w)))
 
 -- }}}
 

@@ -13,7 +13,7 @@ import GHC.IO.Handle (hFlush)
 import Network.Socket
 import Relude hiding (hFlush)
 import Sayland
-import Sayland.Internal.Core (InvalidMessage, ProtocolError (..), TObjectID (..), catchW, errorCode, sendMessage)
+import Sayland.Internal.Core (TObjectID (..), sendMessage)
 import System.Directory (createDirectory, getTemporaryDirectory, removeDirectoryRecursive)
 import System.Posix (ShmOpenFlags (..), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import System.Random (randomIO)
@@ -105,7 +105,7 @@ reportsMalformed = withSession $ \s -> do
   ClientEnv env <- ask
   -- wl_display.sync, with the null object for its callback.
   takeMVar env.writeLock
-  liftIO $ sendRaw env.socket (coerce s.display.wlid) 0 (putWlUInt 0)
+  liftIO $ sendRaw env.socket (toObjectID s.display.wlid) 0 (putWlUInt 0)
   liftIO $ expectProtocolError s Err_invalid_method
   putMVar env.writeLock ()
 
@@ -213,7 +213,7 @@ expectProtocolError s code = do
   ended <- takeMVar s.clientLoopEnded
   case fromException ended of
     Just (e :: ProtocolError) -> do
-      e.object @?= Just (coerce s.display.wlid)
+      e.object @?= Just (toObjectID s.display.wlid)
       e.code @?= errorCode code
     Nothing -> assertFailure $ "the connection ended with something else: " <> displayException ended
 

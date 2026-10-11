@@ -98,6 +98,10 @@ wlText text = case T.findIndex (== '\0') text of
 wlTextLossy :: Text -> WlText
 wlTextLossy = WlText . T.map (\ch -> if ch == '\0' then '\xFFFD' else ch)
 
+-- | The `Text` of a `WlText`.
+fromWlText :: WlText -> Text
+fromWlText (WlText text) = text
+
 -- | Wayland @string@.
 -- UTF-8 encoded Text, prefixed with a 32-bit integer specifying its length (in bytes), followed by the string contents and a NUL terminator, padded to 32 bits with zero bytes.
 -- The `Maybe` represents nullability. A `Nothing` value is a null string of len 0.

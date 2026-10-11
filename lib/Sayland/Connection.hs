@@ -17,10 +17,10 @@ import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
 import Network.Socket
 import Sayland.Internal.Core
-import Sayland.Internal.Object
 import Sayland.Internal.Prelude
 import Sayland.Internal.Protocols.Wayland
 import Sayland.Log
+import Sayland.Object (sendMsg)
 import Sayland.Wire
 
 -- Listeners {{{
