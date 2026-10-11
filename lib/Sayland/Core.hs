@@ -23,6 +23,7 @@ module Sayland.Core (
   Strictness (..),
   Culprit (..),
   Severity (..),
+  toObjectID,
   getStrictness,
   protocolViolation,
   logDebug,
