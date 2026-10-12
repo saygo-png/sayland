@@ -46,7 +46,7 @@ bindsGlobals = withSession $ \s -> do
   shm <- bindToInterface @Wl_shm s.registry
   wl_compositor <- bindToInterface @Wl_compositor s.registry
   surface <- newObject wl_compositor Request_wl_compositor_create_surface
-  roundtrip s
+  roundtrip
   liftIO $ do
     compositorObject s shm.wlid >>= assertBool "the compositor has no wl_shm" . isJust
     compositorObject s surface.wlid >>= assertBool "the compositor has no wl_surface" . isJust
@@ -66,7 +66,7 @@ passesFd = withSession $ \s -> do
     pool <- newObject shm $ \i -> Request_wl_shm_create_pool i (WlFd fd) (fromIntegral size)
     handle <- liftIO $ fdToHandle fd
     liftIO $ BS.hPut handle (BS.pack pixels) >> hFlush handle
-    roundtrip s
+    roundtrip
     compositorPool <- liftIO $ compositorObject s pool.wlid
     case compositorPool of
       Nothing -> liftIO $ assertFailure "the compositor has no wl_shm_pool"
@@ -82,7 +82,7 @@ rejectsOwnRequest = withSession $ \s -> do
     (Nothing <$ sendMsg s.registry (Request_wl_registry_bind 999 (WlNewId [wl|wl_compositor|] 1 oid)))
       `catchW` \(e :: InvalidMessage) -> pure (Just e)
   liftIO $ assertBool "the bind of a global that was never advertised was sent" (isJust rejected)
-  roundtrip s
+  roundtrip
   liftIO $ do
     ended <- tryReadMVar s.clientLoopEnded
     assertBool ("the connection ended: " <> show ended) (isNothing ended)
@@ -126,15 +126,15 @@ serverIDsDoNotCollide = withSession $ \s -> do
   seat <- bindToInterface @Wl_seat s.registry
   manager <- bindToInterface @Wl_data_device_manager s.registry
   device <- newObject manager $ \i -> Request_wl_data_device_manager_get_data_device i seat.wlid
-  roundtrip s
+  roundtrip
   offer <- liftIO . asCompositor s $ do
     compositorDevice <- getInterface device.wlid >>= maybe (error "the compositor has no wl_data_device") pure
     newObject compositorDevice Event_wl_data_device_data_offer
-  roundtrip s
+  roundtrip
   liftIO $ assertBool "the offer's ID is not in the server's range" (fromAnyObjectID (toObjectID offer.wlid) >= 0xff000000)
   getInterface s.registry.wlid >>= liftIO . assertBool "the client's registry was replaced" . isJust
   void $ bindToInterface @Wl_compositor s.registry -- the registry still works
-  roundtrip s
+  roundtrip
 
 -- | A new object with the ID of an object that still exists ends the connection, instead of replacing that object.
 rejectsReusedID :: Assertion
@@ -165,7 +165,7 @@ withSession test = do
             display <- getWlDisplay
             registry <- newObject display Request_wl_display_get_registry
             let session = Session{compositor, display, registry, clientLoopEnded}
-            roundtrip session
+            roundtrip
             test session
   maybe (assertFailure "timed out") pure finished
   where
@@ -191,10 +191,6 @@ serverEnvironment sock socketPath = do
 -- and the errors the compositor logs for that would garble the test report.
 quietUnlessDebugging :: Logger -> Logger
 quietUnlessDebugging logger = if logger.minLevel == LogDebug then logger else silentLogger
-
--- | Wait until the compositor has handled every request sent before: Wayland's own round trip.
-roundtrip :: Session -> Wayland Client ()
-roundtrip s = newObject s.display Request_wl_display_sync >>= takeMVar . (.done)
 
 -- | Run something as the compositor, on its connection to its only client.
 asCompositor :: Session -> Wayland Server a -> IO a

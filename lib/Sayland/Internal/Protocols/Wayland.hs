@@ -994,8 +994,13 @@ instance Object Wl_fixes where
 
 -- Wrapper Functions, for QoL {{{
 
+-- | Wait until the compositor has handled every request sent before this, like libwayland's @wl_display_roundtrip@.
+-- The event loop must be running in another thread, as it delivers the reply.
+roundtrip :: Wayland Client ()
+roundtrip = newObject (Wl_display wlDisplayId) Request_wl_display_sync >>= takeMVar . (.done)
+
 -- | Bind the first advertised global of an interface. Throws t'MissingGlobal' if the global isn't advertised.
--- **This function does not check if all global announcements have arrived**! You probably want to use `Request_wl_display_sync` beforehand.
+-- **This function does not check if all global announcements have arrived**! You probably want to use `roundtrip` beforehand.
 -- That will make the server confirm when its done sending globals.
 -- Use `tryBindToInterface` for a version returning Maybe instead of throwing.
 bindToInterface :: forall i. (Global i) => Wl_registry -> Wayland Client i

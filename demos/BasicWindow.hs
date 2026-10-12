@@ -42,8 +42,7 @@ program = do
       (close env.socket >> putMVar running ())
 
   -- Round trip, so the registry has advertised its globals before binding to them.
-  callback <- newObject display Request_wl_display_sync
-  takeMVar callback.done
+  roundtrip
 
   putStrLn "Binding to required interfaces..."
   wl_shm <- bindToInterface @Wl_shm registry
