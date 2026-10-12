@@ -64,18 +64,6 @@ getBytes n = State.state $ \(bytes, fds) ->
 getHostWord :: Int -> Get a -> WireGet (Either NotEnoughBytes a)
 getHostWord n getter = fmap (runGet getter . BS.fromStrict) <$> getBytes n
 
--- | Like `getWord32host`, but t'NotEnoughBytes' instead of failing.
-getWord32HostSafe :: WireGet (Either NotEnoughBytes Word32)
-getWord32HostSafe = getHostWord 4 getWord32host
-
--- | Like `getInt32host`, but t'NotEnoughBytes' instead of failing.
-getInt32HostSafe :: WireGet (Either NotEnoughBytes Int32)
-getInt32HostSafe = getHostWord 4 getInt32host
-
--- | Like `getWord16host`, but t'NotEnoughBytes' instead of failing.
-getWord16HostSafe :: WireGet (Either NotEnoughBytes Word16)
-getWord16HostSafe = getHostWord 2 getWord16host
-
 -- | Wayland @int@. 32-bit signed integer.
 newtype WlInt = WlInt Int32 deriving newtype (Show, Eq, Ord, Num, Integral, Enum, Real)
 
@@ -183,7 +171,7 @@ putWlUInt (WlUInt w) = lift (putWord32host w)
 
 -- | Get a t'WlUInt'.
 getWlUInt :: WireGet (Either NotEnoughBytes WlUInt)
-getWlUInt = fmap WlUInt <$> getWord32HostSafe
+getWlUInt = fmap WlUInt <$> getHostWord 4 getWord32host
 
 -- | Put a t'WlInt'.
 putWlInt :: WlInt -> WirePut ()
@@ -191,7 +179,7 @@ putWlInt (WlInt w) = lift (putInt32host w)
 
 -- | Get a t'WlInt'.
 getWlInt :: WireGet (Either NotEnoughBytes WlInt)
-getWlInt = fmap WlInt <$> getInt32HostSafe
+getWlInt = fmap WlInt <$> getHostWord 4 getInt32host
 
 -- | Put a t'WlFixed'.
 putWlFixed :: WlFixed -> WirePut ()
@@ -199,7 +187,7 @@ putWlFixed (WlFixed w) = lift (putInt32host w)
 
 -- | Get a t'WlFixed'.
 getWlFixed :: WireGet (Either NotEnoughBytes WlFixed)
-getWlFixed = fmap WlFixed <$> getInt32HostSafe
+getWlFixed = fmap WlFixed <$> getHostWord 4 getInt32host
 
 -- | Put a t'WlArray', padded to 4 bytes.
 putWlArray :: WlArray -> WirePut ()
@@ -298,8 +286,8 @@ headerSize = 8
 getHeader :: WireGet (Either NotEnoughBytes (WlObjectID, Word16, Word16))
 getHeader = do
   oid <- getWlObjectID
-  opcode <- getWord16HostSafe
-  size <- getWord16HostSafe
+  opcode <- getHostWord 2 getWord16host
+  size <- getHostWord 2 getWord16host
   pure ((,,) <$> oid <*> opcode <*> size)
 
 -- | `WirePut` a Wayland header. Reverses `getHeader`.
