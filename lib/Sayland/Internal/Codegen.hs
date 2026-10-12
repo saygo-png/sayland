@@ -407,7 +407,7 @@ mkShow interfaceName prefix prefix2 events =
     mkShowC e = do
       oid <- newName "oid"
       vars <- traverse newName argNames
-      let header = [|$(stringE $ interfaceName <> "@") <> show $(varE oid) <> $(stringE $ "." <> eventName)|]
+      let header = [|$(stringE $ interfaceName <> "#") <> show (fromAnyObjectID $(varE oid)) <> $(stringE $ "." <> eventName)|]
           field (n, v) = [|$(stringE $ n <> ": ") <> show $(varE v)|]
           fields = [|" { " <> L.intercalate ", " $(listE $ field <$> zip argNames vars) <> " }"|]
       clause [varP oid, conP (mkName $ prefix2 <> interfaceName <> "_" <> eventName) (varP <$> vars)] (normalB $ bool [|$header <> $fields|] header (null argNames)) []
