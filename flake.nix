@@ -56,19 +56,27 @@
 
     formatter = eachSystem (_system: pkgs: (treefmt-nix.lib.evalModule pkgs ./treefmt.nix).config.build.wrapper);
 
-    devShells = eachSystem (system: pkgs: {
+    devShells = eachSystem (system: pkgs: let
+      ghcPackages = pkgs.haskell.packages.ghc912;
+    in {
       default = pkgs.mkShell {
         shellHook = ''
           ${self.checks.${system}.pre-commit-check.shellHook}
         '';
-        packages = let
-          ghcPackages = pkgs.haskell.packages.ghc912;
-        in [
+        packages = [
           self.formatter.${system}
           pkgs.zlib
           ghcPackages.cabal-install
           ghcPackages.ghc
           ghcPackages.haskell-language-server
+        ];
+      };
+
+      # Minimum for building docs. For CI.
+      docs = pkgs.mkShell {
+        packages = [
+          pkgs.cabal-install
+          ghcPackages.ghc
         ];
       };
     });

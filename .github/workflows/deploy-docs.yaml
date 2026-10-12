@@ -21,28 +21,44 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # One known place for cabal's package index and store, so they can be cached.
+      - name: Set cabal directory
+        run: echo "CABAL_DIR=$RUNNER_TEMP/cabal" >> "$GITHUB_ENV"
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
+      # GHC and cabal come prebuilt from cache.nixos.org, so the Nix store is not cached here.
       - uses: DeterminateSystems/nix-installer-action@main
         with:
           determinate: false
 
-      - name: Cache cabal store
-        uses: actions/cache@v4
+      - name: Restore cabal store
+        id: cabal-cache
+        uses: actions/cache/restore@v4
         with:
-          path: |
-            ~/.cache/cabal/packages
-            ~/.local/state/cabal/store
-          key: cabal-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project.freeze', '*.cabal') }}
+          path: ${{ env.CABAL_DIR }}
+          # The GHC version comes from flake.lock, the dependency versions from the freeze file.
+          key: cabal-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project', 'cabal.project.freeze', '*.cabal') }}
           restore-keys: cabal-${{ runner.os }}-
 
-      - name: Build website
+      - name: Build dependencies
         run: |
-          nix develop --accept-flake-config --command bash -c '
+          nix develop .#docs --accept-flake-config --command bash -c '
             cabal update
-            cabal run genHaddocks -- publish
+            cabal build --only-dependencies lib:sayland lib:sayland-wire exe:genHaddocks
           '
+
+      # Saved right after the dependencies are built, so a failing docs build does not throw them away.
+      - name: Save cabal store
+        if: steps.cabal-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CABAL_DIR }}
+          key: ${{ steps.cabal-cache.outputs.cache-primary-key }}
+
+      - name: Build website
+        run: nix develop .#docs --accept-flake-config --command cabal run genHaddocks -- publish
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
