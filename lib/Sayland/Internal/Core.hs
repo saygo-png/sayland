@@ -288,7 +288,7 @@ instance Exception MissingGlobal where
 
 -- | The connection could not be made or was lost.
 data ConnectionError
-  = NoSocket FilePath
+  = NoSocket String
   | Disconnected
   deriving stock (Show)
   deriving anyclass (Exception)

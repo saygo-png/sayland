@@ -118,7 +118,7 @@ waylandSetup protocolTable =
       env <- waylandConnect protocolTable path
       runReaderT (logDebug $ "connected to " <> show path) env
       pure env
-    Nothing -> error "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."
+    Nothing -> throwIO $ NoSocket "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."
 
 -- | Create a server listening on a free socket name in @XDG_RUNTIME_DIR@, like @wayland-0@.
 -- Accept its clients with `listenForClients`, and close it with `waylandServerClose`.
@@ -129,7 +129,7 @@ waylandServerSetup protocolTable =
       env <- waylandListen protocolTable path
       logWith env.serverLogger LogDebug Nothing $ "listening on " <> show path
       pure env
-    Nothing -> error "couldn't find `$XDG_RUNTIME_DIR`, nor a free socket name in it."
+    Nothing -> throwIO $ NoSocket "couldn't find `$XDG_RUNTIME_DIR`, nor a free socket name in it."
 
 -- | Create a server listening on a new socket at the given path.
 waylandListen :: ProtocolTable -> FilePath -> IO ServerEnv
