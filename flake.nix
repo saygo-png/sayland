@@ -66,7 +66,7 @@
         packages = [
           self.formatter.${system}
           pkgs.zlib
-          ghcPackages.cabal-install
+          pkgs.cabal-install # Uses pkgs as Cabal don't care about ghc and its cached in nixpkgs.
           ghcPackages.ghc
           ghcPackages.haskell-language-server
         ];
