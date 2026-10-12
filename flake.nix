@@ -39,7 +39,6 @@
       sayland = pkgs.callPackage ./package.nix {niceHaskell = niceHaskell.outputs.niceHaskell.${system};};
     in {
       inherit sayland;
-      sayland-with-docs = sayland.override {doHaddock = true;};
       default = sayland;
     });
 

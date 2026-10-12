@@ -32,6 +32,7 @@ type role TObjectID phantom
 
 -- | Internal class for converting shit to a rawObjectID.
 class ToObjectID o where
+  -- | The ID of an object, or of a t'TObjectID'.
   toObjectID :: o -> AnyObjectID
 
 instance ToObjectID (TObjectID a) where
@@ -49,7 +50,9 @@ type Wayland p = ReaderT (WaylandEnv p) IO
 newtype GlobalName = GlobalName WlUInt
   deriving newtype (Show, Eq, Ord, Num)
 
+-- | An interface a compositor advertises as a global, which clients bind with @wl_registry.bind@.
 class (Object i) => Global i where
+  -- | Construct the object bound to this ID. The default suits interfaces whose only field is @wlid@.
   global :: TObjectID i -> IO i
   default global :: (Coercible (TObjectID i) i) => TObjectID i -> IO i
   global = pure . coerce
@@ -110,7 +113,7 @@ type role EventHandler nominal
 data EventHandler p where
   EventHandler :: (Typeable m, Message m) => (AnyObjectID -> m -> Wayland p ()) -> EventHandler p
 
--- | Class defining an Interface as a collection of events and requests which has a `TObjectID`, version and name.
+-- | Class defining an Interface as a collection of events and requests which has a t'TObjectID', version and name.
 -- This does not include implementations of events and requests which are supplied by `Interface`.
 class
   ( Message (Event a)
@@ -120,8 +123,12 @@ class
   ) =>
   Interface a
   where
+  -- | The events of the interface, sent by the server.
   type Event a = r | r -> a
+
+  -- | The requests of the interface, sent by the client.
   type Request a = r | r -> a
+
   getInterfaceVersion :: Proxy a -> WlUInt
   getInterfaceName :: Proxy a -> WlText
 
@@ -129,14 +136,21 @@ class
 data SomeObject where
   SomeObject :: (Object i) => i -> SomeObject
 
+-- | The events or the requests of an interface, which go over the wire.
 class (Typeable m) => Message m where
+  -- | Which side sends the message.
   sender :: m -> Perspective
 
   -- | Get the message with this opcode.
   getMessage :: Word16 -> WireGet (Either MessageError m)
 
+  -- | Put the message's arguments.
   putMessage :: m -> WirePut ()
+
+  -- | The opcode of the message.
   getOpcode :: m -> Word16
+
+  -- | Show the message as sent to the given object, for logs.
   showMessage :: AnyObjectID -> m -> String
 
 -- | What decoding a message body can get wrong.
@@ -178,6 +192,8 @@ data InterfaceEntry = InterfaceEntry
   , construct :: AnyObjectID -> IO SomeObject
   }
 
+-- | The interfaces of a protocol by name. Each protocol module generates one, like @waylandTable@.
+-- Combine them with '<>'.
 type ProtocolTable = [(WlText, InterfaceEntry)]
 
 type role WaylandEnv nominal
@@ -233,7 +249,7 @@ data ClientEnvironment (p :: Perspective) = ClientEnvironment
   }
 
 -- | Error saying: The connection is over. The peer reported a violation with @wl_display.error@,
--- or sent something invalid. This represents a wire value so it only carries wire types. (no `TObjectID` or `ErrorCode`)
+-- or sent something invalid. This represents a wire value so it only carries wire types. (no t'TObjectID' or `ErrorCode`)
 data ProtocolError = ProtocolError
   { object :: WlObjectID
   , code :: WlUInt
@@ -324,8 +340,8 @@ data Severity r where
 
 -- | Report that a message broke the protocol. The one place handlers report protocol errors.
 --
--- A rejected violation throws a `ProtocolError`. In the peer's message that ends the connection.
--- In this side's own message, `sendMsg` turns it into an `InvalidMessage` and nothing is sent.
+-- A rejected violation throws a t'ProtocolError'. In the peer's message that ends the connection.
+-- In this side's own message, 'Sayland.Object.sendMsg' turns it into an t'InvalidMessage' and nothing is sent.
 --
 -- > Event_wl_display_delete_id n -> case mkWlObjectID n of
 -- >   Just oid -> forget oid

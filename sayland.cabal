@@ -126,6 +126,8 @@ executable genHaddocks
   main-is: GenHaddocks.hs
   build-depends:
     base,
+    directory,
+    filepath,
     process,
     text,
 

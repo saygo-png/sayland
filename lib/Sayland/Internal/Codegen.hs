@@ -18,7 +18,7 @@ import Data.Char (isSpace, toUpper)
 import Data.Functor
 import Data.List
 import Data.List qualified as L
-import Data.Maybe (catMaybes, fromJust)
+import Data.Maybe (catMaybes, fromJust, fromMaybe)
 import Data.Proxy
 import Data.String
 import GHC.Generics (Generic)
@@ -32,6 +32,7 @@ import Sayland.Wire
 import Text.Show qualified
 import Text.XML.Light
 
+-- | An XML name without a namespace.
 qname :: String -> QName
 qname x = QName x Nothing Nothing
 
@@ -91,6 +92,7 @@ generateProtocolTable e formatter = do
       filterM (\n -> lookupTypeName (formatter n) >>= maybe (pure False) isImplemented) globals
   instances <- concat <$> traverse globalInstance implementedGlobals
   defs <- traverse entry implementedGlobals
+  docDecl tname . Just $ "The implemented globals of the @" <> protocol <> "@ protocol, to advertise and bind."
   pure
     $ instances
     <> [ SigD tname (ConT ''ProtocolTable)
@@ -217,7 +219,7 @@ mkEnum interfaceName enumEl = do
   bool
     ( do
         forM_ entries $ \e -> docDecl (mkName $ enumName'' <> entryName e) (elemDoc e)
-        docDecl (mkName enumName') (elemDoc enumEl)
+        docDecl (mkName enumName') enumDoc
         docCodec
         codec <- enumCodec
         pure
@@ -232,7 +234,7 @@ mkEnum interfaceName enumEl = do
           <> errorInstance
     )
     ( do
-        docDecl (mkName enumName') (elemDoc enumEl)
+        docDecl (mkName enumName') enumDoc
         docCodec
         codec <- bitfieldCodec
         pure
@@ -248,6 +250,8 @@ mkEnum interfaceName enumEl = do
     isBitfield
   where
     enumName = fromJust $ findAttr (qname "name") enumEl
+    -- Many enums, like most @error@ enums, have no description in the XML.
+    enumDoc = Just . fromMaybe ("The @" <> enumName <> "@ enum of @" <> interfaceName <> "@.") $ elemDoc enumEl
     entries = findChildren (qname "entry") enumEl
     entryName e = fromJust $ findAttr (qname "name") e
     enumKV = [(entryName e, read . fromJust $ findAttr (qname "value") e) | e <- entries]
@@ -336,10 +340,12 @@ mkEnum interfaceName enumEl = do
           []
       ]
 
+-- | Name the Haskell type of an interface: its name with the first letter in uppercase, like @Wl_surface@.
 wlFormatter :: String -> String
 wlFormatter [] = []
 wlFormatter (x : xs) = toUpper x : xs
 
+-- | The @\<interface\>@ elements of a protocol.
 findInterfaces :: Element -> [Element]
 findInterfaces = findChildren (qname "interface")
 
@@ -358,11 +364,14 @@ loadProtocolFile formatter path = do
       ((<&> concat) . mapM (loadInterface formatter) . findInterfaces)
       protocols
 
+-- | Load the enums of every interface in a protocol file. Splice it before the interface types, which can use the enums.
 loadProtocolFileEnums :: FilePath -> Q [Dec]
 loadProtocolFileEnums path = do
   protocols <- readProtocols path
   concat . concat <$> mapM (mapM loadInterfaceEnums . findInterfaces) protocols
 
+-- | Generate the t'ProtocolTable' of each protocol in a file, see `generateProtocolTable`.
+-- Splice it after the `Object` instances, as the tables only list implemented globals.
 generateTables :: (String -> String) -> FilePath -> Q [Dec]
 generateTables formatter path = do
   protocols <- readProtocols path
@@ -384,6 +393,7 @@ mkMessages formatter interfaceName prefix events = do
     buildRecord x = NormalC (conName x) $ buildBang <$> findChildren (qname "arg") x
     constructors = fmap buildRecord events
 
+-- | Generate the `showMessage` method of a `Message` instance.
 mkShow :: String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkShow interfaceName prefix prefix2 events =
   mapM (mkShowC . snd) events <&> \m ->
@@ -405,6 +415,7 @@ mkShow interfaceName prefix prefix2 events =
         argNames = fromJust . findAttr (qname "name") <$> findChildren (qname "arg") e
         eventName = fromJust $ findAttr (qname "name") e
 
+-- | Generate the `getOpcode` method of a `Message` instance.
 mkOpcodeGetter :: String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkOpcodeGetter interfaceName prefix prefix2 events =
   mapM mkClause events <&> \m ->
@@ -418,6 +429,7 @@ mkOpcodeGetter interfaceName prefix prefix2 events =
         eventName = fromJust $ findAttr (qname "name") element
         args = findChildren (qname "arg") element
 
+-- | Generate the `putMessage` method of a `Message` instance.
 mkPut :: (String -> String) -> String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkPut formatter interfaceName prefix prefix2 events =
   ( \m ->
@@ -440,6 +452,7 @@ mkPut formatter interfaceName prefix prefix2 events =
         argNames = fromJust . findAttr (qname "name") <$> args
         eventName = fromJust $ findAttr (qname "name") element
 
+-- | Generate the `getMessage` method of a `Message` instance. An opcode the interface does not have is an `UnknownOpcode`.
 mkParser :: (String -> String) -> String -> String -> String -> [(Word16, Element)] -> Q [Dec]
 mkParser formatter interfaceName prefix prefix2 events = do
   opcode <- newName "opcode"
@@ -519,6 +532,7 @@ loadInterface formatter int = do
     ifaceT = ConT . mkName $ formatter name'
     version' = read . fromJust $ findAttr (qname "version") int
 
+-- | Generate the enums of one interface, see `mkEnum`.
 loadInterfaceEnums :: Element -> Q [Dec]
 loadInterfaceEnums int =
   concat <$> mapM (mkEnum name) enums
@@ -549,7 +563,7 @@ data ArgCodec = ArgCodec {argTy :: Type, putter :: Q Exp, getter :: Q Exp}
 senderOf :: String -> Perspective
 senderOf prefix = if "Request" `isPrefixOf` prefix then Client else Server
 
--- | The `ArgCodec` of an @\<arg\>@ sent by the given side, of the interface with the given name.
+-- | The t'ArgCodec' of an @\<arg\>@ sent by the given side, of the interface with the given name.
 argCodec :: (String -> String) -> Perspective -> String -> Element -> ArgCodec
 argCodec formatter from intName element = case findAttr (qname "enum") element of
   Just enumName -> let n = enumTypeName intName enumName in ArgCodec (ConT $ mkName n) (varE . mkName $ "put" <> n) (varE . mkName $ "get" <> n)

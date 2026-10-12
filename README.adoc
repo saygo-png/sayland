@@ -12,7 +12,7 @@ The documentation is also poor right now and there aren't enough tests.
 == Documentation
 
 View online at https://saygo-png.github.io/sayland/ +
-or build locally using `cabal haddock` and view the html files in a browser/put on a webserver.
+or build locally using `cabal run genHaddocks` and open `docs-html/index.html`.
 
 == Projects using the library
 
@@ -43,8 +43,9 @@ Run tests using `cabal test`.
 To run a single test use `cabal run sayland-tests -- -p <test-name>`.
 To see other test options use `cabal run sayland-tests -- --help`
 
-To generate docs while hiding certain warnings use `cabal run genHaddocks`. +
-This program wraps `cabal haddock` and removes bogus warnings related to https://github.com/haskell/haddock/issues/1071.
+To generate docs use `cabal run genHaddocks -- [output directory]` (default `docs-html`). +
+This program builds both libraries into one site with `cabal haddock-project`, fixes links between them,
+and removes bogus warnings related to https://github.com/haskell/haddock/issues/1071.
 
 To inspect generated protocol code run `cabal run unrollTH`.
 

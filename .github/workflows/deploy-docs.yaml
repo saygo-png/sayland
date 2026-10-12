@@ -28,12 +28,21 @@ jobs:
         with:
           determinate: false
 
+      - name: Cache cabal store
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/cabal/packages
+            ~/.local/state/cabal/store
+          key: cabal-${{ runner.os }}-${{ hashFiles('flake.lock', 'cabal.project.freeze', '*.cabal') }}
+          restore-keys: cabal-${{ runner.os }}-
+
       - name: Build website
         run: |
-          nix build .#sayland-with-docs.doc --accept-flake-config --print-build-logs
-          mkdir -p publish
-          cp -rvL result-doc/share/doc/*/html/* publish/
-          chmod -R +w publish
+          nix develop --accept-flake-config --command bash -c '
+            cabal update
+            cabal run genHaddocks -- publish
+          '
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

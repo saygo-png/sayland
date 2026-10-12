@@ -37,11 +37,11 @@ import System.Posix (Fd, setFdSize)
 
 $(loadProtocolFileEnums "xml-protocols/wayland.xml")
 
--- | Constant representing the `Wl_display` ID which is always 1 in Wayland.
+-- | Constant representing the t'Wl_display' ID which is always 1 in Wayland.
 wlDisplayId :: TObjectID Wl_display
 wlDisplayId = TObjectID . FromClient $ mkObjectID @Client @1
 
--- | Get the `Wl_display` object which always exists during a connection.
+-- | Get the t'Wl_display' object which always exists during a connection.
 getWlDisplay :: Wayland p Wl_display
 getWlDisplay = pure $ Wl_display wlDisplayId
 
@@ -79,7 +79,7 @@ data ContentUpdate = ContentUpdate
   }
   deriving stock (Eq, Ord)
 
--- | Builder for an empty `ContentUpdate`.
+-- | Builder for an empty t'ContentUpdate'.
 emptyContentUpdate :: ContentUpdate
 emptyContentUpdate =
   ContentUpdate
@@ -100,6 +100,8 @@ emptyContentUpdate =
     , cuSlaveCUs = []
     }
 
+-- | The role of a t'Wl_surface', as the value that gave it the role, like its @xdg_toplevel@.
+-- @SurfaceRole ()@ means the surface has no role.
 data SurfaceRole where SurfaceRole :: (Typeable a) => a -> SurfaceRole
 
 -- Interfaces {{{
@@ -124,11 +126,15 @@ unmapShmPoolRef pool = do
     size <- readIORef pool.size
     liftIO $ munmap ptr (fromIntegral size)
 
+-- | What holds the contents of a t'Wl_buffer', like shared memory or a dmabuf.
 class BufferBackend a where
+  -- | Run on the compositor when it sends @wl_buffer.release@.
   releaseBuffer :: a -> Wayland p ()
 
+-- | A buffer backend of any type.
 data Buffer where Buffer :: (Typeable a, BufferBackend a) => a -> Buffer
 
+-- | A buffer in a t'Wl_shm_pool': where it starts in the pool, its stride and its pixel format.
 data ShmBuffer = ShmBuffer {offset :: WlInt, stride :: WlInt, pool :: Wl_shm_pool, format :: Enum_wl_shm_format}
 
 instance BufferBackend ShmBuffer where
@@ -144,8 +150,10 @@ data Wl_buffer = Wl_buffer
   , height :: WlInt
   }
 
+-- | The surface role of a drag-and-drop icon, with the drag it belongs to.
 newtype DndIcon = DndIcon Dnd
 
+-- | A MIME type that data is offered in.
 type Mimetype = WlText
 
 data Wl_data_offer = Wl_data_offer
@@ -167,7 +175,7 @@ data Wl_data_source = Wl_data_source
   , sourceTargetMimetype :: IORef (Maybe Mimetype)
   }
 
--- | Builder for an empty `Enum_wl_data_device_manager_dnd_action`.
+-- | Builder for an empty t'Enum_wl_data_device_manager_dnd_action'.
 noDndAction :: Enum_wl_data_device_manager_dnd_action
 noDndAction =
   Enum_wl_data_device_manager_dnd_action
@@ -177,6 +185,7 @@ noDndAction =
     , dnd_action_move = False
     }
 
+-- | A drag-and-drop session, started with @wl_data_device.start_drag@.
 data Dnd = Dnd
   { source :: Maybe (TObjectID Wl_data_source)
   -- ^ If source is Nothing, Dnd is performed only within the same client.
@@ -185,6 +194,7 @@ data Dnd = Dnd
   , grabSerial :: WlUInt
   }
 
+-- | A drag-and-drop session as the client it enters sees it, from @wl_data_device.enter@ until leave or drop.
 data DndClient = DndClient
   { target :: TObjectID Wl_surface
   , dndPosition :: (WlFixed, WlFixed)
@@ -192,11 +202,13 @@ data DndClient = DndClient
   , enterSerial :: WlUInt
   }
 
+-- | The selection set with @wl_data_device.set_selection@.
 data Selection = Selection
   { source :: Maybe (TObjectID Wl_data_source)
   , eventSerial :: WlUInt
   }
 
+-- | The selection as a client sees it, from @wl_data_device.selection@.
 newtype SelectionClient = SelectionClient
   { offer :: Maybe (TObjectID Wl_data_offer)
   }
@@ -223,12 +235,14 @@ newtype Wl_shell_surface = Wl_shell_surface {wlid :: TObjectID Wl_shell_surface}
 
 data Wl_region = Wl_region {wlid :: TObjectID Wl_region, included :: IORef [Rectangle], excluded :: IORef [Rectangle]}
 
+-- | The stacking order of a surface's subsurfaces: those below the surface and those above it.
 data SubsurfaceStack = SubsurfaceStack
   { above :: Seq.Seq (TObjectID Wl_surface)
   , below :: Seq.Seq (TObjectID Wl_surface)
   }
   deriving stock (Eq, Ord)
 
+-- | The committed state of a t'Wl_surface'.
 data SurfaceState = SurfaceState
   { sBuffer :: Maybe (TObjectID Wl_buffer)
   , sBufferOffset :: (Int, Int)
@@ -267,10 +281,13 @@ newtype Wl_keyboard = Wl_keyboard {wlid :: TObjectID Wl_keyboard}
 
 newtype Wl_touch = Wl_touch {wlid :: TObjectID Wl_touch}
 
+-- | A @wl_output.geometry@ event: the output's position, physical size, subpixel layout, make, model and transform.
 data OutputGeometry = OutputGeometry {outputPosition :: (WlInt, WlInt), outputSize :: (WlInt, WlInt), subpixel :: Enum_wl_output_subpixel, make :: WlText, model :: WlText, outputTransform :: Enum_wl_output_transform}
 
+-- | A @wl_output.mode@ event: the mode's flags, its size in pixels and its refresh rate in mHz.
 data OutputMode = OutputMode {outputFlags :: Enum_wl_output_mode, modeWidth :: WlInt, modeHeight :: WlInt, modeRefresh :: WlInt}
 
+-- | What changed about an output since the last @wl_output.done@, which applies it. 'Nothing' for what did not change.
 data OutputUpdate = OutputUpdate
   { updateGeometry :: Maybe OutputGeometry
   , updateMode :: Maybe OutputMode
@@ -977,7 +994,7 @@ instance Object Wl_fixes where
 
 -- Wrapper Functions, for QoL {{{
 
--- | Bind the first advertised global of an interface. Throws 'MissingGlobal' if the global isn't advertised.
+-- | Bind the first advertised global of an interface. Throws t'MissingGlobal' if the global isn't advertised.
 -- **This function does not check if all global announcements have arrived**! You probably want to use `Request_wl_display_sync` beforehand.
 -- That will make the server confirm when its done sending globals.
 -- Use `tryBindToInterface` for a version returning Maybe instead of throwing.

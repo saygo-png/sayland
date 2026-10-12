@@ -52,7 +52,7 @@ runWireGet g fds bytes = (result, restBytes, restFds)
   where
     (result, (restBytes, restFds)) = State.runState g (bytes, fds)
 
--- | Take the next @n@ bytes. `NotEnoughBytes`, taking nothing, if fewer are left.
+-- | Take the next @n@ bytes. t'NotEnoughBytes', taking nothing, if fewer are left.
 getBytes :: Int -> WireGet (Either NotEnoughBytes BS.ByteString)
 getBytes n = State.state $ \(bytes, fds) ->
   if BS.length bytes < n
@@ -64,15 +64,15 @@ getBytes n = State.state $ \(bytes, fds) ->
 getHostWord :: Int -> Get a -> WireGet (Either NotEnoughBytes a)
 getHostWord n getter = fmap (runGet getter . BS.fromStrict) <$> getBytes n
 
--- | Like `getWord32host`, but `NotEnoughBytes` instead of failing.
+-- | Like `getWord32host`, but t'NotEnoughBytes' instead of failing.
 getWord32HostSafe :: WireGet (Either NotEnoughBytes Word32)
 getWord32HostSafe = getHostWord 4 getWord32host
 
--- | Like `getInt32host`, but `NotEnoughBytes` instead of failing.
+-- | Like `getInt32host`, but t'NotEnoughBytes' instead of failing.
 getInt32HostSafe :: WireGet (Either NotEnoughBytes Int32)
 getInt32HostSafe = getHostWord 4 getInt32host
 
--- | Like `getWord16host`, but `NotEnoughBytes` instead of failing.
+-- | Like `getWord16host`, but t'NotEnoughBytes' instead of failing.
 getWord16HostSafe :: WireGet (Either NotEnoughBytes Word16)
 getWord16HostSafe = getHostWord 2 getWord16host
 
@@ -85,7 +85,7 @@ newtype WlUInt = WlUInt Word32 deriving newtype (Show, Eq, Ord, Num, Integral, E
 -- | Wayland @fixed@. 24.8 bit signed fixed-point number.
 newtype WlFixed = WlFixed Int32 deriving newtype (Show, Eq, Ord)
 
--- | The non null `Text` content of a `WlString`, encoded in UTF-8. Cannot contain NUL terminators.
+-- | The non null t'Text' content of a `WlString`, encoded in UTF-8. Cannot contain NUL terminators.
 newtype WlText = WlText Text deriving newtype (Show, Eq, Ord, Semigroup, Monoid)
 
 -- | Fails on text containing NUL, which a wl_string can't carry.
@@ -94,11 +94,11 @@ wlText text = case T.findIndex (== '\0') text of
   Just index -> Left (TextContainsNul index)
   Nothing -> Right (WlText text)
 
--- | Any `Text` as a `WlText`, replacing each NUL with U+FFFD. For text only known at runtime.
+-- | Any t'Text' as a t'WlText', replacing each NUL with U+FFFD. For text only known at runtime.
 wlTextLossy :: Text -> WlText
 wlTextLossy = WlText . T.map (\ch -> if ch == '\0' then '\xFFFD' else ch)
 
--- | The `Text` of a `WlText`.
+-- | The t'Text' of a t'WlText'.
 fromWlText :: WlText -> Text
 fromWlText (WlText text) = text
 
@@ -107,11 +107,12 @@ fromWlText (WlText text) = text
 -- The `Maybe` represents nullability. A `Nothing` value is a null string of len 0.
 type WlString = Maybe WlText
 
--- | The first and last object ID each side allocates. 1 is the client's `wl_display`.
+-- | The first object ID each side allocates. 1 is the client's @wl_display@.
 type family FirstID (p :: Perspective) :: Nat where
   FirstID Client = 0x00000001
   FirstID Server = 0xff000000
 
+-- | The last object ID each side allocates.
 type family LastID (p :: Perspective) :: Nat where
   LastID Client = 0xfeffffff
   LastID Server = 0xffffffff
@@ -125,23 +126,23 @@ type role ObjectID nominal
 -- "Sayland.Wire" does not export the constructor, so the range checks below are the only way to make one.
 newtype ObjectID (p :: Perspective) = ObjectID WlUInt deriving newtype (Show, Eq, Ord)
 
--- | Make a valid `ObjectID`. Checked at compile time. Use with type applications @mkObjectID \@Client \@5@
+-- | Make a valid t'ObjectID'. Checked at compile time. Use with type applications @mkObjectID \@Client \@5@
 -- A number outside @p@'s range is a type error.
 mkObjectID :: forall p n. (KnownNat n, FirstID p <= n, n <= LastID p) => ObjectID p
 mkObjectID = ObjectID . WlUInt . fromIntegral . natVal $ Proxy @n
 
--- | Make an `ObjectID`, checked at runtime. `Nothing` if the number is outside @p@'s range.
+-- | Make an t'ObjectID', checked at runtime. `Nothing` if the number is outside @p@'s range.
 objectID :: forall p. (IDRange p) => WlUInt -> Maybe (ObjectID p)
 objectID n = if natVal (Proxy @(FirstID p)) <= i && i <= natVal (Proxy @(LastID p)) then Just (ObjectID n) else Nothing
   where
     i = toInteger n
 
--- | Get the next `ObjectID`. `Nothing` past the end of @p@'s range.
+-- | Get the next t'ObjectID'. `Nothing` past the end of @p@'s range.
 -- After 0xffffffff, @n + 1@ wraps to 0, which is in no range.
 succObjectID :: (IDRange p) => ObjectID p -> Maybe (ObjectID p)
 succObjectID (ObjectID n) = objectID (n + 1)
 
--- | The number of an `ObjectID`.
+-- | The number of an t'ObjectID'.
 fromObjectID :: ObjectID p -> WlUInt
 fromObjectID (ObjectID n) = n
 
@@ -173,41 +174,41 @@ newtype WlFd = WlFd Fd deriving newtype (Show, Eq, Ord)
 type role WlNewId nominal
 
 -- | Wayland @new_id@ of no fixed interface, allocated by @p@, the side that sends it.
--- A 32-bit object ID. Preceded by a non null @string@ specifying the interface name, and a `WlUInt` specifying the version.
+-- A 32-bit object ID. Preceded by a non null @string@ specifying the interface name, and a t'WlUInt' specifying the version.
 data WlNewId (p :: Perspective) = WlNewId WlText WlUInt (ObjectID p) deriving stock (Show, Eq)
 
--- | Put a `WlUInt`.
+-- | Put a t'WlUInt'.
 putWlUInt :: WlUInt -> WirePut ()
 putWlUInt (WlUInt w) = lift (putWord32host w)
 
--- | Get a `WlUInt`.
+-- | Get a t'WlUInt'.
 getWlUInt :: WireGet (Either NotEnoughBytes WlUInt)
 getWlUInt = fmap WlUInt <$> getWord32HostSafe
 
--- | Put a `WlInt`.
+-- | Put a t'WlInt'.
 putWlInt :: WlInt -> WirePut ()
 putWlInt (WlInt w) = lift (putInt32host w)
 
--- | Get a `WlInt`.
+-- | Get a t'WlInt'.
 getWlInt :: WireGet (Either NotEnoughBytes WlInt)
 getWlInt = fmap WlInt <$> getInt32HostSafe
 
--- | Put a `WlFixed`.
+-- | Put a t'WlFixed'.
 putWlFixed :: WlFixed -> WirePut ()
 putWlFixed (WlFixed w) = lift (putInt32host w)
 
--- | Get a `WlFixed`.
+-- | Get a t'WlFixed'.
 getWlFixed :: WireGet (Either NotEnoughBytes WlFixed)
 getWlFixed = fmap WlFixed <$> getInt32HostSafe
 
--- | Put a `WlArray`, padded to 4 bytes.
+-- | Put a t'WlArray', padded to 4 bytes.
 putWlArray :: WlArray -> WirePut ()
 putWlArray (WlArray bs) = lift $ do
   putWord32host (fromIntegral $ BS.length bs)
   putByteString bs
   putByteString (BS.replicate (padTo4 $ BS.length bs) 0)
 
--- | Get a `WlArray`, skipping its padding.
+-- | Get a t'WlArray', skipping its padding.
 getWlArray :: WireGet (Either NotEnoughBytes WlArray)
 getWlArray =
   getWlUInt >>= \case
@@ -217,7 +218,7 @@ getWlArray =
       padding <- getBytes (padTo4 (fromIntegral len))
       pure (WlArray <$> contents <* padding)
 
--- | A `WlString` is a `WlArray` following some rules. Empty array is null. Otherwise the UTF-8 encoded text followed by a NUL terminator.
+-- | A `WlString` is a t'WlArray' following some rules. Empty array is null. Otherwise the UTF-8 encoded text followed by a NUL terminator.
 putWlString :: WlString -> WirePut ()
 putWlString Nothing = putWlArray (WlArray "")
 putWlString (Just (WlText text)) = putWlArray (WlArray (encodeUtf8 text <> "\0"))
@@ -234,11 +235,11 @@ getWlString =
         Just <$> first ContainsNul (wlText text)
       Just _ -> Left NotTerminated
 
--- | Put a `WlNewId`: its interface name, version and ID.
+-- | Put a t'WlNewId': its interface name, version and ID.
 putWlNewId :: WlNewId p -> WirePut ()
 putWlNewId (WlNewId n v i) = putWlString (Just n) >> putWlUInt v >> putObjectID i
 
--- | Get a `WlNewId`, or what is wrong with it.
+-- | Get a t'WlNewId', or what is wrong with it.
 getWlNewId :: (IDRange p) => WireGet (Either NewIdError (WlNewId p))
 getWlNewId = do
   name <- getWlString
@@ -246,7 +247,7 @@ getWlNewId = do
   newId <- getObjectID
   pure $ WlNewId <$> (first NewIdName name >>= maybe (Left NewIdNullName) Right) <*> first NewIdTooShort version <*> first NewIdObjectID newId
 
--- | Put a `WlFd`. Its file descriptor is sent alongside the bytes, not in them.
+-- | Put a t'WlFd'. Its file descriptor is sent alongside the bytes, not in them.
 putWlFd :: WlFd -> WirePut ()
 putWlFd (WlFd f) = State.modify' (f :)
 
@@ -272,7 +273,7 @@ getAnyObjectID =
     Right Nothing -> Left ObjectIDIsNul
     Right (Just oid) -> Right oid
 
--- | Put an `ObjectID`.
+-- | Put an t'ObjectID'.
 putObjectID :: ObjectID p -> WirePut ()
 putObjectID = putWlUInt . fromObjectID
 
@@ -285,7 +286,7 @@ putWlObjectID :: WlObjectID -> WirePut ()
 putWlObjectID = putWlUInt . maybe 0 fromAnyObjectID
 
 -- | Number needed to round n up to the next multiple of 4.
--- Used to determine 0 byte padding for types such as `WlString` or `WlArray`.
+-- Used to determine 0 byte padding for types such as `WlString` or t'WlArray'.
 padTo4 :: Int -> Int
 padTo4 n = negate n `mod` 4
 
@@ -374,7 +375,7 @@ data DecodeError
 
 instance Exception DecodeError
 
--- | `WlText` literals, checked while compiling. @[wl|wl_compositor|] :: WlText@
+-- | t'WlText' literals, checked while compiling. @[wl|wl_compositor|] :: WlText@
 -- Text containing NUL is a compile error. Everything between the bars is the text, spaces included.
 -- If you wish to create a WlString, wrap in `Just`. For a null WlString just use `Nothing`
 wl :: QuasiQuoter
@@ -401,7 +402,7 @@ parseBodyWords size
 bodySize :: BodyWords -> Int
 bodySize (BodyWords n) = 4 * fromIntegral n
 
--- | Parse the first message out of a `ByteString`, returning its object, opcode and body, and the bytes after it.
+-- | Parse the first message out of a t'Data.ByteString.ByteString', returning its object, opcode and body, and the bytes after it.
 decodeMessage :: BS.ByteString -> Either DecodeError (WlObjectID, Word16, BS.ByteString, BS.ByteString)
 decodeMessage s = case runWireGet getHeader [] header of
   (Left NotEnoughBytes, _, _) -> Left Incomplete

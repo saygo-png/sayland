@@ -30,3 +30,4 @@ cabal.project.local~
 /tags
 /unrolled-TH.hs
 /.pre-commit-config.yaml
+/docs-html

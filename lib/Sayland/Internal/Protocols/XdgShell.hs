@@ -44,11 +44,12 @@ data Xdg_popup = Xdg_popup
   , positioner :: TObjectID Xdg_positioner
   }
 
+-- | The role an t'Xdg_surface' was given.
 data XDGRole = XDGToplevel Xdg_toplevel | XDGPopup Xdg_popup
 
 data Xdg_positioner = Xdg_positioner {wlid :: TObjectID Xdg_positioner, state :: IORef PositionerState}
 
--- | State tracking for  `Xdg_positioner`. 'Nothing' means the protocol default.
+-- | State tracking for t'Xdg_positioner'. 'Nothing' means the protocol default.
 data PositionerState = PositionerState
   { psSize, psParentSize :: Maybe (Int32, Int32)
   , psAnchorRect :: Maybe Rectangle

@@ -1,12 +1,8 @@
-{
-  niceHaskell,
-  doHaddock ? false,
-  ...
-}:
+{niceHaskell, ...}:
 niceHaskell.mkPackage {
   flags = niceHaskell.mkFlags {
     doCheck = false;
-    inherit doHaddock;
+    doHaddock = false;
   };
   packageRoot = ./.;
   cabalName = "sayland";

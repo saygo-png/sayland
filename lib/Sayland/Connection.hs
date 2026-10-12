@@ -98,7 +98,7 @@ clientLoop = clientLoop' ""
         Left malformed -> throwIO malformed
 
 -- | Deal with an inbound message. Checks if the `ObjectID` reference is valid.
--- if it is valid, the work is handed to `dispatchMessage`.
+-- if it is valid, the work is handed to `dispatchWith`.
 handleMessage :: (KnownPerspective p) => WlObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 handleMessage oid' opcode msg = do
   env <- getClientEnv
@@ -107,7 +107,7 @@ handleMessage oid' opcode msg = do
     Just (oid, SomeObject o) -> withIncoming o $ dispatchWith (applyIncoming o) oid opcode msg
     Nothing -> logWarn $ "ignored a message to unknown object " <> show oid'
 
--- | Parse a message for an object and run the given handler on it, then any registered 'EventHandler's.
+-- | Parse a message for an object and run the given handler on it, then any registered t'EventHandler's.
 dispatchWith :: (Message m) => (m -> Wayland p ()) -> AnyObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 dispatchWith handle oid opcode msg = do
   env <- getClientEnv

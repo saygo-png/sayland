@@ -1,6 +1,6 @@
 -- | Description : Logging.
 --
--- Every environment carries a `Logger`. Inside the Wayland monad, log with `Sayland.Core.logInfo` and friends.
+-- Every environment carries a t'Logger'. Inside the Wayland monad, log with `Sayland.Core.logInfo` and friends.
 module Sayland.Log (
   LogLevel (..),
   Logger (..),
