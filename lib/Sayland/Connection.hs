@@ -1,3 +1,5 @@
+{-# LANGUAGE RecordWildCards #-}
+
 -- | Description : Everything that has to do with making and keeping connections.
 module Sayland.Connection (module Sayland.Connection) where
 
@@ -35,24 +37,7 @@ listenForClients env = do
 -- | Deal with an incoming client, creating its connection environment and updating the server state.
 handleIncomingClient :: (MonadIO m) => ServerEnv -> Socket -> m ()
 handleIncomingClient env socket' = do
-  counter <- newIORef . Just $ mkObjectID @Server @0xff000000
-  objects <- newIORef $ Map.fromList [(coerce wlDisplayId, SomeObject $ Wl_display wlDisplayId)]
-  globals <- newIORef mempty
-  fdQueue <- atomically newTQueue
-  writeLock <- newMVar ()
-  let clientenv =
-        ConnectionEnv
-          { connectionSocket = socket'
-          , writeLock
-          , counter
-          , objects
-          , eventHandlers = env.eventHandlers
-          , globals
-          , interfaceTable = env.interfaceTable
-          , fdQueue
-          , onRecoverable = env.onRecoverable
-          , logger = env.serverLogger
-          }
+  clientenv <- liftIO $ newConnectionEnv socket' env.interfaceTable env.eventHandlers env.onRecoverable env.serverLogger
   serial' <- atomically $ do
     modifyTVar env.clientSerial (+ 1)
     readTVar env.clientSerial
@@ -137,16 +122,20 @@ waylandSetup protocolTable =
 -- | Connect to the compositor socket at the given path.
 waylandConnect :: ProtocolTable -> FilePath -> IO (WaylandEnv Client)
 waylandConnect protocolTable path = do
-  let display = SomeObject $ Wl_display wlDisplayId
   sock <- socket AF_UNIX Stream defaultProtocol
   connect sock $ SockAddrUnix path
-  counter <- newIORef . Just $ mkObjectID @Client @2
-  objects <- newIORef $ Map.fromList [(coerce wlDisplayId, display)]
-  globals <- newIORef mempty
-  handlers <- newIORef mempty
+  eventHandlers <- newIORef mempty
+  ClientEnv <$> (newConnectionEnv sock (Map.fromList protocolTable) eventHandlers Reject =<< defaultLogger Client)
+
+-- | The create the initial state of a new connection.
+newConnectionEnv ::
+  (KnownPerspective p) => Socket -> Map.Map WlText InterfaceEntry -> IORef [EventHandler p] -> OnRecoverable -> Logger -> IO (ConnectionEnv p)
+newConnectionEnv connectionSocket interfaceTable eventHandlers onRecoverable logger = do
   writeLock <- newMVar ()
-  let interfaceTable = Map.fromList protocolTable
-  fdqueue <- atomically newTQueue
-  ClientEnv . ConnectionEnv sock writeLock counter objects globals interfaceTable handlers fdqueue Reject <$> defaultLogger Client
+  counter <- newIORef (Just firstObjectID)
+  objects <- newIORef $ Map.singleton (toObjectID wlDisplayId) (SomeObject $ Wl_display wlDisplayId)
+  globals <- newIORef mempty
+  fdQueue <- atomically newTQueue
+  pure ConnectionEnv{..}
 
 -- vim: foldmethod=marker

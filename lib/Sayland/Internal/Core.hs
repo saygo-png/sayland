@@ -95,17 +95,22 @@ class KnownPerspective (p :: Perspective) where
   -- | An ID this side allocated, as an `AnyObjectID`.
   toAnyObjectID :: ObjectID p -> AnyObjectID
 
+  -- | The first ID this side allocates for a new object.
+  firstObjectID :: ObjectID p
+
 instance KnownPerspective Client where
   applyIncoming = onEvent
   applyOutgoing = onRequest
   withIncoming _ k = k -- Incoming Client i = Event i, Message via Interface
   toAnyObjectID = FromClient
+  firstObjectID = mkObjectID @Client @2 -- 1 is always wl_display.
 
 instance KnownPerspective Server where
   applyIncoming = onRequest
   applyOutgoing = onEvent
   withIncoming _ k = k -- Incoming Server i = Request i, Message via Interface
   toAnyObjectID = FromServer
+  firstObjectID = mkObjectID @Server @0xff000000
 
 type role EventHandler nominal
 
