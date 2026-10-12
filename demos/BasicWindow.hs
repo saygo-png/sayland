@@ -2,15 +2,13 @@
 module Main (main) where
 
 import Control.Concurrent.STM (writeTMVar)
-import Control.Exception (bracket)
+import Control.Exception
 import Data.ByteString (hPut)
 import DemoUtils
-import GHC.IO.Handle
-import Relude hiding (hFlush)
+import Relude
 import Sayland
-import Sayland.Wire
-import System.Posix (ShmOpenFlags (ShmOpenFlags), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
-import System.Random (randomIO)
+import System.Posix
+import System.Random
 
 table :: ProtocolTable
 table = waylandTable <> xdg_shellTable
@@ -48,7 +46,7 @@ program = do
   shm_pool_rand :: Int <- randomIO
   let colorChannels :: Int32 = 4
   let
-    makeSharedMemoryObject = shmOpen ("basic-window" <> show shm_pool_rand) (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
+    makeSharedMemoryObject = shmOpen ("basic-window" <> show shm_pool_rand) (ShmOpenFlags True True False True) (foldl' unionFileModes ownerWriteMode [ownerReadMode])
     useSharedMemoryObject fileDescriptor =
       usingReaderT waylandEnv $ do
         bw <- readIORef bufferWidth

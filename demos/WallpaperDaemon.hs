@@ -6,15 +6,12 @@
 module Main (main) where
 
 import Control.Concurrent.STM (writeTMVar)
-import Control.Exception (bracket)
+import Control.Exception
 import Data.ByteString (hPut)
 import DemoUtils
-import Relude hiding (ByteString, get, isPrefixOf, put)
+import Relude
 import Sayland
-import Sayland.Wire
-import System.Posix (ownerReadMode, ownerWriteMode, setFdSize, unionFileModes)
-import System.Posix.IO
-import System.Posix.SharedMem
+import System.Posix
 
 bufferWidth, bufferHeight :: Int32
 bufferWidth = 1920
@@ -66,7 +63,7 @@ program = do
   sendMsg surface Request_wl_surface_commit
   atomically (takeTMVar serial) >>= sendMsg layer_surface . Request_zwlr_layer_surface_v1_ack_configure
 
-  let makeSharedMemoryObject = shmOpen poolName (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
+  let makeSharedMemoryObject = shmOpen poolName (ShmOpenFlags True True False True) (foldl' unionFileModes ownerWriteMode [ownerReadMode])
       useSharedMemoryObject fileDescriptor =
         usingReaderT waylandEnv $ do
           let frameSize = bufferWidth * bufferHeight * colorChannels

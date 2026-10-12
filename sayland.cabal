@@ -151,7 +151,6 @@ executable demo-basic-compositor
     network,
     relude,
     sayland,
-    sayland-wire,
 
 executable demo-basic-window
   import: common-options, executable-options
@@ -163,7 +162,6 @@ executable demo-basic-window
     random,
     relude,
     sayland,
-    sayland-wire,
     stm,
     unix,
 
@@ -176,7 +174,6 @@ executable demo-wallpaper-daemon
     bytestring,
     relude,
     sayland,
-    sayland-wire,
     stm,
     unix,
 
