@@ -32,6 +32,8 @@ tests =
     , testCase "the compositor reports a malformed message to the client" reportsMalformed
     , testCase "Client and Server IDs don't collide" serverIDsDoNotCollide
     , testCase "the compositor rejects an ID that is still in use" rejectsReusedID
+    , testCase "a commit applies the pending state" commitAppliesState
+    , testCase "a synchronized subsurface's commits wait for its parent's" syncedSubsurfaceWaits
     ]
 
 table :: ProtocolTable
@@ -108,6 +110,47 @@ reportsMalformed = withSession $ \s -> do
   liftIO $ sendRaw env.connectionSocket (toObjectID s.display.wlid) 0 (putWlUInt 0)
   liftIO $ expectProtocolError s Err_invalid_method
   putMVar env.writeLock ()
+
+-- | A commit applies the surface's pending state to its current state, on both sides.
+commitAppliesState :: Assertion
+commitAppliesState = withSession $ \s -> do
+  wl_compositor <- bindToInterface @Wl_compositor s.registry
+  surface <- newObject wl_compositor Request_wl_compositor_create_surface
+  sendMsg surface $ Request_wl_surface_set_buffer_scale 2
+  scales s surface >>= liftIO . (@?= (1, 1))
+  sendMsg surface Request_wl_surface_commit
+  scales s surface >>= liftIO . (@?= (2, 2))
+
+-- | A synchronized subsurface's commits are cached, merged into one, and applied with its parent's next commit.
+syncedSubsurfaceWaits :: Assertion
+syncedSubsurfaceWaits = withSession $ \s -> do
+  wl_compositor <- bindToInterface @Wl_compositor s.registry
+  subcompositor <- bindToInterface @Wl_subcompositor s.registry
+  parent <- newObject wl_compositor Request_wl_compositor_create_surface
+  child <- newObject wl_compositor Request_wl_compositor_create_surface
+  void . newObject subcompositor $ \i -> Request_wl_subcompositor_get_subsurface i child.wlid parent.wlid
+  sendMsg child $ Request_wl_surface_set_buffer_scale 2
+  sendMsg child Request_wl_surface_commit
+  sendMsg child $ Request_wl_surface_set_buffer_scale 3
+  sendMsg child Request_wl_surface_commit
+  scales s child >>= liftIO . (@?= (1, 1))
+  liftIO $ do
+    Just compositorParent <- compositorObject s parent.wlid
+    cached <- (.cuSlaveCUs) <$> readIORef compositorParent.pendingState
+    length cached @?= 1
+  sendMsg parent Request_wl_surface_commit
+  scales s child >>= liftIO . (@?= (3, 3))
+
+-- | The buffer scale of a surface's current state on the client and on the compositor, after a roundtrip.
+scales :: Session -> Wl_surface -> Wayland Client (Int, Int)
+scales s surface = do
+  roundtrip
+  client <- (.sBufferScale) <$> readIORef surface.state
+  compositor <-
+    liftIO $ compositorObject s surface.wlid >>= \case
+      Nothing -> assertFailure "the compositor has no wl_surface"
+      Just compositorSurface -> (.sBufferScale) <$> readIORef compositorSurface.state
+  pure (client, compositor)
 
 -- Harness {{{
 

@@ -10,8 +10,10 @@
 -- | Description: Internals of Sayland.Protocols.Wayland
 module Sayland.Internal.Protocols.Wayland (module Sayland.Internal.Protocols.Wayland) where
 
+import Control.Applicative ((<|>))
 import Control.Monad
 import Control.Monad.IO.Class
+import Data.Bifunctor (bimap)
 import Data.Bool
 import Data.Coerce
 import Data.Foldable
@@ -60,6 +62,7 @@ data Rectangle = Rectangle
   deriving stock (Eq, Ord)
 
 -- | Nothing or empty list means no change. In order to "reset" values, set them to the defaults - `Just Nothing` for the null object, normal transform, etc.
+-- The offset is relative to the previous buffer, so `Nothing` is the same as @(0, 0)@.
 data ContentUpdate = ContentUpdate
   { cuSurface :: Maybe (TObjectID Wl_surface)
   , cuBuffer :: Maybe (Maybe (TObjectID Wl_buffer))
@@ -85,7 +88,7 @@ emptyContentUpdate =
   ContentUpdate
     { cuSurface = Nothing
     , cuBuffer = Nothing
-    , cuOffset = Just (0, 0)
+    , cuOffset = Nothing
     , cuDamage = []
     , cuDamageBuffer = []
     , cuFrameCallbacks = []
@@ -99,6 +102,38 @@ emptyContentUpdate =
     , cuFifoWaitBarrier = False
     , cuSlaveCUs = []
     }
+
+-- | Combine two content updates of one surface, the second committed after the first, like the commits of a
+-- synchronized subsurface waiting for its parent's. Offsets add up, damage and frame callbacks accumulate,
+-- and any other state the second sets replaces the first's.
+mergeContentUpdate :: ContentUpdate -> ContentUpdate -> ContentUpdate
+mergeContentUpdate old new =
+  ContentUpdate
+    { cuSurface = new.cuSurface <|> old.cuSurface
+    , cuBuffer = new.cuBuffer <|> old.cuBuffer
+    , cuOffset = case (old.cuOffset, new.cuOffset) of
+        (Just (x, y), Just (x', y')) -> Just (x + x', y + y')
+        (a, b) -> b <|> a
+    , cuDamage = new.cuDamage <> old.cuDamage
+    , cuDamageBuffer = new.cuDamageBuffer <> old.cuDamageBuffer
+    , cuFrameCallbacks = new.cuFrameCallbacks <> old.cuFrameCallbacks
+    , cuOpaqueRegion = new.cuOpaqueRegion <|> old.cuOpaqueRegion
+    , cuInputRegion = new.cuInputRegion <|> old.cuInputRegion
+    , cuBufferScale = new.cuBufferScale <|> old.cuBufferScale
+    , cuBufferTransform = new.cuBufferTransform <|> old.cuBufferTransform
+    , cuBufferRelease = new.cuBufferRelease <|> old.cuBufferRelease
+    , cuSubsurfaces = new.cuSubsurfaces <|> old.cuSubsurfaces
+    , cuFifoBarrier = old.cuFifoBarrier || new.cuFifoBarrier
+    , cuFifoWaitBarrier = old.cuFifoWaitBarrier || new.cuFifoWaitBarrier
+    , cuSlaveCUs = foldl' cacheContentUpdate old.cuSlaveCUs new.cuSlaveCUs
+    }
+
+-- | Add a content update to a list of cached ones, merging it into the one of the same surface if there is one.
+-- So the list holds at most one update per surface, however many times the surfaces commit.
+cacheContentUpdate :: [ContentUpdate] -> ContentUpdate -> [ContentUpdate]
+cacheContentUpdate cached cu = case break (\c -> c.cuSurface == cu.cuSurface) cached of
+  (before, c : after) -> before <> (mergeContentUpdate c cu : after)
+  (_, []) -> cached <> [cu]
 
 -- | The role of a t'Wl_surface', as the value that gave it the role, like its @xdg_toplevel@.
 -- @SurfaceRole ()@ means the surface has no role.
@@ -242,24 +277,31 @@ data SubsurfaceStack = SubsurfaceStack
   }
   deriving stock (Eq, Ord)
 
--- | The committed state of a t'Wl_surface'.
+-- | The committed state of a t'Wl_surface'. Updated by every commit that is applied, which a compositor can
+-- react to from an t'EventHandler' for @wl_surface.commit@, as those run after the state is updated.
 data SurfaceState = SurfaceState
   { sBuffer :: Maybe (TObjectID Wl_buffer)
   , sBufferOffset :: (Int, Int)
+  -- ^ Where the last applied commit put the buffer, relative to the previous buffer.
   , sDamage :: [Rectangle]
+  -- ^ The damage of the last applied commit, in surface coordinates.
+  , sDamageBuffer :: [Rectangle]
+  -- ^ The damage of the last applied commit, in buffer coordinates.
   , sCallbacks :: [TObjectID Wl_callback]
+  -- ^ Frame callbacks that were committed and are not done yet.
   , sOpaqueRegion :: Maybe (TObjectID Wl_region)
   , sInputRegion :: Maybe (TObjectID Wl_region)
   , sBufferScale :: Int
   , sBufferTransform :: Enum_wl_output_transform
   , sSubsurfaces :: SubsurfaceStack
+  , sBufferRelease :: Maybe (TObjectID Wl_callback)
+  -- ^ The release callback of `sBuffer`, from @wl_surface.get_release@.
   , sFifoBarrier :: Bool
   }
 
 data Wl_surface = Wl_surface
   { wlid :: TObjectID Wl_surface
   , pendingState :: IORef ContentUpdate
-  , cuQueue :: IORef (Seq.Seq ContentUpdate)
   , role :: IORef SurfaceRole
   , state :: IORef SurfaceState
   , outputs :: IORef [TObjectID Wl_output]
@@ -342,6 +384,45 @@ mapShmPool :: (MonadIO m) => Fd -> WlInt -> m (Ptr ())
 mapShmPool fd size =
   liftIO $ mmap nullPtr (fromIntegral size) (protRead <> protWrite) (mkMmapFlags mapShared mempty) fd 0
 
+-- | The parent of a surface with a synchronized subsurface role, whose commits wait for the parent's.
+synchronizedParent :: Wl_surface -> Wayland p (Maybe Wl_surface)
+synchronizedParent surface = do
+  SurfaceRole role <- readIORef surface.role
+  case cast role of
+    Nothing -> pure Nothing
+    Just (subsurfaceId :: TObjectID Wl_subsurface) ->
+      getInterface subsurfaceId >>= \case
+        Nothing -> pure Nothing
+        Just subsurface -> readIORef subsurface.synchronized >>= bool (pure Nothing) (getInterface subsurface.parent)
+
+-- | Apply a committed content update to the current state of its surface, then the cached updates of the
+-- synchronized subsurfaces that waited for it.
+applyContentUpdate :: Wl_surface -> ContentUpdate -> Wayland p ()
+applyContentUpdate surface cu = do
+  env <- getConnectionEnv
+  objects <- readIORef env.objects
+  -- A frame callback is dropped once it is done, so the ones still in the object map are not done yet.
+  let notDone = filter (\cb -> Map.member (toObjectID cb) objects)
+  atomicModifyIORef' surface.state $ \s ->
+    ( s
+        { sBuffer = fromMaybe s.sBuffer cu.cuBuffer
+        , sBufferOffset = maybe (0, 0) (bimap fromIntegral fromIntegral) cu.cuOffset
+        , sDamage = cu.cuDamage
+        , sDamageBuffer = cu.cuDamageBuffer
+        , sCallbacks = cu.cuFrameCallbacks <> notDone s.sCallbacks
+        , sOpaqueRegion = fromMaybe s.sOpaqueRegion cu.cuOpaqueRegion
+        , sInputRegion = fromMaybe s.sInputRegion cu.cuInputRegion
+        , sBufferScale = maybe s.sBufferScale fromIntegral cu.cuBufferScale
+        , sBufferTransform = fromMaybe s.sBufferTransform cu.cuBufferTransform
+        , sSubsurfaces = fromMaybe s.sSubsurfaces cu.cuSubsurfaces
+        , sBufferRelease = if isJust cu.cuBuffer then cu.cuBufferRelease else cu.cuBufferRelease <|> s.sBufferRelease
+        , sFifoBarrier = s.sFifoBarrier || cu.cuFifoBarrier
+        }
+    , ()
+    )
+  for_ cu.cuSlaveCUs $ \slave ->
+    for_ slave.cuSurface $ getInterface >=> traverse_ (`applyContentUpdate` slave)
+
 -- Interface Implementations {{{
 -- Wl_display {{{
 instance Object Wl_display where
@@ -422,7 +503,6 @@ instance Object Wl_compositor where
     wl_surface <- do
       role <- newIORef $ SurfaceRole ()
       pendingState <- newIORef emptyContentUpdate
-      cuQueue <- newIORef Seq.Empty
       outputs <- newIORef []
       state <-
         newIORef $
@@ -430,12 +510,14 @@ instance Object Wl_compositor where
             { sBuffer = Nothing
             , sBufferOffset = (0, 0)
             , sDamage = []
+            , sDamageBuffer = []
             , sCallbacks = []
             , sOpaqueRegion = Nothing
             , sInputRegion = Nothing
             , sBufferScale = 1
             , sBufferTransform = Enum_wl_output_transform_normal
             , sSubsurfaces = SubsurfaceStack{above = Seq.empty, below = Seq.empty}
+            , sBufferRelease = Nothing
             , sFifoBarrier = False
             }
       pure Wl_surface{..}
@@ -719,17 +801,11 @@ instance Object Wl_surface where
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuBufferRelease = Just release}, ())
     forwardMessage surface msg
   onRequest surface msg@Request_wl_surface_commit{} = do
-    cu <- liftIO $ atomicSwapIORef surface.pendingState emptyContentUpdate{cuSurface = Just surface.wlid}
-    SurfaceRole role <- readIORef surface.role
-    case cast role of
-      Just (sub :: Wl_subsurface) -> do
-        sync <- readIORef sub.synchronized
-        when sync $
-          getInterface sub.surface >>= \case
-            Just target -> atomicModifyIORef' target.pendingState $ \s -> (s{cuSlaveCUs = cu : s.cuSlaveCUs}, ())
-            Nothing -> atomicWriteIORef surface.role $ SurfaceRole ()
-      Nothing -> pass
-    atomicModifyIORef' surface.cuQueue $ \q -> (cu{cuSurface = Just surface.wlid} Seq.<| q, ())
+    cu <- liftIO $ atomicSwapIORef surface.pendingState emptyContentUpdate
+    synchronizedParent surface >>= \case
+      -- Cached in the parent's pending state, to be applied with the parent's next commit.
+      Just parent -> atomicModifyIORef' parent.pendingState $ \s -> (s{cuSlaveCUs = cacheContentUpdate s.cuSlaveCUs cu{cuSurface = Just surface.wlid}}, ())
+      Nothing -> applyContentUpdate surface cu
     forwardMessage surface msg
 
   onEvent surface msg@(Event_wl_surface_enter output) = do
