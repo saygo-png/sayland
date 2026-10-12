@@ -10,7 +10,7 @@ import Data.ByteString qualified as BS
 import Data.Map qualified as Map
 import Foreign (castPtr, peekArray)
 import GHC.IO.Handle (hFlush)
-import Network.Socket
+import Network.Socket (close)
 import Relude hiding (hFlush)
 import Sayland
 import Sayland.Internal.Core (TObjectID (..), sendMessage)
@@ -152,9 +152,8 @@ withSession test = do
       path = dir <> "/wayland-0"
   finished <- timeout 10_000_000
     . bracket_ (createDirectory dir) (removeDirectoryRecursive dir)
-    $ bracket (listenOn path) close
-    $ \sock -> do
-      compositor <- serverEnvironment sock path
+    $ bracket (quiet <$> waylandListen table path) waylandServerClose
+    $ \compositor -> do
       -- The client disconnecting ends the compositor's connection to it, which the compositor then drops.
       let compositorDropsClients = atomically $ readTVar compositor.clients >>= check . Map.null
       bracket (forkIO $ listenForClients compositor) (\t -> compositorDropsClients >> killThread t) $ \_ -> do
@@ -172,25 +171,10 @@ withSession test = do
     forkClientLoop :: ConnectionEnv Client -> MVar SomeException -> IO ThreadId
     forkClientLoop client ended = forkFinally (usingReaderT (ClientEnv client) $ clientLoop client.connectionSocket) (either (void . tryPutMVar ended) pure)
 
-listenOn :: FilePath -> IO Socket
-listenOn path = do
-  sock <- socket AF_UNIX Stream defaultProtocol
-  bind sock (SockAddrUnix path)
-  listen sock 5
-  pure sock
-
-serverEnvironment :: Socket -> FilePath -> IO ServerEnv
-serverEnvironment sock socketPath = do
-  clients <- newTVarIO Map.empty
-  eventHandlers <- newIORef []
-  clientSerial <- newTVarIO 0
-  logger <- quietUnlessDebugging <$> defaultLogger Server
-  pure ServerEnv{listenSocket = sock, socketPath, clients, interfaceTable = Map.fromList table, eventHandlers, clientSerial, serverLogger = logger, onRecoverable = Reject}
-
--- | Silence the logger, unless @WAYLAND_DEBUG@ asks for this side. Some tests break the protocol on purpose,
+-- | Silence the compositor's logger, unless @WAYLAND_DEBUG@ asks for the server. Some tests break the protocol on purpose,
 -- and the errors the compositor logs for that would garble the test report.
-quietUnlessDebugging :: Logger -> Logger
-quietUnlessDebugging logger = if logger.minLevel == LogDebug then logger else silentLogger
+quiet :: ServerEnv -> ServerEnv
+quiet env = if env.serverLogger.minLevel == LogDebug then env else env{serverLogger = silentLogger}
 
 -- | Run something as the compositor, on its connection to its only client.
 asCompositor :: Session -> Wayland Server a -> IO a

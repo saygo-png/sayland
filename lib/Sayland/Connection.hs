@@ -24,6 +24,7 @@ import Sayland.Internal.Protocols.Wayland
 import Sayland.Log
 import Sayland.Object (sendMsg)
 import Sayland.Wire
+import System.Posix (removeLink)
 
 -- Listeners {{{
 
@@ -118,6 +119,36 @@ waylandSetup protocolTable =
       runReaderT (logDebug $ "connected to " <> show path) env
       pure env
     Nothing -> error "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."
+
+-- | Create a server listening on a free socket name in @XDG_RUNTIME_DIR@, like @wayland-0@.
+-- Accept its clients with `listenForClients`, and close it with `waylandServerClose`.
+waylandServerSetup :: ProtocolTable -> IO ServerEnv
+waylandServerSetup protocolTable =
+  getSocketPath availableSocketName >>= \case
+    Just path -> do
+      env <- waylandListen protocolTable path
+      logWith env.serverLogger LogDebug Nothing $ "listening on " <> show path
+      pure env
+    Nothing -> error "couldn't find `$XDG_RUNTIME_DIR`, nor a free socket name in it."
+
+-- | Create a server listening on a new socket at the given path.
+waylandListen :: ProtocolTable -> FilePath -> IO ServerEnv
+waylandListen protocolTable socketPath = do
+  listenSocket <- socket AF_UNIX Stream defaultProtocol
+  bind listenSocket $ SockAddrUnix socketPath
+  listen listenSocket 5
+  clients <- newTVarIO mempty
+  clientSerial <- newTVarIO 0
+  eventHandlers <- newIORef mempty
+  serverLogger <- defaultLogger Server
+  pure ServerEnv{interfaceTable = Map.fromList protocolTable, onRecoverable = Reject, ..}
+
+-- | Close a server's connections to its clients and its socket, and remove the socket's file.
+waylandServerClose :: ServerEnv -> IO ()
+waylandServerClose env = do
+  readTVarIO env.clients >>= mapM_ (close . (.connectionSocket))
+  close env.listenSocket
+  removeLink env.socketPath
 
 -- | Connect to the compositor socket at the given path.
 waylandConnect :: ProtocolTable -> FilePath -> IO (WaylandEnv Client)
