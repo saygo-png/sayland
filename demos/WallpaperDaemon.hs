@@ -5,12 +5,10 @@
 -- | Description : A client that draws a rainbow wallpaper with wlr-layer-shell.
 module Main (main) where
 
-import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.STM (writeTMVar)
-import Control.Exception
+import Control.Exception (bracket)
 import Data.ByteString (hPut)
 import DemoUtils
-import Network.Socket
 import Relude hiding (ByteString, get, isPrefixOf, put)
 import Sayland
 import Sayland.Wire
@@ -35,29 +33,15 @@ table :: ProtocolTable
 table = waylandTable <> wlr_layer_shell_unstable_v1Table
 
 main :: IO ()
-main = runReaderT program =<< waylandSetup table
+main = withWaylandClient table program
 
 program :: Wayland Client ()
 program = do
-  ClientEnv env <- ask
+  waylandEnv@(ClientEnv env) <- ask
   serial :: TMVar WlUInt <- newEmptyTMVarIO
-  running :: MVar () <- newEmptyMVar
 
   display <- getWlDisplay
   registry <- newObject display Request_wl_display_get_registry
-
-  -- A crash in the event loop has to reach the main thread. Otherwise the
-  -- `finally` below just fills `running` and the daemon exits successfully despite errors.
-  mainThread <- liftIO myThreadId
-  let rethrow :: SomeException -> IO ()
-      rethrow = throwTo mainThread
-
-  liftIO
-    . void
-    . forkIO
-    $ finally
-      (handle rethrow $ putStrLn "\n--- Starting event loop ---" >> runReaderT (clientLoop env.connectionSocket) (ClientEnv env))
-      (close env.connectionSocket >> putMVar running ())
 
   -- Round trip, so the registry has advertised its globals before binding to them.
   roundtrip
@@ -84,7 +68,7 @@ program = do
 
   let makeSharedMemoryObject = shmOpen poolName (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
       useSharedMemoryObject fileDescriptor =
-        usingReaderT (ClientEnv env) $ do
+        usingReaderT waylandEnv $ do
           let frameSize = bufferWidth * bufferHeight * colorChannels
           liftIO . setFdSize fileDescriptor $ fromIntegral frameSize
           wl_shm_pool <- newObject wl_shm $ \i -> Request_wl_shm_create_pool i (c fileDescriptor) (c frameSize)
@@ -97,7 +81,7 @@ program = do
           sendMsg surface $ Request_wl_surface_attach (Just wl_buffer.wlid) 0 0
           sendMsg surface Request_wl_surface_commit
 
-          -- Wait for exit
-          takeMVar running
+          -- Keep the wallpaper up until the compositor goes away.
+          untilDisconnected
 
   liftIO . void $ bracket makeSharedMemoryObject (const $ shmUnlink poolName) useSharedMemoryObject

@@ -160,7 +160,6 @@ executable demo-basic-window
   other-modules: DemoUtils
   build-depends:
     bytestring,
-    network,
     random,
     relude,
     sayland,
@@ -175,7 +174,6 @@ executable demo-wallpaper-daemon
   other-modules: DemoUtils
   build-depends:
     bytestring,
-    network,
     relude,
     sayland,
     sayland-wire,

@@ -3,14 +3,14 @@
 -- | Description : A compositor and a client from this library, talking over a real socket.
 module Integration (tests) where
 
-import Control.Concurrent (ThreadId, forkFinally, forkIO, killThread)
+import Control.Concurrent (ThreadId, forkFinally, forkIO, killThread, threadDelay)
 import Control.Concurrent.STM (check)
-import Control.Exception (bracket, bracket_)
+import Control.Exception (bracket, bracket_, try)
 import Data.ByteString qualified as BS
 import Data.Map qualified as Map
 import Foreign (castPtr, peekArray)
 import GHC.IO.Handle (hFlush)
-import Network.Socket (close)
+import Network.Socket (ShutdownCmd (ShutdownBoth), close, shutdown)
 import Relude hiding (hFlush)
 import Sayland
 import Sayland.Internal.Core (TObjectID (..), sendMessage)
@@ -34,6 +34,9 @@ tests =
     , testCase "the compositor rejects an ID that is still in use" rejectsReusedID
     , testCase "a commit applies the pending state" commitAppliesState
     , testCase "a synchronized subsurface's commits wait for its parent's" syncedSubsurfaceWaits
+    , testCase "withEventLoop returns what the client returns" eventLoopReturns
+    , testCase "withEventLoop throws the event loop's error to the client" eventLoopThrows
+    , testCase "untilDisconnected returns when the compositor hangs up" untilDisconnectedReturns
     ]
 
 table :: ProtocolTable
@@ -152,6 +155,37 @@ scales s surface = do
       Just compositorSurface -> (.sBufferScale) <$> readIORef compositorSurface.state
   pure (client, compositor)
 
+-- | The client's result comes back, after the event loop delivered the replies the client waited for.
+eventLoopReturns :: Assertion
+eventLoopReturns = withCompositor $ \path _ -> do
+  result <- bracket (waylandConnect table path) waylandClose . runReaderT . withEventLoop $ do
+    roundtrip
+    pure (42 :: Int)
+  result @?= 42
+
+-- | The protocol error that ends the event loop interrupts the client, which would otherwise wait forever.
+eventLoopThrows :: Assertion
+eventLoopThrows = withCompositor $ \path _ -> do
+  result <- try . bracket (waylandConnect table path) waylandClose . runReaderT . withEventLoop $ do
+    display <- getWlDisplay
+    registry <- newObject display Request_wl_display_get_registry
+    -- A second registry with the same ID breaks the protocol.
+    sendMessage (Request_wl_display_get_registry registry.wlid) display.wlid
+    untilDisconnected
+  case result of
+    Left (e :: ProtocolError) -> e.code @?= errorCode Err_invalid_object
+    Right () -> assertFailure "the client finished without the event loop's error"
+
+-- | When the compositor ends the connection, `untilDisconnected` returns instead of throwing.
+untilDisconnectedReturns :: Assertion
+untilDisconnectedReturns = withCompositor $ \path compositor ->
+  bracket (waylandConnect table path) waylandClose . runReaderT . withEventLoop $ do
+    roundtrip
+    -- Hang up after the client is waiting. A hangup before would be thrown at the client like any other.
+    let hangUp = threadDelay 100_000 >> readTVarIO compositor.clients >>= mapM_ (\client -> shutdown client.connectionSocket ShutdownBoth)
+    void . liftIO $ forkIO hangUp
+    untilDisconnected
+
 -- Harness {{{
 
 -- | A client connected to a compositor of its own, with the registry's globals already received.
@@ -186,9 +220,26 @@ rejectsReusedID = withSession $ \s -> do
   liftIO $ expectProtocolError s Err_invalid_object
 
 -- | Run a client against a compositor. Both from this library.
--- A test that does not finish in time fails which catches hangs.
 withSession :: (Session -> Wayland Client ()) -> Assertion
-withSession test = do
+withSession test = withCompositor $ \path compositor -> do
+  ClientEnv client <- waylandConnect table path
+  clientLoopEnded <- newEmptyMVar
+  bracket (forkClientLoop client clientLoopEnded) (\t -> killThread t >> close client.connectionSocket) $ \_ ->
+    usingReaderT (ClientEnv client) $ do
+      display <- getWlDisplay
+      registry <- newObject display Request_wl_display_get_registry
+      let session = Session{compositor, display, registry, clientLoopEnded}
+      roundtrip
+      test session
+  where
+    forkClientLoop :: ConnectionEnv Client -> MVar SomeException -> IO ThreadId
+    forkClientLoop client ended = forkFinally (usingReaderT (ClientEnv client) $ clientLoop client.connectionSocket) (either (void . tryPutMVar ended) pure)
+
+-- | Run a compositor from this library on a socket of its own, and something given the socket's path.
+-- Waits for the compositor to drop its clients after, so they must disconnect.
+-- A test that does not finish in time fails which catches hangs.
+withCompositor :: (FilePath -> ServerEnv -> IO ()) -> Assertion
+withCompositor act = do
   tmp <- getTemporaryDirectory
   n :: Word32 <- randomIO
   let dir = tmp <> "/sayland-test-" <> show n
@@ -199,20 +250,8 @@ withSession test = do
     $ \compositor -> do
       -- The client disconnecting ends the compositor's connection to it, which the compositor then drops.
       let compositorDropsClients = atomically $ readTVar compositor.clients >>= check . Map.null
-      bracket (forkIO $ listenForClients compositor) (\t -> compositorDropsClients >> killThread t) $ \_ -> do
-        ClientEnv client <- waylandConnect table path
-        clientLoopEnded <- newEmptyMVar
-        bracket (forkClientLoop client clientLoopEnded) (\t -> killThread t >> close client.connectionSocket) $ \_ ->
-          usingReaderT (ClientEnv client) $ do
-            display <- getWlDisplay
-            registry <- newObject display Request_wl_display_get_registry
-            let session = Session{compositor, display, registry, clientLoopEnded}
-            roundtrip
-            test session
+      bracket (forkIO $ listenForClients compositor) (\t -> compositorDropsClients >> killThread t) . const $ act path compositor
   maybe (assertFailure "timed out") pure finished
-  where
-    forkClientLoop :: ConnectionEnv Client -> MVar SomeException -> IO ThreadId
-    forkClientLoop client ended = forkFinally (usingReaderT (ClientEnv client) $ clientLoop client.connectionSocket) (either (void . tryPutMVar ended) pure)
 
 -- | Silence the compositor's logger, unless @WAYLAND_DEBUG@ asks for the server. Some tests break the protocol on purpose,
 -- and the errors the compositor logs for that would garble the test report.

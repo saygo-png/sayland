@@ -3,10 +3,10 @@
 -- | Description : Everything that has to do with making and keeping connections.
 module Sayland.Connection (module Sayland.Connection) where
 
-import Control.Concurrent (forkFinally)
+import Control.Concurrent (forkFinally, killThread, myThreadId, threadDelay, throwTo)
 import Control.Concurrent.STM (flushTQueue, newTQueue, unGetTQueue, writeTQueue)
 import Control.Concurrent.STM.TVar
-import Control.Exception (displayException, fromException)
+import Control.Exception (AsyncException (ThreadKilled), bracket, displayException, finally, fromException)
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Reader
@@ -107,6 +107,53 @@ dispatchWith handle oid opcode msg = do
       handle message
       handlers <- readIORef env.eventHandlers
       forM_ handlers $ \(EventHandler f) -> forM_ (cast message) $ f oid
+
+-- }}}
+
+-- Clients {{{
+
+-- | Connect to the compositor (see `waylandSetup`) and run a client on that connection, with its event loop running
+-- in the background (see `withEventLoop`). The connection is closed once the client returns or throws.
+--
+-- > main = withWaylandClient (waylandTable <> xdg_shellTable) $ do
+-- >   registry <- getWlDisplay >>= \display -> newObject display Request_wl_display_get_registry
+-- >   roundtrip
+-- >   compositor <- bindToInterface @Wl_compositor registry
+-- >   ...
+-- >   untilDisconnected
+withWaylandClient :: ProtocolTable -> Wayland Client a -> IO a
+withWaylandClient protocolTable client = bracket (waylandSetup protocolTable) waylandClose $ runReaderT (withEventLoop client)
+
+-- | Run a client with the connection's event loop running in another thread, which receives the compositor's
+-- events and runs their handlers. The client runs in the calling thread, which matters for bound threads.
+--
+-- If the event loop ends, the exception it ended with is thrown to the client: t'ConnectionError' `Disconnected`
+-- when the compositor hangs up, or a t'ProtocolError' it reported. The event loop is stopped once the client returns or throws.
+withEventLoop :: Wayland Client a -> Wayland Client a
+withEventLoop client = do
+  env <- ask
+  conn <- getConnectionEnv
+  liftIO $ do
+    caller <- myThreadId
+    -- The loop only ends with an exception. Hand it to the client, unless the client returning stopped the loop.
+    let handOver = \case
+          Left e | fromException e /= Just ThreadKilled -> throwTo caller e
+          _ -> pass
+    loopThread <- forkFinally (runReaderT (clientLoop conn.connectionSocket) env) handOver
+    runReaderT client env `finally` killThread loopThread
+
+-- | Block until the compositor hangs up, then return. Other ways the event loop can end are rethrown.
+-- Use at the end of a client started with `withWaylandClient` or `withEventLoop` that runs until the compositor goes away.
+-- A hangup before this is called is thrown at the client like any other error of the event loop.
+untilDisconnected :: Wayland Client ()
+untilDisconnected =
+  liftIO (forever $ threadDelay 1_000_000_000) `catchW` \case
+    Disconnected -> pass
+    e -> throwIO e
+
+-- | Close a client's connection to the compositor.
+waylandClose :: WaylandEnv Client -> IO ()
+waylandClose (ClientEnv conn) = close conn.connectionSocket
 
 -- }}}
 

@@ -1,13 +1,11 @@
 -- | Description : A client that opens an xdg toplevel and draws a rainbow into it.
 module Main (main) where
 
-import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.STM (writeTMVar)
-import Control.Exception (bracket, finally, handle, throwTo)
+import Control.Exception (bracket)
 import Data.ByteString (hPut)
 import DemoUtils
 import GHC.IO.Handle
-import Network.Socket (close)
 import Relude hiding (hFlush)
 import Sayland
 import Sayland.Wire
@@ -18,28 +16,14 @@ table :: ProtocolTable
 table = waylandTable <> xdg_shellTable
 
 main :: IO ()
-main = runReaderT program =<< waylandSetup table
+main = withWaylandClient table program
 
 program :: Wayland Client ()
 program = do
-  ClientEnv env <- ask
-  running :: MVar () <- newEmptyMVar
+  waylandEnv@(ClientEnv env) <- ask
 
   display <- getWlDisplay
   registry <- newObject display Request_wl_display_get_registry
-
-  -- A crash in the event loop has to reach the main thread. Otherwise the
-  -- `finally` below just fills `running` and the daemon exits successfully despite errors.
-  mainThread <- liftIO myThreadId
-  let rethrow :: SomeException -> IO ()
-      rethrow = throwTo mainThread
-
-  liftIO
-    . void
-    . forkIO
-    $ finally
-      (handle rethrow $ putStrLn "\n--- Starting event loop ---" >> runReaderT (clientLoop env.connectionSocket) (ClientEnv env))
-      (close env.connectionSocket >> putMVar running ())
 
   -- Round trip, so the registry has advertised its globals before binding to them.
   roundtrip
@@ -66,7 +50,7 @@ program = do
   let
     makeSharedMemoryObject = shmOpen ("basic-window" <> show shm_pool_rand) (ShmOpenFlags True True False True) (Relude.foldl' unionFileModes ownerWriteMode [ownerReadMode])
     useSharedMemoryObject fileDescriptor =
-      usingReaderT (ClientEnv env) $ do
+      usingReaderT waylandEnv $ do
         bw <- readIORef bufferWidth
         bh <- readIORef bufferHeight
         let frameSize = bw * bh * colorChannels
@@ -79,7 +63,7 @@ program = do
         liftIO $ hFlush fileHandle
         sendMsg surface $ Request_wl_surface_attach (Just wl_buffer.wlid) 0 0
         sendMsg surface Request_wl_surface_commit
-        -- Wait for exit
-        takeMVar running
+        -- Keep the window up until the compositor goes away.
+        untilDisconnected
 
   liftIO . void $ bracket makeSharedMemoryObject (const $ shmUnlink $ "basic-window" <> show shm_pool_rand) useSharedMemoryObject
