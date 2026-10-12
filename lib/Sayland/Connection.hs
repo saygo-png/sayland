@@ -26,14 +26,14 @@ import Sayland.Wire
 -- Listeners {{{
 
 -- | Listen for client connections and handle them with `handleIncomingClient`.
-listenForClients :: (MonadIO m) => ServerEnvironment -> m ()
+listenForClients :: (MonadIO m) => ServerEnv -> m ()
 listenForClients env = do
-  (sock, _) <- liftIO $ accept env.socket
+  (sock, _) <- liftIO $ accept env.listenSocket
   handleIncomingClient env sock
   listenForClients env
 
--- | Deal with an incoming client, creating a client environment and updating the server state.
-handleIncomingClient :: (MonadIO m) => ServerEnvironment -> Socket -> m ()
+-- | Deal with an incoming client, creating its connection environment and updating the server state.
+handleIncomingClient :: (MonadIO m) => ServerEnv -> Socket -> m ()
 handleIncomingClient env socket' = do
   counter <- newIORef . Just $ mkObjectID @Server @0xff000000
   objects <- newIORef $ Map.fromList [(coerce wlDisplayId, SomeObject $ Wl_display wlDisplayId)]
@@ -41,8 +41,8 @@ handleIncomingClient env socket' = do
   fdQueue <- atomically newTQueue
   writeLock <- newMVar ()
   let clientenv =
-        ClientEnvironment
-          { socket = socket'
+        ConnectionEnv
+          { connectionSocket = socket'
           , writeLock
           , counter
           , objects
@@ -51,13 +51,13 @@ handleIncomingClient env socket' = do
           , interfaceTable = env.interfaceTable
           , fdQueue
           , onRecoverable = env.onRecoverable
-          , logger = env.logger
+          , logger = env.serverLogger
           }
   serial' <- atomically $ do
     modifyTVar env.clientSerial (+ 1)
     readTVar env.clientSerial
   atomically . modifyTVar env.clients $ Map.insert serial' clientenv
-  let logClient level = logWith env.logger level (Just serial')
+  let logClient level = logWith env.serverLogger level (Just serial')
   liftIO $ logClient LogDebug "connected"
   void
     . liftIO
@@ -84,7 +84,7 @@ clientLoop = clientLoop' ""
   where
     clientLoop' :: (KnownPerspective p) => BS.ByteString -> Socket -> Wayland p ()
     clientLoop' bytes' sock = do
-      queue <- (.fdQueue) <$> getClientEnv
+      queue <- (.fdQueue) <$> getConnectionEnv
       (bytes'', newFds) <- liftIO . peerGone $ recvChunk sock
       -- Nothing to read from a stream socket means the peer closed it.
       when (BS.null bytes'') $ throwIO Disconnected
@@ -101,7 +101,7 @@ clientLoop = clientLoop' ""
 -- if it is valid, the work is handed to `dispatchWith`.
 handleMessage :: (KnownPerspective p) => WlObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 handleMessage oid' opcode msg = do
-  env <- getClientEnv
+  env <- getConnectionEnv
   objects <- readIORef env.objects
   case oid' >>= \oid -> (oid,) <$> Map.lookup oid objects of
     Just (oid, SomeObject o) -> withIncoming o $ dispatchWith (applyIncoming o) oid opcode msg
@@ -110,7 +110,7 @@ handleMessage oid' opcode msg = do
 -- | Parse a message for an object and run the given handler on it, then any registered t'EventHandler's.
 dispatchWith :: (Message m) => (m -> Wayland p ()) -> AnyObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 dispatchWith handle oid opcode msg = do
-  env <- getClientEnv
+  env <- getConnectionEnv
   fds <- atomically $ flushTQueue env.fdQueue
   case runGetMessage opcode fds msg of
     -- Malformed for the protocol: reported like a violation the handler found, which a server sends to the client.
@@ -124,7 +124,7 @@ dispatchWith handle oid opcode msg = do
 
 -- }}}
 
--- | Create a default client environment.
+-- | Connect to the compositor in @WAYLAND_DISPLAY@, or the first socket found in @XDG_RUNTIME_DIR@.
 waylandSetup :: ProtocolTable -> IO (WaylandEnv Client)
 waylandSetup protocolTable =
   getSocketPath openSocketName >>= \case
@@ -134,7 +134,7 @@ waylandSetup protocolTable =
       pure env
     Nothing -> error "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."
 
--- | Create a client environment connected to the compositor socket at the given path.
+-- | Connect to the compositor socket at the given path.
 waylandConnect :: ProtocolTable -> FilePath -> IO (WaylandEnv Client)
 waylandConnect protocolTable path = do
   let display = SomeObject $ Wl_display wlDisplayId
@@ -147,6 +147,6 @@ waylandConnect protocolTable path = do
   writeLock <- newMVar ()
   let interfaceTable = Map.fromList protocolTable
   fdqueue <- atomically newTQueue
-  ClientEnv . ClientEnvironment sock writeLock counter objects globals interfaceTable handlers fdqueue Reject <$> defaultLogger Client
+  ClientEnv . ConnectionEnv sock writeLock counter objects globals interfaceTable handlers fdqueue Reject <$> defaultLogger Client
 
 -- vim: foldmethod=marker

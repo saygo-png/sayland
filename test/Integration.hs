@@ -105,7 +105,7 @@ reportsMalformed = withSession $ \s -> do
   ClientEnv env <- ask
   -- wl_display.sync, with the null object for its callback.
   takeMVar env.writeLock
-  liftIO $ sendRaw env.socket (toObjectID s.display.wlid) 0 (putWlUInt 0)
+  liftIO $ sendRaw env.connectionSocket (toObjectID s.display.wlid) 0 (putWlUInt 0)
   liftIO $ expectProtocolError s Err_invalid_method
   putMVar env.writeLock ()
 
@@ -113,7 +113,7 @@ reportsMalformed = withSession $ \s -> do
 
 -- | A client connected to a compositor of its own, with the registry's globals already received.
 data Session = Session
-  { compositor :: ServerEnvironment
+  { compositor :: ServerEnv
   , display :: Wl_display
   , registry :: Wl_registry
   , clientLoopEnded :: MVar SomeException
@@ -160,7 +160,7 @@ withSession test = do
       bracket (forkIO $ listenForClients compositor) (\t -> compositorDropsClients >> killThread t) $ \_ -> do
         ClientEnv client <- waylandConnect table path
         clientLoopEnded <- newEmptyMVar
-        bracket (forkClientLoop client clientLoopEnded) (\t -> killThread t >> close client.socket) $ \_ ->
+        bracket (forkClientLoop client clientLoopEnded) (\t -> killThread t >> close client.connectionSocket) $ \_ ->
           usingReaderT (ClientEnv client) $ do
             display <- getWlDisplay
             registry <- newObject display Request_wl_display_get_registry
@@ -169,8 +169,8 @@ withSession test = do
             test session
   maybe (assertFailure "timed out") pure finished
   where
-    forkClientLoop :: ClientEnvironment Client -> MVar SomeException -> IO ThreadId
-    forkClientLoop client ended = forkFinally (usingReaderT (ClientEnv client) $ clientLoop client.socket) (either (void . tryPutMVar ended) pure)
+    forkClientLoop :: ConnectionEnv Client -> MVar SomeException -> IO ThreadId
+    forkClientLoop client ended = forkFinally (usingReaderT (ClientEnv client) $ clientLoop client.connectionSocket) (either (void . tryPutMVar ended) pure)
 
 listenOn :: FilePath -> IO Socket
 listenOn path = do
@@ -179,13 +179,13 @@ listenOn path = do
   listen sock 5
   pure sock
 
-serverEnvironment :: Socket -> FilePath -> IO ServerEnvironment
+serverEnvironment :: Socket -> FilePath -> IO ServerEnv
 serverEnvironment sock socketPath = do
   clients <- newTVarIO Map.empty
   eventHandlers <- newIORef []
   clientSerial <- newTVarIO 0
   logger <- quietUnlessDebugging <$> defaultLogger Server
-  pure ServerEnvironment{socket = sock, socketPath, clients, interfaceTable = Map.fromList table, eventHandlers, clientSerial, logger, onRecoverable = Reject}
+  pure ServerEnv{listenSocket = sock, socketPath, clients, interfaceTable = Map.fromList table, eventHandlers, clientSerial, serverLogger = logger, onRecoverable = Reject}
 
 -- | Silence the logger, unless @WAYLAND_DEBUG@ asks for this side. Some tests break the protocol on purpose,
 -- and the errors the compositor logs for that would garble the test report.

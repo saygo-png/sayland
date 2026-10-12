@@ -198,17 +198,17 @@ type ProtocolTable = [(WlText, InterfaceEntry)]
 
 type role WaylandEnv nominal
 
--- | State required for either a Wayland server or Client.
+-- | What the Wayland monad runs in: this side of one connection. On a server, also the server and which client it is.
 data WaylandEnv (p :: Perspective) where
-  ClientEnv :: ClientEnvironment Client -> WaylandEnv Client
-  ClientServerEnv :: ServerEnvironment -> ClientEnvironment Server -> ClientID -> WaylandEnv Server
+  ClientEnv :: ConnectionEnv Client -> WaylandEnv Client
+  ClientServerEnv :: ServerEnv -> ConnectionEnv Server -> ClientID -> WaylandEnv Server
 
--- | State required for a Wayland server.
-data ServerEnvironment = ServerEnvironment
-  { socket :: Socket
-  -- ^ global server socket
+-- | The state of a server: its socket, its connections to clients, and what it serves.
+data ServerEnv = ServerEnv
+  { listenSocket :: Socket
+  -- ^ The socket clients connect to.
   , socketPath :: FilePath
-  , clients :: TVar (Map ClientID (ClientEnvironment Server))
+  , clients :: TVar (Map ClientID (ConnectionEnv Server))
   -- ^ Currently connected clients.
   , clientSerial :: TVar ClientID
   -- ^ Client counter, for identifying individual clients.
@@ -218,16 +218,17 @@ data ServerEnvironment = ServerEnvironment
   -- ^ Server-side event handlers.
   , onRecoverable :: OnRecoverable
   -- ^ What to do with the `Recoverable` protocol violations of the server and its clients.
-  , logger :: Logger
+  , serverLogger :: Logger
   -- ^ Where the server and its clients log to.
   }
 
-type role ClientEnvironment nominal
+type role ConnectionEnv nominal
 
--- | State required for a Wayland client.
-data ClientEnvironment (p :: Perspective) = ClientEnvironment
-  { socket :: Socket
-  -- ^ Socket the client connects to.
+-- | The state of one connection, on either side: on a client its connection to the compositor,
+-- on a server its connection to one client.
+data ConnectionEnv (p :: Perspective) = ConnectionEnv
+  { connectionSocket :: Socket
+  -- ^ The socket of this connection.
   , writeLock :: MVar ()
   -- ^ write lock used to avoid race conditions.
   , counter :: IORef (Maybe (ObjectID p))
@@ -352,7 +353,7 @@ protocolViolation :: (Message m, ToObjectID o, ErrorCode e) => Severity r -> m -
 protocolViolation severity msg o code text = case severity of
   Unrecoverable -> reject
   Recoverable ->
-    (.onRecoverable) <$> getClientEnv >>= \case
+    (.onRecoverable) <$> getConnectionEnv >>= \case
       Reject -> reject
       Warn -> do
         me <- getPerspective
@@ -366,9 +367,9 @@ protocolViolation severity msg o code text = case severity of
 whenNothing :: (Applicative f) => Maybe a -> f a -> f a
 whenNothing m fallback = maybe fallback pure m
 
--- | Get the ClientEnvironment behind the Wayland monad.
-getClientEnv :: Wayland p (ClientEnvironment p)
-getClientEnv =
+-- | Get the ConnectionEnv behind the Wayland monad.
+getConnectionEnv :: Wayland p (ConnectionEnv p)
+getConnectionEnv =
   asks $ \case
     ClientEnv env -> env
     ClientServerEnv _ env _ -> env
@@ -425,8 +426,8 @@ onClient k =
 sendMessage :: (Message m) => m -> TObjectID i -> Wayland p ()
 sendMessage e (TObjectID o) = do
   logMessage Sent o e
-  env <- getClientEnv
-  liftIO . withMVar env.writeLock $ \_ -> peerGone $ sendRaw env.socket o (getOpcode e) (putMessage e)
+  env <- getConnectionEnv
+  liftIO . withMVar env.writeLock $ \_ -> peerGone $ sendRaw env.connectionSocket o (getOpcode e) (putMessage e)
 
 -- | Report the socket errors that mean the peer hung up (@EPIPE@, @ECONNRESET@) as `Disconnected`.
 peerGone :: IO a -> IO a

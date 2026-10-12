@@ -321,7 +321,7 @@ registerObject msg obj = registerSomeObject msg (toObjectID obj.wlid) (SomeObjec
 -- | `registerObject` for an object of any interface.
 registerSomeObject :: (Message m) => m -> AnyObjectID -> SomeObject -> Wayland p ()
 registerSomeObject msg oid obj = do
-  env <- getClientEnv
+  env <- getConnectionEnv
   inserted <- atomicModifyIORef' env.objects $ \m ->
     if Map.member oid m then (m, False) else (Map.insert oid obj m, True)
   unless inserted
@@ -333,7 +333,7 @@ registerSomeObject msg oid obj = do
 -- | Remove an object from the objects map. On a server this also sends @delete_id@.
 dropObject :: TObjectID a -> Wayland p ()
 dropObject (TObjectID i) = do
-  env <- getClientEnv
+  env <- getConnectionEnv
   atomicModifyIORef' env.objects $ \m -> (Map.delete i m, ())
   onServer $ sendMessage (Event_wl_display_delete_id $ fromAnyObjectID i) wlDisplayId
 
@@ -346,7 +346,7 @@ mapShmPool fd size =
 -- Wl_display {{{
 instance Object Wl_display where
   onEvent obj msg@(Event_wl_display_delete_id dId) = do
-    env <- getClientEnv
+    env <- getConnectionEnv
     case mkWlObjectID dId of
       Just oid -> atomicModifyIORef' env.objects $ \m -> (Map.delete oid m, ())
       Nothing -> protocolViolation Recoverable msg obj Err_invalid_object [wl|delete_id for the null object|]
@@ -363,7 +363,7 @@ instance Object Wl_display where
     let registryObj = Wl_registry registryId
     registerObject msg registryObj
     onServer $ do
-      env <- getClientEnv
+      env <- getConnectionEnv
       let entries = zip [0 ..] $ Map.toList env.interfaceTable
       for_ entries $ \(name, (interface, entry)) ->
         sendMsg registryObj (Event_wl_registry_global (WlUInt name) interface entry.version)
@@ -384,16 +384,16 @@ instance Object Wl_callback where
 -- Wl_registry {{{
 instance Object Wl_registry where
   onEvent obj msg@(Event_wl_registry_global name interface version) = do
-    env <- getClientEnv
+    env <- getConnectionEnv
     atomicModifyIORef' env.globals $ \m -> (Map.insert (coerce name) (interface, version) m, ())
     forwardMessage obj msg
   onEvent obj msg@(Event_wl_registry_global_remove name) = do
-    env <- getClientEnv
+    env <- getConnectionEnv
     atomicModifyIORef' env.globals $ \m -> (Map.delete (coerce name) m, ())
     forwardMessage obj msg
 
   onRequest obj msg@(Request_wl_registry_bind name (WlNewId requestedIface requestedVersion newId)) = do
-    env <- getClientEnv
+    env <- getConnectionEnv
     globals <- readIORef env.globals
 
     (iface, advertisedVersion) <- Map.lookup (coerce name) globals & whenNothing $ do
@@ -1013,7 +1013,7 @@ tryBindToInterface :: forall i. (Global i) => Wl_registry -> Wayland Client (May
 tryBindToInterface registry = do
   let targetIface = getInterfaceName (Proxy @i)
   logInfo $ "binding to " <> show targetIface
-  env <- getClientEnv
+  env <- getConnectionEnv
   globals :: Map GlobalName (WlText, WlUInt) <- readIORef env.globals
   let matchingIfaces = [(name, ver) | (name, (advertisedIface, ver)) <- Map.toList globals, advertisedIface == targetIface]
   case matchingIfaces of

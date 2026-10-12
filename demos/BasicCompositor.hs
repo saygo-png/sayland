@@ -17,13 +17,13 @@ table = waylandTable <> xdg_shellTable
 main :: IO ()
 main = bracket env cleanup program
   where
-    cleanup :: ServerEnvironment -> IO ()
+    cleanup :: ServerEnv -> IO ()
     cleanup senv = do
       clients <- readTVarIO senv.clients
-      mapM_ (\client -> close client.socket) clients
-      close senv.socket
+      mapM_ (\client -> close client.connectionSocket) clients
+      close senv.listenSocket
       removeFile senv.socketPath
-    env :: IO ServerEnvironment
+    env :: IO ServerEnv
     env = do
       getSocketPath availableSocketName >>= \case
         Nothing -> error "couldn't find a socket path"
@@ -37,16 +37,16 @@ main = bracket env cleanup program
           clientSerial <- newTVarIO 0
           logger <- defaultLogger Server
           pure
-            ServerEnvironment
-              { socket = socket'
+            ServerEnv
+              { listenSocket = socket'
               , socketPath
               , clients
               , interfaceTable = Map.fromList table
               , eventHandlers
               , clientSerial
               , onRecoverable = Reject
-              , logger
+              , serverLogger = logger
               }
 
-program :: ServerEnvironment -> IO ()
+program :: ServerEnv -> IO ()
 program = listenForClients

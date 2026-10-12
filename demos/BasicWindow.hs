@@ -38,8 +38,8 @@ program = do
     . void
     . forkIO
     $ finally
-      (handle rethrow $ putStrLn "\n--- Starting event loop ---" >> runReaderT (clientLoop env.socket) (ClientEnv env))
-      (close env.socket >> putMVar running ())
+      (handle rethrow $ putStrLn "\n--- Starting event loop ---" >> runReaderT (clientLoop env.connectionSocket) (ClientEnv env))
+      (close env.connectionSocket >> putMVar running ())
 
   -- Round trip, so the registry has advertised its globals before binding to them.
   roundtrip

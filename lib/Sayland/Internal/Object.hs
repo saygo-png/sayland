@@ -15,7 +15,7 @@ import Sayland.Wire
 -- | Takes the next `ObjectID` from the counter.
 newObjectID :: (IDRange p) => Wayland p (ObjectID p)
 newObjectID = do
-  env <- getClientEnv
+  env <- getConnectionEnv
   next <- atomicModifyIORef' env.counter $ \current -> (current >>= succObjectID, current)
   maybe (throwIO ObjectIDsExhausted) pure next
 
@@ -49,7 +49,7 @@ receiveMsg = applyIncoming
 -- | Get an Interface using its id.
 getInterface :: (Typeable i) => TObjectID i -> Wayland p (Maybe i)
 getInterface (TObjectID oid) = do
-  env <- getClientEnv
+  env <- getConnectionEnv
   (proxyInterface <=< Map.lookup oid) <$> readIORef env.objects
 
 -- | Cast provided interface into proxied type.
