@@ -412,3 +412,9 @@ decodeMessage s = case runWireGet getHeader [] header of
     if BS.length body < bodyLength then Left Incomplete else Right (oid, opcode, body, rest)
   where
     (header, afterHeader) = BS.splitAt (fromIntegral headerSize) s
+
+-- | Which side allocated an ID.
+allocatedBy :: AnyObjectID -> Perspective
+allocatedBy = \case
+  FromClient _ -> Client
+  FromServer _ -> Server

@@ -207,10 +207,13 @@ waylandConnect protocolTable path = do
 
 -- | The create the initial state of a new connection.
 newConnectionEnv ::
-  (KnownPerspective p) => Socket -> Map.Map WlText InterfaceEntry -> IORef [EventHandler p] -> OnRecoverable -> Logger -> IO (ConnectionEnv p)
+  forall p. (KnownPerspective p) => Socket -> Map.Map WlText InterfaceEntry -> IORef [EventHandler p] -> OnRecoverable -> Logger -> IO (ConnectionEnv p)
 newConnectionEnv connectionSocket interfaceTable eventHandlers onRecoverable logger = do
   writeLock <- newMVar ()
-  counter <- newIORef (Just firstObjectID)
+  counter <- newMVar (Just firstObjectID)
+  nextPeerID <- newIORef $ case toAnyObjectID (firstObjectID @p) of
+    FromClient _ -> 0xff000000 -- This is a client, the first ID a server allocates.
+    FromServer _ -> 2 -- This is a server, the first ID a client allocates after wl_display.
   objects <- newIORef $ Map.singleton (toObjectID wlDisplayId) (SomeObject $ Wl_display wlDisplayId)
   globals <- newIORef mempty
   fdQueue <- atomically newTQueue

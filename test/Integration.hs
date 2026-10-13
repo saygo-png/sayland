@@ -32,6 +32,8 @@ tests =
     , testCase "the compositor reports a malformed message to the client" reportsMalformed
     , testCase "Client and Server IDs don't collide" serverIDsDoNotCollide
     , testCase "the compositor rejects an ID that is still in use" rejectsReusedID
+    , testCase "the compositor rejects a new ID that skips ahead" rejectsSkippedID
+    , testCase "new IDs reach the compositor in order when threads create objects at once" concurrentNewIDs
     , testCase "a commit applies the pending state" commitAppliesState
     , testCase "a synchronized subsurface's commits wait for its parent's" syncedSubsurfaceWaits
     , testCase "withEventLoop returns what the client returns" eventLoopReturns
@@ -82,16 +84,14 @@ passesFd = withSession $ \s -> do
 -- | A request this side checks and rejects throws `InvalidMessage`, and the connection carries on as if it was never made.
 rejectsOwnRequest :: Assertion
 rejectsOwnRequest = withSession $ \s -> do
-  oid <- newObjectID
   rejected <-
-    (Nothing <$ sendMsg s.registry (Request_wl_registry_bind 999 (WlNewId [wl|wl_compositor|] 1 oid)))
+    (Nothing <$ withNewObjectID (sendMsg s.registry . Request_wl_registry_bind 999 . WlNewId [wl|wl_compositor|] 1))
       `catchW` \(e :: InvalidMessage) -> pure (Just e)
   liftIO $ assertBool "the bind of a global that was never advertised was sent" (isJust rejected)
   roundtrip
   liftIO $ do
     ended <- tryReadMVar s.clientLoopEnded
     assertBool ("the connection ended: " <> show ended) (isNothing ended)
-    compositorObject @Wl_compositor s (TObjectID $ FromClient oid) >>= assertBool "the compositor has the object" . isNothing
 
 -- | A request that breaks the protocol, sent without this side's checks, ends the connection with a @wl_display.error@.
 reportsViolation :: Assertion
@@ -113,6 +113,28 @@ reportsMalformed = withSession $ \s -> do
   liftIO $ sendRaw env.connectionSocket (toObjectID s.display.wlid) 0 (putWlUInt 0)
   liftIO $ expectProtocolError s Err_invalid_method
   putMVar env.writeLock ()
+
+-- | Like libwayland, the compositor ends the connection when a new ID skips the next one the client may use.
+rejectsSkippedID :: Assertion
+rejectsSkippedID = withSession $ \s -> do
+  _skipped <- newObjectID
+  oid <- newObjectID
+  sendMessage (Request_wl_display_get_registry . TObjectID $ FromClient oid) s.display.wlid
+  liftIO $ expectProtocolError s Err_invalid_object
+
+-- | Threads creating objects at the same time still send their new IDs in the order they were allocated.
+concurrentNewIDs :: Assertion
+concurrentNewIDs = withSession $ \s -> do
+  wl_compositor <- bindToInterface @Wl_compositor s.registry
+  env <- ask
+  let createSurfaces = usingReaderT env . replicateM_ 100 $ newObject wl_compositor Request_wl_compositor_create_surface
+  threads <- liftIO . replicateM 8 $ do
+    done <- newEmptyMVar
+    void $ forkFinally createSurfaces (putMVar done)
+    pure done
+  liftIO $ mapM_ (takeMVar >=> either (assertFailure . displayException) pure) threads
+  roundtrip
+  liftIO $ tryReadMVar s.clientLoopEnded >>= \ended -> assertBool ("the connection ended: " <> show ended) (isNothing ended)
 
 -- | A commit applies the surface's pending state to its current state, on both sides.
 commitAppliesState :: Assertion

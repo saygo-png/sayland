@@ -356,7 +356,8 @@ newtype Wl_fixes = Wl_fixes {wlid :: TObjectID Wl_fixes}
 
 $(loadProtocolFile wlFormatter "xml-protocols/wayland.xml")
 
--- | Enter an object the message creates in this side's object map. An ID that is still in use is a protocol violation.
+-- | Enter an object the message creates in this side's object map. An ID that is still in use is a protocol violation,
+-- and so is an ID from the peer that skips ahead of the next one it may use, as libwayland enforces.
 registerObject :: (Message m, Object i) => m -> i -> Wayland p ()
 registerObject msg obj = registerSomeObject msg (toObjectID obj.wlid) (SomeObject obj)
 
@@ -364,13 +365,33 @@ registerObject msg obj = registerSomeObject msg (toObjectID obj.wlid) (SomeObjec
 registerSomeObject :: (Message m) => m -> AnyObjectID -> SomeObject -> Wayland p ()
 registerSomeObject msg oid obj = do
   env <- getConnectionEnv
+  checkPeerIDOrder msg oid
   inserted <- atomicModifyIORef' env.objects $ \m ->
     if Map.member oid m then (m, False) else (Map.insert oid obj m, True)
   unless inserted
     . protocolViolation Unrecoverable msg wlDisplayId Err_invalid_object
     . wlTextLossy
-    . T.pack
-    $ "object ID " <> show (fromAnyObjectID oid) <> " is still in use"
+    $ "object ID " <> T.show (fromAnyObjectID oid) <> " is still in use"
+
+-- | The peer may give a new object any ID up to one past the highest it has used, never further.
+-- libwayland ends the connection of a peer whose new ID skips ahead so we mark the violation `Unrecoverable`
+-- though technically we could recover from it.
+--
+-- IDs this side allocated are not checked as they are in the other range.`withNewObjectID` keeps them in order.
+checkPeerIDOrder :: (Message m) => m -> AnyObjectID -> Wayland p ()
+checkPeerIDOrder msg oid = do
+  env <- getConnectionEnv
+  me <- getPerspective
+  let n = fromAnyObjectID oid
+  unless (allocatedBy oid == me) $ do
+    skipsAhead <- atomicModifyIORef' env.nextPeerID $ \next ->
+      if n > next
+        then (next, True)
+        else (max next (n + 1), False) -- n + 1 might be lower than next with id reuse.
+    when skipsAhead
+      . protocolViolation Unrecoverable msg wlDisplayId Err_invalid_object
+      . wlTextLossy
+      $ "new object ID " <> T.show n <> " skips ahead of the next one the peer may use"
 
 -- | Remove an object from the objects map. On a server this also sends @delete_id@.
 dropObject :: TObjectID a -> Wayland p ()
@@ -1095,9 +1116,8 @@ tryBindToInterface registry = do
   case matchingIfaces of
     [] -> pure Nothing
     (name, advertisedVersion) : _ -> do
-      oid <- newObjectID
       let negotiatedVersion = min advertisedVersion $ getInterfaceVersion (Proxy @i)
-      sendMsg registry $ Request_wl_registry_bind (coerce name) (WlNewId targetIface negotiatedVersion oid)
+      oid <- withNewObjectID $ \oid -> oid <$ sendMsg registry (Request_wl_registry_bind (coerce name) (WlNewId targetIface negotiatedVersion oid))
       Just <$> (getInterface (TObjectID $ FromClient oid) >>= maybe (error "sayland bug: bind did not register the global") pure)
 
 -- }}}

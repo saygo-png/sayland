@@ -14,6 +14,8 @@ import Control.Monad.Reader
 import Data.Binary
 import Data.ByteString qualified as BS
 import Data.Coerce
+import Data.Function
+import Data.Functor
 import Data.Kind
 import Data.Map (Map)
 import Data.Typeable
@@ -236,8 +238,10 @@ data ConnectionEnv (p :: Perspective) = ConnectionEnv
   -- ^ The socket of this connection.
   , writeLock :: MVar ()
   -- ^ write lock used to avoid race conditions.
-  , counter :: IORef (Maybe (ObjectID p))
+  , counter :: MVar (Maybe (ObjectID p))
   -- ^ The next `ObjectID` this side allocates. `Nothing` once its range is used up.
+  , nextPeerID :: IORef WlUInt
+  -- ^ The highest ID the peer may give a new object: one past the highest it has used.
   , objects :: IORef (Map AnyObjectID SomeObject)
   -- ^ Mutable `Map` of `objectID`s to interfaces they represent.
   , globals :: IORef (Map GlobalName (WlText, WlUInt))
@@ -357,8 +361,9 @@ data Severity r where
 protocolViolation :: (Message m, ToObjectID o, ErrorCode e) => Severity r -> m -> o -> e -> WlText -> Wayland p r
 protocolViolation severity msg o code text = case severity of
   Unrecoverable -> reject
-  Recoverable ->
-    (.onRecoverable) <$> getConnectionEnv >>= \case
+  Recoverable -> do
+    policy <- getConnectionEnv <&> (.onRecoverable)
+    case policy of
       Reject -> reject
       Warn -> do
         me <- getPerspective
