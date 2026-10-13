@@ -1,6 +1,8 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 -- | Description : Decoding and encoding wire protocol values.
@@ -8,6 +10,7 @@ module Sayland.Internal.Wire (module Sayland.Internal.Wire) where
 
 import Control.Applicative ((<|>))
 import Control.Exception (Exception)
+import Control.Monad
 import Control.Monad.State.Strict (MonadTrans (lift), State, StateT)
 import Control.Monad.State.Strict qualified as State
 import Data.Bifunctor
@@ -75,6 +78,10 @@ newtype WlFixed = WlFixed Int32 deriving newtype (Show, Eq, Ord)
 
 -- | The non null t'Text' content of a `WlString`, encoded in UTF-8. Cannot contain NUL terminators.
 newtype WlText = WlText Text deriving newtype (Show, Eq, Ord, Semigroup, Monoid)
+
+-- | Matches a t'WlText' by its text, as a `String`.
+pattern WlTextString :: String -> WlText
+pattern WlTextString string <- WlText (T.unpack -> string)
 
 -- | Fails on text containing NUL, which a wl_string can't carry.
 wlText :: Text -> Either TextContainsNul WlText
@@ -366,18 +373,23 @@ instance Exception DecodeError
 -- | t'WlText' literals, checked while compiling. @[wl|wl_compositor|] :: WlText@
 -- Text containing NUL is a compile error. Everything between the bars is the text, spaces included.
 -- If you wish to create a WlString, wrap in `Just`. For a null WlString just use `Nothing`
+--
+-- In a pattern it matches exactly that text:
+--
+-- > Event_wl_registry_global name [wl|wl_output|] version -> ...
 wl :: QuasiQuoter
 wl =
   QuasiQuoter
-    { quoteExp = \s -> case wlText (T.pack s) of
-        Left (TextContainsNul index) -> fail ("sayland: [wl|...|] contains NUL at index " <> show index)
-        Right (WlText text) -> [|WlText $(TH.lift text)|]
-    , quotePat = unsupported "patterns"
+    { quoteExp = checked >=> \(WlText text) -> [|WlText $(TH.lift text)|]
+    , quotePat = \s -> checked s >> [p|WlTextString $(pure . TH.LitP $ TH.StringL s)|]
     , quoteType = unsupported "types"
     , quoteDec = unsupported "declarations"
     }
   where
-    unsupported what _ = fail ("sayland: [wl|...|] only makes expressions, not " <> what)
+    checked s = case wlText (T.pack s) of
+      Left (TextContainsNul index) -> fail ("sayland: [wl|...|] contains NUL at index " <> show index)
+      Right text -> pure text
+    unsupported what _ = fail ("sayland: [wl|...|] only makes expressions and patterns, not " <> what)
 
 -- | Parse the size of a body.
 parseBodyWords :: Word16 -> Either InvalidSize BodyWords
