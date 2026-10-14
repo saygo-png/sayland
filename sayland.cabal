@@ -108,6 +108,7 @@ library
     Sayland.Internal.Object
     Sayland.Internal.Prelude
     Sayland.Internal.Protocols.DmaBuf
+    Sayland.Internal.Protocols.ExtWorkspace
     Sayland.Internal.Protocols.Fifo
     Sayland.Internal.Protocols.Wayland
     Sayland.Internal.Protocols.WlrLayerShell
@@ -115,6 +116,7 @@ library
     Sayland.Log
     Sayland.Object
     Sayland.Protocols.DmaBuf
+    Sayland.Protocols.ExtWorkspace
     Sayland.Protocols.Fifo
     Sayland.Protocols.Wayland
     Sayland.Protocols.WlrLayerShell
