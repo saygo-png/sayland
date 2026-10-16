@@ -9,17 +9,19 @@ module Sayland.Internal.Prelude (
   module Prelude,
   module Control.Concurrent.MVar,
   module Control.Monad.STM,
+  module Control.Concurrent.STM,
 ) where
 
 -- addMVarFinalizer has no documentation in base, and nothing here uses it.
 import Control.Concurrent.MVar hiding (addMVarFinalizer, newEmptyMVar, newMVar, putMVar, takeMVar, tryTakeMVar)
 import Control.Concurrent.MVar qualified as CCM
+import Control.Concurrent.STM hiding (atomically, readTVarIO)
+import Control.Concurrent.STM qualified as STM
 import Control.Exception (Exception)
 import Control.Exception qualified as CE
 import Control.Monad (void)
 import Control.Monad.IO.Class
 import Control.Monad.STM hiding (atomically)
-import Control.Monad.STM qualified as STM
 import Data.IORef hiding (atomicModifyIORef, atomicModifyIORef', atomicWriteIORef, newIORef, readIORef)
 import Data.IORef qualified as Ref
 import GHC.Stack (HasCallStack)
@@ -60,6 +62,12 @@ newIORef :: (MonadIO m) => a -> m (IORef a)
 newIORef = liftIO . Ref.newIORef
 {-# INLINE newIORef #-}
 {-# SPECIALIZE newIORef :: a -> IO (IORef a) #-}
+
+-- | Lifted `readTVarIO`
+readTVarIO :: (MonadIO m) => TVar a -> m a
+readTVarIO = liftIO . STM.readTVarIO
+{-# INLINE readTVarIO #-}
+{-# SPECIALIZE readTVarIO :: TVar a -> IO a #-}
 
 -- | Lifted version of 'Control.Concurrent.MVar.putMVar'.
 putMVar :: (MonadIO m) => MVar a -> a -> m ()

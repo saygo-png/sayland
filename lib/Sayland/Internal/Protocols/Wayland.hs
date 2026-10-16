@@ -365,8 +365,9 @@ registerSomeObject :: (Message m) => m -> AnyObjectID -> SomeObject -> Wayland p
 registerSomeObject msg oid obj = do
   env <- getConnectionEnv
   checkPeerIDOrder msg oid
-  inserted <- atomicModifyIORef' env.objects $ \m ->
-    if Map.member oid m then (m, False) else (Map.insert oid obj m, True)
+  inserted <- atomically $ do
+    m <- readTVar env.objects
+    if Map.member oid m then pure False else True <$ writeTVar env.objects (Map.insert oid obj m)
   unless inserted
     . protocolViolation Unrecoverable msg wlDisplayId Err_invalid_object
     . wlTextLossy
@@ -396,7 +397,7 @@ checkPeerIDOrder msg oid = do
 dropObject :: TObjectID a -> Wayland p ()
 dropObject (TObjectID i) = do
   env <- getConnectionEnv
-  atomicModifyIORef' env.objects $ \m -> (Map.delete i m, ())
+  atomically . modifyTVar' env.objects $ Map.delete i
   onServer $ sendMessage (Event_wl_display_delete_id $ fromAnyObjectID i) wlDisplayId
 
 -- | @mmap@ a shm pool's fd, read/write and shared.
@@ -420,7 +421,7 @@ synchronizedParent surface = do
 applyContentUpdate :: Wl_surface -> ContentUpdate -> Wayland p ()
 applyContentUpdate surface cu = do
   env <- getConnectionEnv
-  objects <- readIORef env.objects
+  objects <- readTVarIO env.objects
   -- A frame callback is dropped once it is done, so the ones still in the object map are not done yet.
   let notDone = filter (\cb -> Map.member (toObjectID cb) objects)
   atomicModifyIORef' surface.state $ \s ->
@@ -449,7 +450,7 @@ instance Object Wl_display where
   onEvent obj msg@(Event_wl_display_delete_id dId) = do
     env <- getConnectionEnv
     case mkWlObjectID dId of
-      Just oid -> atomicModifyIORef' env.objects $ \m -> (Map.delete oid m, ())
+      Just oid -> atomically . modifyTVar' env.objects $ Map.delete oid
       Nothing -> protocolViolation Recoverable msg obj Err_invalid_object [wl|delete_id for the null object|]
     forwardMessage obj msg
   onEvent obj msg@(Event_wl_display_error objectId code message) = do

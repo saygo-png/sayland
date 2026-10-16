@@ -61,7 +61,7 @@ receiveMsg = applyIncoming
 getInterface :: (Typeable i) => TObjectID i -> Wayland p (Maybe i)
 getInterface (TObjectID oid) = do
   env <- getConnectionEnv
-  (proxyInterface <=< Map.lookup oid) <$> readIORef env.objects
+  (proxyInterface <=< Map.lookup oid) <$> readTVarIO env.objects
 
 -- | Cast provided interface into proxied type.
 proxyInterface :: forall i. (Typeable i) => SomeObject -> Maybe i

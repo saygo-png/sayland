@@ -4,8 +4,6 @@
 module Sayland.Connection (module Sayland.Connection) where
 
 import Control.Concurrent (forkFinally, killThread, myThreadId, threadDelay, throwTo)
-import Control.Concurrent.STM (flushTQueue, newTQueue, unGetTQueue, writeTQueue)
-import Control.Concurrent.STM.TVar
 import Control.Exception (AsyncException (ThreadKilled), bracket, displayException, finally, fromException)
 import Control.Monad
 import Control.Monad.IO.Class
@@ -88,7 +86,7 @@ clientLoop = clientLoop' ""
 handleMessage :: (KnownPerspective p) => WlObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 handleMessage oid' opcode msg = do
   env <- getConnectionEnv
-  objects <- readIORef env.objects
+  objects <- readTVarIO env.objects
   case oid' >>= \oid -> (oid,) <$> Map.lookup oid objects of
     Just (oid, SomeObject o) -> withIncoming o $ dispatchWith (applyIncoming o) oid opcode msg
     Nothing -> logWarn $ "ignored a message to unknown object " <> show oid'
@@ -214,7 +212,7 @@ newConnectionEnv connectionSocket interfaceTable eventHandlers onRecoverable log
   nextPeerID <- newIORef $ case toAnyObjectID (firstObjectID @p) of
     FromClient _ -> 0xff000000 -- This is a client, the first ID a server allocates.
     FromServer _ -> 2 -- This is a server, the first ID a client allocates after wl_display.
-  objects <- newIORef $ Map.singleton (toObjectID wlDisplayId) (SomeObject $ Wl_display wlDisplayId)
+  objects <- newTVarIO $ Map.singleton (toObjectID wlDisplayId) (SomeObject $ Wl_display wlDisplayId)
   globals <- newIORef mempty
   fdQueue <- atomically newTQueue
   pure ConnectionEnv{..}

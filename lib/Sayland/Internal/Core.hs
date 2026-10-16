@@ -241,7 +241,7 @@ data ConnectionEnv (p :: Perspective) = ConnectionEnv
   -- ^ The next `ObjectID` this side allocates. `Nothing` once its range is used up.
   , nextPeerID :: IORef Word32
   -- ^ The highest ID the peer may give a new object: one past the highest it has used.
-  , objects :: IORef (Map AnyObjectID SomeObject)
+  , objects :: TVar (Map AnyObjectID SomeObject)
   -- ^ Mutable `Map` of `objectID`s to interfaces they represent.
   , globals :: IORef (Map GlobalName (WlText, Word32))
   -- ^ `Map` of global interfaces and their versions advertised by a compositor.

@@ -7,7 +7,6 @@
 -- | Description: Internals of Sayland.Protocols.ExtWorkspace
 module Sayland.Internal.Protocols.ExtWorkspace (module Sayland.Internal.Protocols.ExtWorkspace) where
 
-import Control.Concurrent.STM.TVar
 import Control.Monad
 import Control.Monad.IO.Class
 import Data.Foldable
