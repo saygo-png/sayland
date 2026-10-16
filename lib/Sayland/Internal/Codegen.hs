@@ -281,7 +281,7 @@ mkEnum interfaceName enumEl = do
           matches =
             [match (conP 'Left [varP short]) (normalB [|Left (BodyTooShort $(varE short))|]) []]
               <> [match (conP 'Right [litP $ integerL v]) (normalB [|Right $(conE $ entryCon k)|]) [] | (k, v) <- enumKV]
-              <> [match (conP 'Right [varP unknown]) (normalB [|Left (UnknownEnumValue $(varE unknown))|]) []]
+              <> [match (conP 'Right [conP 'WlUInt [varP unknown]]) (normalB [|Left (UnknownEnumValue $(varE unknown))|]) []]
       sequence
         $ codecSigs
         <> [ funD putName [clause [conP (entryCon k) []] (normalB [|putWlUInt $(litE $ integerL v)|]) [] | (k, v) <- enumKV]
@@ -303,7 +303,7 @@ mkEnum interfaceName enumEl = do
           (AppT (ConT ''ErrorCode) (ConT $ mkName enumName'))
           [ FunD
               'errorCode
-              [ Clause [ConP (mkName $ enumName'' <> k) [] []] (NormalB $ AppE (ConE 'WlUInt) (LitE $ IntegerL v)) []
+              [ Clause [ConP (mkName $ enumName'' <> k) [] []] (NormalB $ LitE $ IntegerL v) []
               | (k, v) <- enumKV
               ]
           ]
@@ -375,7 +375,7 @@ loadProtocolFileEnums path = do
 generateTables :: (String -> String) -> FilePath -> Q [Dec]
 generateTables formatter path = do
   protocols <- readProtocols path
-  concat <$> traverse (\p -> generateProtocolTable p formatter) protocols
+  concat <$> traverse (`generateProtocolTable` formatter) protocols
 
 -- | Create message types (requests and events).
 mkMessages :: (String -> String) -> String -> String -> [Element] -> Q [Dec]
@@ -520,7 +520,7 @@ loadInterface formatter int = do
               , TySynInstD $ TySynEqn Nothing (AppT (ConT ''Request) ifaceT) (ConT $ mkName $ "Request_" <> name')
               , FunD
                   'getInterfaceVersion
-                  [Clause [WildP] (NormalB $ AppE (ConE 'WlUInt) (LitE $ IntegerL version')) []]
+                  [Clause [WildP] (NormalB $ LitE $ IntegerL version') []]
               , FunD
                   'getInterfaceName
                   [Clause [WildP] (NormalB wlName) []]
@@ -570,19 +570,23 @@ argCodec formatter from intName element = case findAttr (qname "enum") element o
   Nothing -> case (findAttr (qname "type") element, findAttr (qname "interface") element, isNullable element) of
     (Just "new_id", Just x, _) -> ArgCodec (tObject x) [|putWlObjectID . Just . toObjectID|] [|bimap InvalidObjectID (TObjectID . $fromCon) <$> getObjectID|]
     (Just "new_id", Nothing, _) -> ArgCodec (AppT (ConT ''WlNewId) fromT) [|putWlNewId|] [|first InvalidNewId <$> getWlNewId|]
-    (Just "int", _, _) -> mayRunOut ''WlInt [|putWlInt|] [|getWlInt|]
-    (Just "uint", _, _) -> mayRunOut ''WlUInt [|putWlUInt|] [|getWlUInt|]
+    -- Messages carry plain numbers and descriptors but they are wrapped here in wire types.
+    -- This is done so that users don't have to coerce all the time, these newtypes only differ in how they are encoded.
+    (Just "uint", _, _) | intName == "wl_registry", argName == Just "name" -> mayRunOut ''GlobalName [|\(GlobalName n) -> putWlUInt (WlUInt n)|] [|fmap (\(WlUInt n) -> GlobalName n) <$> getWlUInt|]
+    (Just "int", _, _) -> mayRunOut ''Int32 [|putWlInt . WlInt|] [|fmap (\(WlInt i) -> i) <$> getWlInt|]
+    (Just "uint", _, _) -> mayRunOut ''Word32 [|putWlUInt . WlUInt|] [|fmap (\(WlUInt w) -> w) <$> getWlUInt|]
     (Just "fixed", _, _) -> mayRunOut ''WlFixed [|putWlFixed|] [|getWlFixed|]
     (Just "array", _, _) -> mayRunOut ''WlArray [|putWlArray|] [|getWlArray|]
-    (Just "fd", _, _) -> ArgCodec (ConT ''WlFd) [|putWlFd|] [|maybe (Left MissingFd) Right <$> getWlFd|]
+    (Just "fd", _, _) -> ArgCodec (ConT ''Fd) [|putWlFd . WlFd|] [|maybe (Left MissingFd) (\(WlFd fd) -> Right fd) <$> getWlFd|]
     (Just "string", _, True) -> ArgCodec (ConT ''WlString) [|putWlString|] [|first InvalidString <$> getWlString|]
-    (Just "string", _, False) -> ArgCodec (ConT ''WlText) [|putWlString . Just|] [|(>>= maybe (Left NullString) Right) . first InvalidString <$> getWlString|]
+    (Just "string", _, False) -> ArgCodec (ConT ''WlText) [|putWlString . Just|] [|(maybe (Left NullString) Right <=< first InvalidString) <$> getWlString|]
     (Just "object", Just x, True) -> ArgCodec (AppT (ConT ''Maybe) $ tObject x) [|putWlObjectID . fmap toObjectID|] [|bimap BodyTooShort (fmap TObjectID) <$> getWlObjectID|]
     (Just "object", Just x, False) -> ArgCodec (tObject x) [|putWlObjectID . Just . toObjectID|] [|bimap InvalidObjectID TObjectID <$> getAnyObjectID|]
     (Just "object", Nothing, True) -> mayRunOut ''WlObjectID [|putWlObjectID|] [|getWlObjectID|]
     (Just "object", Nothing, False) -> ArgCodec (ConT ''AnyObjectID) [|putWlObjectID . Just|] [|first InvalidObjectID <$> getAnyObjectID|]
     _ -> error $ "sayland: unsupported arg " <> show element
   where
+    argName = findAttr (qname "name") element
     tObject = AppT (ConT ''TObjectID) . ConT . mkName . formatter
     -- A @new_id@ is in the range of the side that sends it.
     (fromCon, fromT) = case from of

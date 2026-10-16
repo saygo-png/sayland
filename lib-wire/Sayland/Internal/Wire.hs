@@ -67,10 +67,12 @@ getBytes n = State.state $ \(bytes, fds) ->
 getHostWord :: Int -> Get a -> WireGet (Either NotEnoughBytes a)
 getHostWord n getter = fmap (runGet getter . BS.fromStrict) <$> getBytes n
 
--- | Wayland @int@. 32-bit signed integer.
+-- | Wayland @int@. 32-bit signed integer, put in host byte order.
+-- Only used for decoding/encoding, messages carry a plain `Int32`.
 newtype WlInt = WlInt Int32 deriving newtype (Show, Eq, Ord, Num, Integral, Enum, Real)
 
--- | Wayland @uint@. 32-bit unsigned integer.
+-- | Wayland @uint@. 32-bit unsigned integer, put in host byte order.
+-- Only used for decoding/encoding, messages carry a plain `Word32`.
 newtype WlUInt = WlUInt Word32 deriving newtype (Show, Eq, Ord, Num, Integral, Enum, Real)
 
 -- | Wayland @fixed@. 24.8 bit signed fixed-point number.
@@ -119,15 +121,15 @@ type role ObjectID nominal
 
 -- | The ID of an object side @p@ allocated, so in @p@'s range and never 0 (null).
 -- "Sayland.Wire" does not export the constructor, so the range checks below are the only way to make one.
-newtype ObjectID (p :: Perspective) = ObjectID WlUInt deriving newtype (Show, Eq, Ord)
+newtype ObjectID (p :: Perspective) = ObjectID Word32 deriving newtype (Show, Eq, Ord)
 
 -- | Make a valid t'ObjectID'. Checked at compile time. Use with type applications @mkObjectID \@Client \@5@
 -- A number outside @p@'s range is a type error.
 mkObjectID :: forall p n. (KnownNat n, FirstID p <= n, n <= LastID p) => ObjectID p
-mkObjectID = ObjectID . WlUInt . fromIntegral . natVal $ Proxy @n
+mkObjectID = ObjectID . fromIntegral . natVal $ Proxy @n
 
 -- | Make an t'ObjectID', checked at runtime. `Nothing` if the number is outside @p@'s range.
-objectID :: forall p. (IDRange p) => WlUInt -> Maybe (ObjectID p)
+objectID :: forall p. (IDRange p) => Word32 -> Maybe (ObjectID p)
 objectID n = if natVal (Proxy @(FirstID p)) <= i && i <= natVal (Proxy @(LastID p)) then Just (ObjectID n) else Nothing
   where
     i = toInteger n
@@ -138,7 +140,7 @@ succObjectID :: (IDRange p) => ObjectID p -> Maybe (ObjectID p)
 succObjectID (ObjectID n) = objectID (n + 1)
 
 -- | The number of an t'ObjectID'.
-fromObjectID :: ObjectID p -> WlUInt
+fromObjectID :: ObjectID p -> Word32
 fromObjectID (ObjectID n) = n
 
 -- | The ID of an object either side allocated.
@@ -146,7 +148,7 @@ data AnyObjectID = FromClient (ObjectID Client) | FromServer (ObjectID Server)
   deriving stock (Show, Eq, Ord)
 
 -- | The number of an `AnyObjectID`.
-fromAnyObjectID :: AnyObjectID -> WlUInt
+fromAnyObjectID :: AnyObjectID -> Word32
 fromAnyObjectID (FromClient oid) = fromObjectID oid
 fromAnyObjectID (FromServer oid) = fromObjectID oid
 
@@ -154,14 +156,14 @@ fromAnyObjectID (FromServer oid) = fromObjectID oid
 type WlObjectID = Maybe AnyObjectID
 
 -- | `Nothing` for 0, the null object, the only number in neither side's range.
-mkWlObjectID :: WlUInt -> WlObjectID
+mkWlObjectID :: Word32 -> WlObjectID
 mkWlObjectID n = FromClient <$> objectID n <|> FromServer <$> objectID n
 
 -- | Wayland @array@.
 -- A blob of arbitrary data, prefixed with a 32-bit integer specifying its length (in bytes), then the verbatim contents of the array, padded to 32 bits with zero bytes.
 newtype WlArray = WlArray BS.ByteString deriving newtype (Show, Eq, Ord)
 
--- | Wayland @fd@.
+-- | Wayland @fd@. Only the wire putters and getters use it. Messages carry a plain `Fd`.
 -- 0-bit value on the primary transport, but transfers a file descriptor to the other end using the ancillary data in the Unix domain socket message (msg_control).
 -- This is the reason why we don't use a `Binary` instance for wire types, as we need additional state to house fds.
 newtype WlFd = WlFd Fd deriving newtype (Show, Eq, Ord)
@@ -169,8 +171,8 @@ newtype WlFd = WlFd Fd deriving newtype (Show, Eq, Ord)
 type role WlNewId nominal
 
 -- | Wayland @new_id@ of no fixed interface, allocated by @p@, the side that sends it.
--- A 32-bit object ID. Preceded by a non null @string@ specifying the interface name, and a t'WlUInt' specifying the version.
-data WlNewId (p :: Perspective) = WlNewId WlText WlUInt (ObjectID p) deriving stock (Show, Eq)
+-- A 32-bit object ID. Preceded by a non null @string@ specifying the interface name, and a @uint@ specifying the version.
+data WlNewId (p :: Perspective) = WlNewId WlText Word32 (ObjectID p) deriving stock (Show, Eq)
 
 -- | Put a t'WlUInt'.
 putWlUInt :: WlUInt -> WirePut ()
@@ -232,7 +234,7 @@ getWlString =
 
 -- | Put a t'WlNewId': its interface name, version and ID.
 putWlNewId :: WlNewId p -> WirePut ()
-putWlNewId (WlNewId n v i) = putWlString (Just n) >> putWlUInt v >> putObjectID i
+putWlNewId (WlNewId n v i) = putWlString (Just n) >> putWlUInt (WlUInt v) >> putObjectID i
 
 -- | Get a t'WlNewId', or what is wrong with it.
 getWlNewId :: (IDRange p) => WireGet (Either NewIdError (WlNewId p))
@@ -240,7 +242,7 @@ getWlNewId = do
   name <- getWlString
   version <- getWlUInt
   newId <- getObjectID
-  pure $ WlNewId <$> (first NewIdName name >>= maybe (Left NewIdNullName) Right) <*> first NewIdTooShort version <*> first NewIdObjectID newId
+  pure $ WlNewId <$> (first NewIdName name >>= maybe (Left NewIdNullName) Right) <*> bimap NewIdTooShort (\(WlUInt v) -> v) version <*> first NewIdObjectID newId
 
 -- | Put a t'WlFd'. Its file descriptor is sent alongside the bytes, not in them.
 putWlFd :: WlFd -> WirePut ()
@@ -258,7 +260,7 @@ getObjectID :: (IDRange p) => WireGet (Either ObjectIDError (ObjectID p))
 getObjectID =
   getWlUInt <&> \case
     Left short -> Left (ObjectIDTooShort short)
-    Right n -> maybe (Left $ ObjectIDOutOfRange n) Right (objectID n)
+    Right (WlUInt n) -> maybe (Left $ ObjectIDOutOfRange n) Right (objectID n)
 
 -- | Like `getWlObjectID` but the null object is an error.
 getAnyObjectID :: WireGet (Either ObjectIDError AnyObjectID)
@@ -270,15 +272,15 @@ getAnyObjectID =
 
 -- | Put an t'ObjectID'.
 putObjectID :: ObjectID p -> WirePut ()
-putObjectID = putWlUInt . fromObjectID
+putObjectID = putWlUInt . WlUInt . fromObjectID
 
 -- | Get a `WlObjectID`. 0 is the null object, `Nothing`.
 getWlObjectID :: WireGet (Either NotEnoughBytes WlObjectID)
-getWlObjectID = fmap mkWlObjectID <$> getWlUInt
+getWlObjectID = fmap (\(WlUInt n) -> mkWlObjectID n) <$> getWlUInt
 
 -- | Put a `WlObjectID`. `Nothing` is sent as 0.
 putWlObjectID :: WlObjectID -> WirePut ()
-putWlObjectID = putWlUInt . maybe 0 fromAnyObjectID
+putWlObjectID = putWlUInt . WlUInt . maybe 0 fromAnyObjectID
 
 -- | Number needed to round n up to the next multiple of 4.
 -- Used to determine 0 byte padding for types such as `WlString` or t'WlArray'.
@@ -299,7 +301,7 @@ getHeader = do
 
 -- | `WirePut` a Wayland header. Reverses `getHeader`.
 putHeader :: (AnyObjectID, Word16, Word16) -> WirePut ()
-putHeader (oid, opcode, size) = putWlUInt (fromAnyObjectID oid) >> lift (putWord16host opcode >> putWord16host size)
+putHeader (oid, opcode, size) = putWlUInt (WlUInt (fromAnyObjectID oid)) >> lift (putWord16host opcode >> putWord16host size)
 
 -- | Create a wayland message. It takes an objectID, operation code and a message body.
 -- The header is derived automatically.
@@ -357,7 +359,7 @@ data ObjectIDError
   | -- | Expected a non null object but a null one was received.
     ObjectIDIsNul
   | -- | The number is outside the range of the side that allocated the object.
-    ObjectIDOutOfRange WlUInt
+    ObjectIDOutOfRange Word32
   deriving stock (Show, Eq)
 
 instance Exception ObjectIDError

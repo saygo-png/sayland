@@ -70,7 +70,7 @@ passesFd = withSession $ \s -> do
   ClientEnv env <- ask
   liftIO . bracket sharedMemory (const $ shmUnlink name) $ \fd -> usingReaderT (ClientEnv env) $ do
     liftIO $ setFdSize fd (fromIntegral size)
-    pool <- newObject shm $ \i -> Request_wl_shm_create_pool i (WlFd fd) (fromIntegral size)
+    pool <- newObject shm $ \i -> Request_wl_shm_create_pool i fd (fromIntegral size)
     handle <- liftIO $ fdToHandle fd
     liftIO $ BS.hPut handle (BS.pack pixels) >> hFlush handle
     roundtrip
@@ -101,7 +101,7 @@ reportsViolation = withSession $ \s -> do
   oid <- newObjectID
   case [name | (name, (iface, _)) <- Map.toList globals, iface == [wl|wl_compositor|]] of
     [] -> liftIO $ assertFailure "wl_compositor is not advertised"
-    name : _ -> sendMessage (Request_wl_registry_bind (coerce name) (WlNewId [wl|wl_compositor|] 0 oid)) s.registry.wlid
+    name : _ -> sendMessage (Request_wl_registry_bind name (WlNewId [wl|wl_compositor|] 0 oid)) s.registry.wlid
   liftIO $ expectProtocolError s Err_invalid_method
 
 -- | A message the compositor cannot decode ends the connection with a @wl_display.error@.

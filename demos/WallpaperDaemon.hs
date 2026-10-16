@@ -35,7 +35,7 @@ main = withWaylandClient table program
 program :: Wayland Client ()
 program = do
   waylandEnv@(ClientEnv env) <- ask
-  serial :: TMVar WlUInt <- newEmptyTMVarIO
+  serial :: TMVar Word32 <- newEmptyTMVarIO
 
   display <- getWlDisplay
   registry <- newObject display Request_wl_display_get_registry
@@ -68,8 +68,8 @@ program = do
         usingReaderT waylandEnv $ do
           let frameSize = bufferWidth * bufferHeight * colorChannels
           liftIO . setFdSize fileDescriptor $ fromIntegral frameSize
-          wl_shm_pool <- newObject wl_shm $ \i -> Request_wl_shm_create_pool i (c fileDescriptor) (c frameSize)
-          wl_buffer <- newObject wl_shm_pool $ \i -> Request_wl_shm_pool_create_buffer i 0 (c bufferWidth) (c bufferHeight) (c (bufferWidth * colorChannels)) colorFormat
+          wl_shm_pool <- newObject wl_shm $ \i -> Request_wl_shm_create_pool i fileDescriptor frameSize
+          wl_buffer <- newObject wl_shm_pool $ \i -> Request_wl_shm_pool_create_buffer i 0 bufferWidth bufferHeight (bufferWidth * colorChannels) colorFormat
 
           fileHandle <- liftIO $ fdToHandle fileDescriptor
 

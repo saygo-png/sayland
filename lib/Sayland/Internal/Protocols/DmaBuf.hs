@@ -29,21 +29,21 @@ $(loadProtocolFileEnums "xml-protocols/linux-dmabuf-v1.xml")
 newtype Zwp_linux_dmabuf_v1 = Zwp_linux_dmabuf_v1 {wlid :: TObjectID Zwp_linux_dmabuf_v1}
 
 data Dmabuf = Dmabuf
-  { dmabufFd :: WlFd
-  , dmabufPlaneIdx :: WlUInt
-  , dmabufOffset :: WlUInt
-  , dmabufStride :: WlUInt
+  { dmabufFd :: Fd
+  , dmabufPlaneIdx :: Word32
+  , dmabufOffset :: Word32
+  , dmabufStride :: Word32
   }
 
 data DmabufBuffer = DmabufBuffer
   { dmabufs :: [Dmabuf]
-  , format :: WlUInt
+  , format :: Word32
   , modifier :: Word64
   , flags :: Enum_zwp_linux_buffer_params_v1_flags
   }
 
 instance BufferBackend DmabufBuffer where
-  releaseBuffer DmabufBuffer{dmabufs} = liftIO $ forM_ dmabufs $ \Dmabuf{dmabufFd = WlFd fd} -> closeFd fd
+  releaseBuffer DmabufBuffer{dmabufs} = liftIO $ forM_ dmabufs $ \Dmabuf{dmabufFd = fd} -> closeFd fd
 
 data Zwp_linux_buffer_params_v1 = Zwp_linux_buffer_params_v1 {wlid :: TObjectID Zwp_linux_buffer_params_v1, dmabufSet :: IORef [Dmabuf], paramsModifier :: IORef Word64, sampling_device :: IORef (Maybe WlArray)}
 
@@ -113,7 +113,7 @@ instance Object Zwp_linux_buffer_params_v1 where
   onRequest params msg@Request_zwp_linux_buffer_params_v1_destroy = do
     forwardMessage params msg
     dropObject params.wlid
-  onRequest params msg@(Request_zwp_linux_buffer_params_v1_add dmabufFd dmabufPlaneIdx dmabufOffset dmabufStride (WlUInt modifier_hi) (WlUInt modifier_lo)) = do
+  onRequest params msg@(Request_zwp_linux_buffer_params_v1_add dmabufFd dmabufPlaneIdx dmabufOffset dmabufStride modifier_hi modifier_lo) = do
     let dmabufModifier :: Word64 = shiftL (fromIntegral modifier_hi) 32 .|. fromIntegral modifier_lo
     modifier <- readIORef params.paramsModifier
     unless (dmabufModifier == modifier)
@@ -151,7 +151,7 @@ instance Object Zwp_linux_dmabuf_feedback_v1 where
     fstate <- readIORef feedback.pendingFeedbackState
     atomicWriteIORef feedback.feedbackState fstate
     forwardMessage feedback msg
-  onEvent feedback (Event_zwp_linux_dmabuf_feedback_v1_format_table (WlFd fd) (WlUInt size)) = do
+  onEvent feedback (Event_zwp_linux_dmabuf_feedback_v1_format_table fd size) = do
     result <-
       liftIO
         $ try

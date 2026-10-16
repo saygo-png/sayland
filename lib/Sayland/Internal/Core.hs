@@ -25,7 +25,6 @@ import Sayland.Internal.Log
 import Sayland.Internal.Prelude
 import Sayland.Wire
 import System.IO.Error (isResourceVanishedError)
-import System.Posix (Fd)
 
 -- | Type representing an `objectID` of a certain object.
 newtype TObjectID (a :: Type) = TObjectID AnyObjectID deriving newtype (Show, Eq, Ord)
@@ -49,8 +48,8 @@ type Wayland p = ReaderT (WaylandEnv p) IO
 
 -- | Type representing global names which are numbers.
 -- Created in order to prevent mixups between object ids and global names.
-newtype GlobalName = GlobalName WlUInt
-  deriving newtype (Show, Eq, Ord, Num)
+newtype GlobalName = GlobalName Word32
+  deriving newtype (Show, Eq, Ord, Num, Enum)
 
 -- | An interface a compositor advertises as a global, which clients bind with @wl_registry.bind@.
 class (Object i) => Global i where
@@ -136,7 +135,7 @@ class
   -- | The requests of the interface, sent by the client.
   type Request a = r | r -> a
 
-  getInterfaceVersion :: Proxy a -> WlUInt
+  getInterfaceVersion :: Proxy a -> Word32
   getInterfaceName :: Proxy a -> WlText
 
 -- | Existential type for holding different objects in one structure.
@@ -180,7 +179,7 @@ data MessageError
   | -- | A string the protocol does not mark @allow-null@ was null.
     NullString
   | -- | Not a value of the enum that the protocol declares for the argument.
-    UnknownEnumValue WlUInt
+    UnknownEnumValue Word32
   deriving stock (Show, Eq)
 
 instance Exception MessageError
@@ -195,7 +194,7 @@ runGetMessage opcode fds body = case runWireGet (getMessage opcode) fds body of
 
 -- | Everything needed to advertise and construct one interface.
 data InterfaceEntry = InterfaceEntry
-  { version :: WlUInt
+  { version :: Word32
   , construct :: AnyObjectID -> IO SomeObject
   }
 
@@ -240,11 +239,11 @@ data ConnectionEnv (p :: Perspective) = ConnectionEnv
   -- ^ write lock used to avoid race conditions.
   , counter :: MVar (Maybe (ObjectID p))
   -- ^ The next `ObjectID` this side allocates. `Nothing` once its range is used up.
-  , nextPeerID :: IORef WlUInt
+  , nextPeerID :: IORef Word32
   -- ^ The highest ID the peer may give a new object: one past the highest it has used.
   , objects :: IORef (Map AnyObjectID SomeObject)
   -- ^ Mutable `Map` of `objectID`s to interfaces they represent.
-  , globals :: IORef (Map GlobalName (WlText, WlUInt))
+  , globals :: IORef (Map GlobalName (WlText, Word32))
   -- ^ `Map` of global interfaces and their versions advertised by a compositor.
   , interfaceTable :: Map WlText InterfaceEntry
   -- ^ Table of interfaces supported by the client. This allows for adding in custom protocols.
@@ -259,10 +258,10 @@ data ConnectionEnv (p :: Perspective) = ConnectionEnv
   }
 
 -- | Error saying: The connection is over. The peer reported a violation with @wl_display.error@,
--- or sent something invalid. This represents a wire value so it only carries wire types. (no t'TObjectID' or `ErrorCode`)
+-- or sent something invalid. This represents a wire value so it carries no t'TObjectID' or `ErrorCode`.
 data ProtocolError = ProtocolError
   { object :: WlObjectID
-  , code :: WlUInt
+  , code :: Word32
   , message :: WlString
   }
   deriving stock (Show)
@@ -273,7 +272,7 @@ instance Exception ProtocolError where
 
 -- | Enums a protocol declares as error codes (@\<enum name="error"\>@).
 class ErrorCode e where
-  errorCode :: e -> WlUInt
+  errorCode :: e -> Word32
 
 -- | Error saying: A message failed validation before it was sent. Nothing reached the peer and
 -- the connection is still usable.

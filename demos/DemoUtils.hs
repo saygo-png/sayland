@@ -1,14 +1,11 @@
 -- | Description : Helpers shared by the demos.
-module DemoUtils (rainbowImage, c) where
+module DemoUtils (rainbowImage) where
 
 import Data.ByteString (pack)
 import Relude
 
 fi :: forall a b. (Integral a, Num b) => a -> b
 fi = fromIntegral
-
-c :: (Coercible a b) => a -> b
-c = coerce
 
 -- | :D
 rainbowImage :: Int32 -> Int32 -> ByteString

@@ -53,8 +53,8 @@ program = do
         bh <- readIORef bufferHeight
         let frameSize = bw * bh * colorChannels
         liftIO . setFdSize fileDescriptor $ fromIntegral frameSize
-        wl_shm_pool <- newObject wl_shm $ \i -> Request_wl_shm_create_pool i (c fileDescriptor) (c frameSize)
-        wl_buffer <- newObject wl_shm_pool $ \i -> Request_wl_shm_pool_create_buffer i 0 (c bw) (c bh) (c (bw * colorChannels)) Enum_wl_shm_format_argb8888
+        wl_shm_pool <- newObject wl_shm $ \i -> Request_wl_shm_create_pool i fileDescriptor frameSize
+        wl_buffer <- newObject wl_shm_pool $ \i -> Request_wl_shm_pool_create_buffer i 0 bw bh (bw * colorChannels) Enum_wl_shm_format_argb8888
         fileHandle <- liftIO $ fdToHandle fileDescriptor
 
         liftIO $ hPut fileHandle $ rainbowImage bw bh

@@ -58,7 +58,7 @@ data PositionerState = PositionerState
   , psConstraintAdjustment :: Maybe Enum_xdg_positioner_constraint_adjustment
   , psOffset :: Maybe (Int32, Int32)
   , psReactive :: Bool
-  , psParentConfigure :: Maybe WlUInt
+  , psParentConfigure :: Maybe Word32
   }
 
 -- }}}
@@ -103,18 +103,18 @@ instance Object Xdg_positioner where
     let set f = atomicModifyIORef' positioner.state $ \s -> (f s, ())
         invalidInput = protocolViolation Unrecoverable msg positioner Enum_xdg_positioner_error_invalid_input
     case msg of
-      Request_xdg_positioner_set_size (WlInt w) (WlInt h) -> do
+      Request_xdg_positioner_set_size w h -> do
         when (w <= 0 || h <= 0) $ invalidInput [wl|xdg_positioner.set_size: size must be positive|]
         set $ \s -> s{psSize = Just (w, h)}
-      Request_xdg_positioner_set_anchor_rect (WlInt x) (WlInt y) (WlInt w) (WlInt h) -> do
+      Request_xdg_positioner_set_anchor_rect x y w h -> do
         when (w < 0 || h < 0) $ invalidInput [wl|xdg_positioner.set_anchor_rect: size must not be negative|]
         set $ \s -> s{psAnchorRect = Just Rectangle{position = (x, y), size = (w, h)}}
       Request_xdg_positioner_set_anchor a -> set $ \s -> s{psAnchor = Just a}
       Request_xdg_positioner_set_gravity g -> set $ \s -> s{psGravity = Just g}
       Request_xdg_positioner_set_constraint_adjustment c -> set $ \s -> s{psConstraintAdjustment = Just c}
-      Request_xdg_positioner_set_offset (WlInt x) (WlInt y) -> set $ \s -> s{psOffset = Just (x, y)}
+      Request_xdg_positioner_set_offset x y -> set $ \s -> s{psOffset = Just (x, y)}
       Request_xdg_positioner_set_reactive -> set $ \s -> s{psReactive = True}
-      Request_xdg_positioner_set_parent_size (WlInt w) (WlInt h) -> set $ \s -> s{psParentSize = Just (w, h)}
+      Request_xdg_positioner_set_parent_size w h -> set $ \s -> s{psParentSize = Just (w, h)}
       Request_xdg_positioner_set_parent_configure serial -> set $ \s -> s{psParentConfigure = Just serial}
     forwardMessage positioner msg
 
@@ -187,7 +187,7 @@ instance Object Xdg_toplevel where
 
   onEvent toplevel msg = do
     case msg of
-      Event_xdg_toplevel_configure (WlInt w) (WlInt h) _ -> atomicWriteIORef toplevel.size (w, h)
+      Event_xdg_toplevel_configure w h _ -> atomicWriteIORef toplevel.size (w, h)
       _ -> stub toplevel msg
     forwardMessage toplevel msg
 

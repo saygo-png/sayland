@@ -15,7 +15,6 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Data.Bifunctor (bimap)
 import Data.Bool
-import Data.Coerce
 import Data.Foldable
 import Data.Function
 import Data.Functor
@@ -35,7 +34,7 @@ import Sayland.Internal.Core
 import Sayland.Internal.Object
 import Sayland.Internal.Prelude
 import Sayland.Wire
-import System.Posix (Fd, setFdSize)
+import System.Posix (setFdSize)
 
 $(loadProtocolFileEnums "xml-protocols/wayland.xml")
 
@@ -148,7 +147,7 @@ data Wl_callback = Wl_callback {wlid :: TObjectID Wl_callback, done :: MVar ()}
 
 newtype Wl_compositor = Wl_compositor {wlid :: TObjectID Wl_compositor}
 
-data Wl_shm_pool = Wl_shm_pool {wlid :: TObjectID Wl_shm_pool, fd :: Fd, size :: IORef WlInt, ptr :: IORef (Ptr ()), references :: IORef Int}
+data Wl_shm_pool = Wl_shm_pool {wlid :: TObjectID Wl_shm_pool, fd :: Fd, size :: IORef Int32, ptr :: IORef (Ptr ()), references :: IORef Int}
 
 data Wl_shm = Wl_shm {wlid :: TObjectID Wl_shm, formats :: IORef [Enum_wl_shm_format]}
 
@@ -170,7 +169,7 @@ class BufferBackend a where
 data Buffer where Buffer :: (Typeable a, BufferBackend a) => a -> Buffer
 
 -- | A buffer in a t'Wl_shm_pool': where it starts in the pool, its stride and its pixel format.
-data ShmBuffer = ShmBuffer {offset :: WlInt, stride :: WlInt, pool :: Wl_shm_pool, format :: Enum_wl_shm_format}
+data ShmBuffer = ShmBuffer {offset :: Int32, stride :: Int32, pool :: Wl_shm_pool, format :: Enum_wl_shm_format}
 
 instance BufferBackend ShmBuffer where
   releaseBuffer ShmBuffer{pool} = unmapShmPoolRef pool
@@ -181,8 +180,8 @@ instance BufferBackend () where
 data Wl_buffer = Wl_buffer
   { wlid :: TObjectID Wl_buffer
   , buffer :: Buffer
-  , width :: WlInt
-  , height :: WlInt
+  , width :: Int32
+  , height :: Int32
   }
 
 -- | The surface role of a drag-and-drop icon, with the drag it belongs to.
@@ -226,7 +225,7 @@ data Dnd = Dnd
   -- ^ If source is Nothing, Dnd is performed only within the same client.
   , origin :: TObjectID Wl_surface
   , icon :: Maybe (TObjectID Wl_surface)
-  , grabSerial :: WlUInt
+  , grabSerial :: Word32
   }
 
 -- | A drag-and-drop session as the client it enters sees it, from @wl_data_device.enter@ until leave or drop.
@@ -234,13 +233,13 @@ data DndClient = DndClient
   { target :: TObjectID Wl_surface
   , dndPosition :: (WlFixed, WlFixed)
   , offer :: Maybe (TObjectID Wl_data_offer)
-  , enterSerial :: WlUInt
+  , enterSerial :: Word32
   }
 
 -- | The selection set with @wl_data_device.set_selection@.
 data Selection = Selection
   { source :: Maybe (TObjectID Wl_data_source)
-  , eventSerial :: WlUInt
+  , eventSerial :: Word32
   }
 
 -- | The selection as a client sees it, from @wl_data_device.selection@.
@@ -324,16 +323,16 @@ newtype Wl_keyboard = Wl_keyboard {wlid :: TObjectID Wl_keyboard}
 newtype Wl_touch = Wl_touch {wlid :: TObjectID Wl_touch}
 
 -- | A @wl_output.geometry@ event: the output's position, physical size, subpixel layout, make, model and transform.
-data OutputGeometry = OutputGeometry {outputPosition :: (WlInt, WlInt), outputSize :: (WlInt, WlInt), subpixel :: Enum_wl_output_subpixel, make :: WlText, model :: WlText, outputTransform :: Enum_wl_output_transform}
+data OutputGeometry = OutputGeometry {outputPosition :: (Int32, Int32), outputSize :: (Int32, Int32), subpixel :: Enum_wl_output_subpixel, make :: WlText, model :: WlText, outputTransform :: Enum_wl_output_transform}
 
 -- | A @wl_output.mode@ event: the mode's flags, its size in pixels and its refresh rate in mHz.
-data OutputMode = OutputMode {outputFlags :: Enum_wl_output_mode, modeWidth :: WlInt, modeHeight :: WlInt, modeRefresh :: WlInt}
+data OutputMode = OutputMode {outputFlags :: Enum_wl_output_mode, modeWidth :: Int32, modeHeight :: Int32, modeRefresh :: Int32}
 
 -- | What changed about an output since the last @wl_output.done@, which applies it. 'Nothing' for what did not change.
 data OutputUpdate = OutputUpdate
   { updateGeometry :: Maybe OutputGeometry
   , updateMode :: Maybe OutputMode
-  , updateScale :: Maybe WlInt
+  , updateScale :: Maybe Int32
   , updateName :: Maybe WlText
   , updateDescription :: Maybe WlText
   }
@@ -342,7 +341,7 @@ data Wl_output = Wl_output
   { wlid :: TObjectID Wl_output
   , outputGeometry :: IORef OutputGeometry
   , outputMode :: IORef OutputMode
-  , outputScale :: IORef WlInt
+  , outputScale :: IORef Int32
   , outputName :: IORef WlText
   , outputDescription :: IORef WlText
   , outputUpdate :: IORef OutputUpdate
@@ -401,7 +400,7 @@ dropObject (TObjectID i) = do
   onServer $ sendMessage (Event_wl_display_delete_id $ fromAnyObjectID i) wlDisplayId
 
 -- | @mmap@ a shm pool's fd, read/write and shared.
-mapShmPool :: (MonadIO m) => Fd -> WlInt -> m (Ptr ())
+mapShmPool :: (MonadIO m) => Fd -> Int32 -> m (Ptr ())
 mapShmPool fd size =
   liftIO $ mmap nullPtr (fromIntegral size) (protRead <> protWrite) (mkMmapFlags mapShared mempty) fd 0
 
@@ -468,7 +467,7 @@ instance Object Wl_display where
       env <- getConnectionEnv
       let entries = zip [0 ..] $ Map.toList env.interfaceTable
       for_ entries $ \(name, (interface, entry)) ->
-        sendMsg registryObj (Event_wl_registry_global (WlUInt name) interface entry.version)
+        sendMsg registryObj (Event_wl_registry_global name interface entry.version)
     forwardMessage obj msg
 
 -- }}}
@@ -487,18 +486,18 @@ instance Object Wl_callback where
 instance Object Wl_registry where
   onEvent obj msg@(Event_wl_registry_global name interface version) = do
     env <- getConnectionEnv
-    atomicModifyIORef' env.globals $ \m -> (Map.insert (coerce name) (interface, version) m, ())
+    atomicModifyIORef' env.globals $ \m -> (Map.insert name (interface, version) m, ())
     forwardMessage obj msg
   onEvent obj msg@(Event_wl_registry_global_remove name) = do
     env <- getConnectionEnv
-    atomicModifyIORef' env.globals $ \m -> (Map.delete (coerce name) m, ())
+    atomicModifyIORef' env.globals $ \m -> (Map.delete name m, ())
     forwardMessage obj msg
 
   onRequest obj msg@(Request_wl_registry_bind name (WlNewId requestedIface requestedVersion newId)) = do
     env <- getConnectionEnv
     globals <- readIORef env.globals
 
-    (iface, advertisedVersion) <- Map.lookup (coerce name) globals & whenNothing $ do
+    (iface, advertisedVersion) <- Map.lookup name globals & whenNothing $ do
       protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind to a global that was not advertised|]
 
     unless (iface == requestedIface) $
@@ -596,7 +595,7 @@ instance Global Wl_shm where
   global i = Wl_shm i <$> newIORef []
 
 instance Object Wl_shm where
-  onRequest shm msg@(Request_wl_shm_create_pool poolId (WlFd fd) size) = do
+  onRequest shm msg@(Request_wl_shm_create_pool poolId fd size) = do
     sizeRef <- newIORef size
     ptrRef <- newIORef =<< mapShmPool fd size
     references <- newIORef 1
@@ -786,10 +785,10 @@ instance Object Wl_surface where
   onRequest surface msg@Request_wl_surface_destroy{} = do
     forwardMessage surface msg
     dropObject surface.wlid
-  onRequest surface msg@(Request_wl_surface_attach bufferId (WlInt x) (WlInt y)) = do
+  onRequest surface msg@(Request_wl_surface_attach bufferId x y) = do
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuBuffer = Just bufferId, cuOffset = Just (x, y)}, ())
     forwardMessage surface msg
-  onRequest surface msg@(Request_wl_surface_damage (WlInt x) (WlInt y) (WlInt w) (WlInt h)) = do
+  onRequest surface msg@(Request_wl_surface_damage x y w h) = do
     onClient $ logDebug "New clients should not use this request (wl_surface.damage). Instead damage can be posted with wl_surface.damage_buffer which uses buffer coordinates instead of surface coordinates."
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuDamage = Rectangle{position = (x, y), size = (w, h)} : s.cuDamage}, ())
     forwardMessage surface msg
@@ -807,13 +806,13 @@ instance Object Wl_surface where
   onRequest surface msg@(Request_wl_surface_set_buffer_transform transform) = do
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuBufferTransform = Just transform}, ())
     forwardMessage surface msg
-  onRequest surface msg@(Request_wl_surface_set_buffer_scale (WlInt scale)) = do
+  onRequest surface msg@(Request_wl_surface_set_buffer_scale scale) = do
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuBufferScale = Just scale}, ())
     forwardMessage surface msg
-  onRequest surface msg@(Request_wl_surface_damage_buffer (WlInt x) (WlInt y) (WlInt w) (WlInt h)) = do
+  onRequest surface msg@(Request_wl_surface_damage_buffer x y w h) = do
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuDamageBuffer = Rectangle{position = (x, y), size = (w, h)} : s.cuDamageBuffer}, ())
     forwardMessage surface msg
-  onRequest surface msg@(Request_wl_surface_offset (WlInt x) (WlInt y)) = do
+  onRequest surface msg@(Request_wl_surface_offset x y) = do
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuOffset = Just (x, y)}, ())
     forwardMessage surface msg
   onRequest surface msg@(Request_wl_surface_get_release release) = do
@@ -973,10 +972,10 @@ instance Object Wl_region where
   onRequest obj msg@Request_wl_region_destroy{} = do
     forwardMessage obj msg
     dropObject obj.wlid
-  onRequest obj msg@(Request_wl_region_add (WlInt x) (WlInt y) (WlInt w) (WlInt h)) = do
+  onRequest obj msg@(Request_wl_region_add x y w h) = do
     atomicModifyIORef' obj.included $ \rs -> (Rectangle{position = (x, y), size = (w, h)} : rs, ())
     forwardMessage obj msg
-  onRequest obj msg@(Request_wl_region_subtract (WlInt x) (WlInt y) (WlInt w) (WlInt h)) = do
+  onRequest obj msg@(Request_wl_region_subtract x y w h) = do
     atomicModifyIORef' obj.excluded $ \rs -> (Rectangle{position = (x, y), size = (w, h)} : rs, ())
     forwardMessage obj msg
 
@@ -1032,7 +1031,7 @@ instance Object Wl_subsurface where
       Nothing -> pass
     forwardMessage subsurface msg
     dropObject subsurface.wlid
-  onRequest subsurface msg@(Request_wl_subsurface_set_position (WlInt x) (WlInt y)) = do
+  onRequest subsurface msg@(Request_wl_subsurface_set_position x y) = do
     atomicWriteIORef subsurface.position (x, y)
     forwardMessage subsurface msg
   onRequest subsurface msg@(Request_wl_subsurface_place_below sibling) = do
@@ -1111,13 +1110,13 @@ tryBindToInterface registry = do
   let targetIface = getInterfaceName (Proxy @i)
   logInfo $ "binding to " <> show targetIface
   env <- getConnectionEnv
-  globals :: Map GlobalName (WlText, WlUInt) <- readIORef env.globals
+  globals :: Map GlobalName (WlText, Word32) <- readIORef env.globals
   let matchingIfaces = [(name, ver) | (name, (advertisedIface, ver)) <- Map.toList globals, advertisedIface == targetIface]
   case matchingIfaces of
     [] -> pure Nothing
     (name, advertisedVersion) : _ -> do
       let negotiatedVersion = min advertisedVersion $ getInterfaceVersion (Proxy @i)
-      oid <- withNewObjectID $ \oid -> oid <$ sendMsg registry (Request_wl_registry_bind (coerce name) (WlNewId targetIface negotiatedVersion oid))
+      oid <- withNewObjectID $ \oid -> oid <$ sendMsg registry (Request_wl_registry_bind name (WlNewId targetIface negotiatedVersion oid))
       Just <$> (getInterface (TObjectID $ FromClient oid) >>= maybe (error "sayland bug: bind did not register the global") pure)
 
 -- }}}
