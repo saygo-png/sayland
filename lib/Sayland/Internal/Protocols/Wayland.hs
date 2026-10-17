@@ -302,7 +302,7 @@ data Wl_surface = Wl_surface
   { wlid :: TObjectID Wl_surface
   , pendingState :: IORef ContentUpdate
   , role :: IORef SurfaceRole
-  , state :: IORef SurfaceState
+  , state :: TVar SurfaceState
   , outputs :: IORef [TObjectID Wl_output]
   }
 
@@ -417,32 +417,29 @@ synchronizedParent surface = do
         Just subsurface -> readIORef subsurface.synchronized >>= bool (pure Nothing) (getInterface subsurface.parent)
 
 -- | Apply a committed content update to the current state of its surface, then the cached updates of the
--- synchronized subsurfaces that waited for it.
-applyContentUpdate :: Wl_surface -> ContentUpdate -> Wayland p ()
-applyContentUpdate surface cu = do
-  env <- getConnectionEnv
-  objects <- readTVarIO env.objects
+-- synchronized subsurfaces that waited for it. All in one transaction, so the surface and its subsurfaces change together.
+applyContentUpdate :: ConnectionEnv p -> Wl_surface -> ContentUpdate -> STM ()
+applyContentUpdate env surface cu = do
+  objects <- readTVar env.objects
   -- A frame callback is dropped once it is done, so the ones still in the object map are not done yet.
   let notDone = filter (\cb -> Map.member (toObjectID cb) objects)
-  atomicModifyIORef' surface.state $ \s ->
-    ( s
-        { sBuffer = fromMaybe s.sBuffer cu.cuBuffer
-        , sBufferOffset = maybe (0, 0) (bimap fromIntegral fromIntegral) cu.cuOffset
-        , sDamage = cu.cuDamage
-        , sDamageBuffer = cu.cuDamageBuffer
-        , sCallbacks = cu.cuFrameCallbacks <> notDone s.sCallbacks
-        , sOpaqueRegion = fromMaybe s.sOpaqueRegion cu.cuOpaqueRegion
-        , sInputRegion = fromMaybe s.sInputRegion cu.cuInputRegion
-        , sBufferScale = maybe s.sBufferScale fromIntegral cu.cuBufferScale
-        , sBufferTransform = fromMaybe s.sBufferTransform cu.cuBufferTransform
-        , sSubsurfaces = fromMaybe s.sSubsurfaces cu.cuSubsurfaces
-        , sBufferRelease = if isJust cu.cuBuffer then cu.cuBufferRelease else cu.cuBufferRelease <|> s.sBufferRelease
-        , sFifoBarrier = s.sFifoBarrier || cu.cuFifoBarrier
-        }
-    , ()
-    )
+  modifyTVar' surface.state $ \s ->
+    s
+      { sBuffer = fromMaybe s.sBuffer cu.cuBuffer
+      , sBufferOffset = maybe (0, 0) (bimap fromIntegral fromIntegral) cu.cuOffset
+      , sDamage = cu.cuDamage
+      , sDamageBuffer = cu.cuDamageBuffer
+      , sCallbacks = cu.cuFrameCallbacks <> notDone s.sCallbacks
+      , sOpaqueRegion = fromMaybe s.sOpaqueRegion cu.cuOpaqueRegion
+      , sInputRegion = fromMaybe s.sInputRegion cu.cuInputRegion
+      , sBufferScale = maybe s.sBufferScale fromIntegral cu.cuBufferScale
+      , sBufferTransform = fromMaybe s.sBufferTransform cu.cuBufferTransform
+      , sSubsurfaces = fromMaybe s.sSubsurfaces cu.cuSubsurfaces
+      , sBufferRelease = if isJust cu.cuBuffer then cu.cuBufferRelease else cu.cuBufferRelease <|> s.sBufferRelease
+      , sFifoBarrier = s.sFifoBarrier || cu.cuFifoBarrier
+      }
   for_ cu.cuSlaveCUs $ \slave ->
-    for_ slave.cuSurface $ getInterface >=> traverse_ (`applyContentUpdate` slave)
+    for_ slave.cuSurface $ getInterfaceSTM env >=> traverse_ (\subsurface -> applyContentUpdate env subsurface slave)
 
 -- Interface Implementations {{{
 -- Wl_display {{{
@@ -526,7 +523,7 @@ instance Object Wl_compositor where
       pendingState <- newIORef emptyContentUpdate
       outputs <- newIORef []
       state <-
-        newIORef $
+        newTVarIO $
           SurfaceState
             { sBuffer = Nothing
             , sBufferOffset = (0, 0)
@@ -826,7 +823,7 @@ instance Object Wl_surface where
     synchronizedParent surface >>= \case
       -- Cached in the parent's pending state, to be applied with the parent's next commit.
       Just parent -> atomicModifyIORef' parent.pendingState $ \s -> (s{cuSlaveCUs = cacheContentUpdate s.cuSlaveCUs cu{cuSurface = Just surface.wlid}}, ())
-      Nothing -> applyContentUpdate surface cu
+      Nothing -> getConnectionEnv >>= \env -> atomically $ applyContentUpdate env surface cu
     forwardMessage surface msg
 
   onEvent surface msg@(Event_wl_surface_enter output) = do
@@ -1019,16 +1016,14 @@ instance Object Wl_subsurface where
     case parentObj' of
       Just parentObj -> do
         atomicWriteIORef parentObj.role $ SurfaceRole ()
-        atomicModifyIORef' parentObj.state $ \state' ->
-          ( state'
-              { sSubsurfaces =
-                  state'.sSubsurfaces
-                    { above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
-                    , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
-                    }
-              }
-          , ()
-          )
+        atomically . modifyTVar' parentObj.state $ \state' ->
+          state'
+            { sSubsurfaces =
+                state'.sSubsurfaces
+                  { above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
+                  , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
+                  }
+            }
       Nothing -> pass
     forwardMessage subsurface msg
     dropObject subsurface.wlid
@@ -1040,7 +1035,7 @@ instance Object Wl_subsurface where
     case parentSurface' of
       Nothing -> protocolViolation Unrecoverable msg subsurface.wlid Enum_wl_subsurface_error_bad_surface [wl|invalid parent surface|]
       Just parentSurface -> do
-        state' <- readIORef parentSurface.state
+        state' <- readTVarIO parentSurface.state
         b <- atomicModifyIORef' parentSurface.pendingState $ \s ->
           let stack = fromMaybe state'.sSubsurfaces s.cuSubsurfaces
               joint = stack.below <> stack.above
@@ -1055,7 +1050,7 @@ instance Object Wl_subsurface where
     case parentSurface' of
       Nothing -> protocolViolation Unrecoverable msg subsurface.wlid Enum_wl_subsurface_error_bad_surface [wl|invalid parent surface|]
       Just parentSurface -> do
-        state' <- readIORef parentSurface.state
+        state' <- readTVarIO parentSurface.state
         b <- atomicModifyIORef' parentSurface.pendingState $ \s ->
           let stack = fromMaybe state'.sSubsurfaces s.cuSubsurfaces
            in case Seq.breakl (== sibling) (stack.below <> stack.above) of

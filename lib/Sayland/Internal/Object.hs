@@ -63,6 +63,10 @@ getInterface (TObjectID oid) = do
   env <- getConnectionEnv
   (proxyInterface <=< Map.lookup oid) <$> readTVarIO env.objects
 
+-- | `getInterface` inside a transaction, given the connection the object belongs to.
+getInterfaceSTM :: (Typeable i) => ConnectionEnv p -> TObjectID i -> STM (Maybe i)
+getInterfaceSTM env (TObjectID oid) = (proxyInterface <=< Map.lookup oid) <$> readTVar env.objects
+
 -- | Cast provided interface into proxied type.
 proxyInterface :: forall i. (Typeable i) => SomeObject -> Maybe i
 proxyInterface (SomeObject o) = cast o

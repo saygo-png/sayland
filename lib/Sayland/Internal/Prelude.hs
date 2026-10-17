@@ -15,7 +15,7 @@ module Sayland.Internal.Prelude (
 -- addMVarFinalizer has no documentation in base, and nothing here uses it.
 import Control.Concurrent.MVar hiding (addMVarFinalizer, newEmptyMVar, newMVar, putMVar, takeMVar, tryTakeMVar)
 import Control.Concurrent.MVar qualified as CCM
-import Control.Concurrent.STM hiding (atomically, readTVarIO)
+import Control.Concurrent.STM hiding (atomically, newTVarIO, readTVarIO)
 import Control.Concurrent.STM qualified as STM
 import Control.Exception (Exception)
 import Control.Exception qualified as CE
@@ -62,6 +62,12 @@ newIORef :: (MonadIO m) => a -> m (IORef a)
 newIORef = liftIO . Ref.newIORef
 {-# INLINE newIORef #-}
 {-# SPECIALIZE newIORef :: a -> IO (IORef a) #-}
+
+-- | Lifted `newTVarIO`
+newTVarIO :: (MonadIO m) => a -> m (TVar a)
+newTVarIO = liftIO . STM.newTVarIO
+{-# INLINE newTVarIO #-}
+{-# SPECIALIZE newTVarIO :: a -> IO (TVar a) #-}
 
 -- | Lifted `readTVarIO`
 readTVarIO :: (MonadIO m) => TVar a -> m a
