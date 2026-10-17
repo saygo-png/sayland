@@ -170,11 +170,11 @@ syncedSubsurfaceWaits = withSession $ \s -> do
 scales :: Session -> Wl_surface -> Wayland Client (Int, Int)
 scales s surface = do
   roundtrip
-  client <- (.sBufferScale) <$> readIORef surface.state
+  client <- (.sBufferScale) <$> readTVarIO surface.state
   compositor <-
     liftIO $ compositorObject s surface.wlid >>= \case
       Nothing -> assertFailure "the compositor has no wl_surface"
-      Just compositorSurface -> (.sBufferScale) <$> readIORef compositorSurface.state
+      Just compositorSurface -> (.sBufferScale) <$> readTVarIO compositorSurface.state
   pure (client, compositor)
 
 -- | The client's result comes back, after the event loop delivered the replies the client waited for.
