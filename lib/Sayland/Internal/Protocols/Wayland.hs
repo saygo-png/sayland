@@ -81,30 +81,32 @@ data ContentUpdate = ContentUpdate
   }
   deriving stock (Eq, Ord)
 
--- | Builder for an empty t'ContentUpdate'.
-emptyContentUpdate :: ContentUpdate
-emptyContentUpdate =
-  ContentUpdate
-    { cuSurface = Nothing
-    , cuBuffer = Nothing
-    , cuOffset = Nothing
-    , cuDamage = []
-    , cuDamageBuffer = []
-    , cuFrameCallbacks = []
-    , cuOpaqueRegion = Nothing
-    , cuInputRegion = Nothing
-    , cuBufferScale = Nothing
-    , cuBufferTransform = Nothing
-    , cuBufferRelease = Nothing
-    , cuSubsurfaces = Nothing
-    , cuFifoBarrier = False
-    , cuFifoWaitBarrier = False
-    , cuSlaveCUs = []
-    }
+instance Semigroup ContentUpdate where
+  (<>) = mergeContentUpdate
+
+instance Monoid ContentUpdate where
+  mempty =
+    ContentUpdate
+      { cuSurface = Nothing
+      , cuBuffer = Nothing
+      , cuOffset = Nothing
+      , cuDamage = []
+      , cuDamageBuffer = []
+      , cuFrameCallbacks = []
+      , cuOpaqueRegion = Nothing
+      , cuInputRegion = Nothing
+      , cuBufferScale = Nothing
+      , cuBufferTransform = Nothing
+      , cuBufferRelease = Nothing
+      , cuSubsurfaces = Nothing
+      , cuFifoBarrier = False
+      , cuFifoWaitBarrier = False
+      , cuSlaveCUs = []
+      }
 
 -- | Combine two content updates of one surface, the second committed after the first, like the commits of a
 -- synchronized subsurface waiting for its parent's. Offsets add up, damage and frame callbacks accumulate,
--- and any other state the second sets replaces the first's.
+-- and any other state the second sets replaces the first's. The Semigroup instance uses this for `<>`.
 mergeContentUpdate :: ContentUpdate -> ContentUpdate -> ContentUpdate
 mergeContentUpdate old new =
   ContentUpdate
@@ -520,7 +522,7 @@ instance Object Wl_compositor where
   onRequest obj msg@(Request_wl_compositor_create_surface wlid) = do
     wl_surface <- do
       role <- newIORef $ SurfaceRole ()
-      pendingState <- newIORef emptyContentUpdate
+      pendingState <- newIORef mempty
       outputs <- newIORef []
       state <-
         newTVarIO $
@@ -819,7 +821,7 @@ instance Object Wl_surface where
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuBufferRelease = Just release}, ())
     forwardMessage surface msg
   onRequest surface msg@Request_wl_surface_commit{} = do
-    cu <- liftIO $ atomicSwapIORef surface.pendingState emptyContentUpdate
+    cu <- liftIO $ atomicSwapIORef surface.pendingState mempty
     synchronizedParent surface >>= \case
       -- Cached in the parent's pending state, to be applied with the parent's next commit.
       Just parent -> atomicModifyIORef' parent.pendingState $ \s -> (s{cuSlaveCUs = cacheContentUpdate s.cuSlaveCUs cu{cuSurface = Just surface.wlid}}, ())
