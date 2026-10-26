@@ -22,6 +22,7 @@ import Data.Int
 import Data.Map (Map)
 import Data.Map qualified as Map
 import Data.Maybe
+import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Typeable
@@ -273,8 +274,8 @@ data Wl_region = Wl_region {wlid :: TObjectID Wl_region, included :: IORef [Rect
 
 -- | The stacking order of a surface's subsurfaces: those below the surface and those above it.
 data SubsurfaceStack = SubsurfaceStack
-  { above :: Seq.Seq (TObjectID Wl_surface)
-  , below :: Seq.Seq (TObjectID Wl_surface)
+  { above :: Seq (TObjectID Wl_surface)
+  , below :: Seq (TObjectID Wl_surface)
   }
   deriving stock (Eq, Ord)
 
@@ -305,6 +306,8 @@ data Wl_surface = Wl_surface
   , pendingState :: IORef ContentUpdate
   , role :: IORef SurfaceRole
   , state :: TVar SurfaceState
+  , queue :: TVar (Seq ContentUpdate)
+  -- ^ Queue of content updates to be applied, oldest first.
   , outputs :: IORef [TObjectID Wl_output]
   }
 
@@ -418,6 +421,25 @@ synchronizedParent surface = do
         Nothing -> pure Nothing
         Just subsurface -> readIORef subsurface.synchronized >>= bool (pure Nothing) (getInterface subsurface.parent)
 
+-- | Apply content updates waiting in a surface queue.
+flushContentUpdates :: ConnectionEnv p -> Wl_surface -> STM ()
+flushContentUpdates env surface =
+  readTVar surface.queue >>= \case
+    Seq.Empty -> pass
+    cu Seq.:<| rest -> do
+      writeTVar surface.queue rest
+      applyContentUpdate env surface cu
+      flushContentUpdates env surface
+
+-- | Get the last committed subsurface stack.
+lastCommittedStack :: Wl_surface -> STM SubsurfaceStack
+lastCommittedStack surface = do
+  current <- (.sSubsurfaces) <$> readTVar surface.state
+  queued <- readTVar surface.queue
+  let allUpdates = (.cuSubsurfaces) <$> queued
+  let latestUpdate = Seq.reverse allUpdates & asum
+  fromMaybe current latestUpdate & pure
+
 -- | Apply a committed content update to the current state of its surface, then the cached updates of the
 -- synchronized subsurfaces that waited for it. All in one transaction, so the surface and its subsurfaces change together.
 applyContentUpdate :: ConnectionEnv p -> Wl_surface -> ContentUpdate -> STM ()
@@ -524,6 +546,7 @@ instance Object Wl_compositor where
       role <- newIORef $ SurfaceRole ()
       pendingState <- newIORef mempty
       outputs <- newIORef []
+      queue <- newTVarIO Seq.empty
       state <-
         newTVarIO $
           SurfaceState
@@ -825,7 +848,12 @@ instance Object Wl_surface where
     synchronizedParent surface >>= \case
       -- Cached in the parent's pending state, to be applied with the parent's next commit.
       Just parent -> atomicModifyIORef' parent.pendingState $ \s -> (s{cuSlaveCUs = cacheContentUpdate s.cuSlaveCUs cu{cuSurface = Just surface.wlid}}, ())
-      Nothing -> getConnectionEnv >>= \env -> atomically $ applyContentUpdate env surface cu
+      Nothing -> do
+        env <- getConnectionEnv
+        -- Because the compositor decides when an update is applied
+        -- tracking a queue for the client doesn't make sense.
+        onClient . atomically $ applyContentUpdate env surface cu
+        onServer . atomically $ modifyTVar' surface.queue (Seq.|> cu) >> flushContentUpdates env surface
     forwardMessage surface msg
 
   onEvent surface msg@(Event_wl_surface_enter output) = do
@@ -1037,9 +1065,9 @@ instance Object Wl_subsurface where
     case parentSurface' of
       Nothing -> protocolViolation Unrecoverable msg subsurface.wlid Enum_wl_subsurface_error_bad_surface [wl|invalid parent surface|]
       Just parentSurface -> do
-        state' <- readTVarIO parentSurface.state
+        committed <- atomically $ lastCommittedStack parentSurface
         b <- atomicModifyIORef' parentSurface.pendingState $ \s ->
-          let stack = fromMaybe state'.sSubsurfaces s.cuSubsurfaces
+          let stack = fromMaybe committed s.cuSubsurfaces
               joint = stack.below <> stack.above
               (before, after) = Seq.breakl (== sibling) joint
               joint2 = (before Seq.|> subsurface.surface) <> after
@@ -1052,9 +1080,9 @@ instance Object Wl_subsurface where
     case parentSurface' of
       Nothing -> protocolViolation Unrecoverable msg subsurface.wlid Enum_wl_subsurface_error_bad_surface [wl|invalid parent surface|]
       Just parentSurface -> do
-        state' <- readTVarIO parentSurface.state
+        committed <- atomically $ lastCommittedStack parentSurface
         b <- atomicModifyIORef' parentSurface.pendingState $ \s ->
-          let stack = fromMaybe state'.sSubsurfaces s.cuSubsurfaces
+          let stack = fromMaybe committed s.cuSubsurfaces
            in case Seq.breakl (== sibling) (stack.below <> stack.above) of
                 (before, found Seq.:<| after) ->
                   let (below, above) = Seq.breakl (== subsurface.parent) ((before Seq.|> found Seq.|> subsurface.surface) <> after)
