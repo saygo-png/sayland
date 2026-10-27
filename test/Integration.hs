@@ -35,6 +35,7 @@ tests =
     , testCase "the compositor rejects a new ID that skips ahead" rejectsSkippedID
     , testCase "new IDs reach the compositor in order when threads create objects at once" concurrentNewIDs
     , testCase "a commit applies the pending state" commitAppliesState
+    , testCase "a surface keeps one extension per type" surfaceExtensions
     , testCase "a synchronized subsurface's commits wait for its parent's" syncedSubsurfaceWaits
     , testCase "a synchronized subsurface's commits are merged in the order they were committed" syncedCommitsMergeInOrder
     , testCase "nested synchronized subsurfaces' commits are merged in order and applied with the outermost parent" nestedSyncedCommitsMerge
@@ -150,6 +151,19 @@ commitAppliesState = withSession $ \s -> do
   scales s surface >>= liftIO . (@?= (1, 1))
   sendMsg surface Request_wl_surface_commit
   scales s surface >>= liftIO . (@?= (2, 2))
+
+-- | Only one extension per type
+surfaceExtensions :: Assertion
+surfaceExtensions = withSession $ \s -> do
+  wl_compositor <- bindToInterface @Wl_compositor s.registry
+  surface <- newObject wl_compositor Request_wl_compositor_create_surface
+  found <- atomically $ do
+    made <- surfaceExtension surface (pure (1 :: Int))
+    again <- surfaceExtension surface (pure (2 :: Int))
+    other <- surfaceExtension surface (pure ("text" :: Text))
+    missing <- lookupSurfaceExtension @Bool surface
+    pure (made, again, other, missing)
+  liftIO $ found @?= (1, 1, "text", Nothing)
 
 -- | A synchronized subsurface's commits are sync content updates: merged into one, and applied with its parent's next commit.
 syncedSubsurfaceWaits :: Assertion

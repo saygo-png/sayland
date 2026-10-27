@@ -15,6 +15,7 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Data.Bifunctor (bimap)
 import Data.Bool
+import Data.Dynamic (Dynamic, fromDynamic, toDyn)
 import Data.Foldable
 import Data.Function
 import Data.Functor
@@ -341,6 +342,8 @@ data Wl_surface = Wl_surface
   , state :: TVar SurfaceState
   , queue :: TVar (Seq DesyncContentUpdate)
   -- ^ Queue of content updates to be applied, oldest first.
+  , extensions :: TVar (Map TypeRep Dynamic)
+  -- ^ Field for state added in by other protocols. See `surfaceExtension`.
   , outputs :: IORef [TObjectID Wl_output]
   }
 
@@ -474,6 +477,24 @@ updateReady update = do
   dependencies <- traverse updateReady (contents update).cuSyncUpdates
   pure $ and own && and dependencies
 
+-- | The state of type @a@ another protocol keeps for a surface, like FIFO's barrier.
+-- Adds the state if it doesn't already exist. If you only wish to lookup use `lookupSurfaceExtension`
+surfaceExtension :: forall a. (Typeable a) => Wl_surface -> STM a -> STM a
+surfaceExtension surface new =
+  lookupSurfaceExtension surface >>= \case
+    Just extension -> pure extension
+    Nothing -> do
+      let key = typeRep $ Proxy @a
+      extension <- new
+      modifyTVar' surface.extensions $ Map.insert key (toDyn extension)
+      pure extension
+
+-- | The state of type @a@ another protocol keeps for a surface, if it made any.
+lookupSurfaceExtension :: forall a. (Typeable a) => Wl_surface -> STM (Maybe a)
+lookupSurfaceExtension surface = do
+  let key = typeRep $ Proxy @a
+  (fromDynamic <=< Map.lookup key) <$> readTVar surface.extensions
+
 -- | Get the last committed subsurface stack.
 lastCommittedStack :: Wl_surface -> STM SubsurfaceStack
 lastCommittedStack surface = do
@@ -591,6 +612,7 @@ instance Object Wl_compositor where
       pendingState <- newIORef mempty
       outputs <- newIORef []
       queue <- newTVarIO Seq.empty
+      extensions <- newTVarIO mempty
       state <-
         newTVarIO $
           SurfaceState
