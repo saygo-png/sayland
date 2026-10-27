@@ -13,7 +13,7 @@ import GHC.IO.Handle (hFlush)
 import Network.Socket (ShutdownCmd (ShutdownBoth), close, shutdown)
 import Relude hiding (hFlush)
 import Sayland
-import Sayland.Internal.Core (TObjectID (..), sendMessage)
+import Sayland.Internal.Core (TObjectID (..), getConnectionEnv, sendMessage)
 import System.Directory (createDirectory, getTemporaryDirectory, removeDirectoryRecursive)
 import System.Posix (ShmOpenFlags (..), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import System.Random (randomIO)
@@ -36,6 +36,11 @@ tests =
     , testCase "new IDs reach the compositor in order when threads create objects at once" concurrentNewIDs
     , testCase "a commit applies the pending state" commitAppliesState
     , testCase "a synchronized subsurface's commits wait for its parent's" syncedSubsurfaceWaits
+    , testCase "a synchronized subsurface's commits are merged in the order they were committed" syncedCommitsMergeInOrder
+    , testCase "nested synchronized subsurfaces' commits are merged in order and applied with the outermost parent" nestedSyncedCommitsMerge
+    , testCase "a desynchronized subsurface's commits are applied right away" desyncedSubsurfaceApplies
+    , testCase "an update waits on the compositor until its constraints hold" constrainedUpdateWaits
+    , testCase "a synchronized subsurface's constraints hold back its parent's update" syncedConstraintsHoldParent
     , testCase "withEventLoop returns what the client returns" eventLoopReturns
     , testCase "withEventLoop throws the event loop's error to the client" eventLoopThrows
     , testCase "untilDisconnected returns when the compositor hangs up" untilDisconnectedReturns
@@ -146,7 +151,7 @@ commitAppliesState = withSession $ \s -> do
   sendMsg surface Request_wl_surface_commit
   scales s surface >>= liftIO . (@?= (2, 2))
 
--- | A synchronized subsurface's commits are cached, merged into one, and applied with its parent's next commit.
+-- | A synchronized subsurface's commits are sync content updates: merged into one, and applied with its parent's next commit.
 syncedSubsurfaceWaits :: Assertion
 syncedSubsurfaceWaits = withSession $ \s -> do
   wl_compositor <- bindToInterface @Wl_compositor s.registry
@@ -161,10 +166,138 @@ syncedSubsurfaceWaits = withSession $ \s -> do
   scales s child >>= liftIO . (@?= (1, 1))
   liftIO $ do
     Just compositorParent <- compositorObject s parent.wlid
-    cached <- (.cuSlaveCUs) <$> readIORef compositorParent.pendingState
-    length cached @?= 1
+    syncUpdates <- (.cuSyncUpdates) <$> readIORef compositorParent.pendingState
+    length syncUpdates @?= 1
   sendMsg parent Request_wl_surface_commit
   scales s child >>= liftIO . (@?= (3, 3))
+
+-- | A synchronized subsurface's commits are merged in the order they were committed: the later one's state replaces
+-- the earlier one's, offsets add up and the damage of both is kept. Applying them one after the other instead would
+-- lose the first one's damage.
+syncedCommitsMergeInOrder :: Assertion
+syncedCommitsMergeInOrder = withSession $ \s -> do
+  (parent, child, _) <- withSubsurface s
+  sendMsg child $ Request_wl_surface_set_buffer_scale 2
+  sendMsg child $ Request_wl_surface_offset 1 1
+  sendMsg child $ Request_wl_surface_damage 1 1 1 1
+  sendMsg child Request_wl_surface_commit
+  sendMsg child $ Request_wl_surface_set_buffer_scale 3
+  sendMsg child $ Request_wl_surface_offset 10 10
+  sendMsg child $ Request_wl_surface_damage 2 2 1 1
+  sendMsg child Request_wl_surface_commit
+  sendMsg parent Request_wl_surface_commit
+  (client, compositor) <- states s child
+  liftIO . for_ [client, compositor] $ \current -> do
+    current.sBufferScale @?= 3
+    current.sBufferOffset @?= (11, 11)
+    sort ((.position) <$> current.sDamage) @?= [(1, 1), (2, 2)]
+
+-- | A synchronized subsurface of a synchronized subsurface: each commit of the middle surface carries the inner one's,
+-- and merging the middle one's merges the inner one's in order too. Nothing is applied before the outermost parent commits.
+nestedSyncedCommitsMerge :: Assertion
+nestedSyncedCommitsMerge = withSession $ \s -> do
+  wl_compositor <- bindToInterface @Wl_compositor s.registry
+  subcompositor <- bindToInterface @Wl_subcompositor s.registry
+  root <- newObject wl_compositor Request_wl_compositor_create_surface
+  middle <- newObject wl_compositor Request_wl_compositor_create_surface
+  inner <- newObject wl_compositor Request_wl_compositor_create_surface
+  void . newObject subcompositor $ \i -> Request_wl_subcompositor_get_subsurface i middle.wlid root.wlid
+  void . newObject subcompositor $ \i -> Request_wl_subcompositor_get_subsurface i inner.wlid middle.wlid
+  for_ [2, 3] $ \scale -> do
+    sendMsg inner $ Request_wl_surface_set_buffer_scale scale
+    sendMsg inner Request_wl_surface_commit
+    sendMsg middle Request_wl_surface_commit
+  scales s inner >>= liftIO . (@?= (1, 1))
+  sendMsg root Request_wl_surface_commit
+  scales s inner >>= liftIO . (@?= (3, 3))
+
+-- | A desynchronized subsurface's commits are desync content updates: applied right away, not with its parent's commit.
+desyncedSubsurfaceApplies :: Assertion
+desyncedSubsurfaceApplies = withSession $ \s -> do
+  (_, child, subsurface) <- withSubsurface s
+  sendMsg subsurface Request_wl_subsurface_set_desync
+  sendMsg child $ Request_wl_surface_set_buffer_scale 2
+  sendMsg child Request_wl_surface_commit
+  scales s child >>= liftIO . (@?= (2, 2))
+
+-- | An update whose constraint does not hold waits in the compositor's queue, and the update committed after it waits
+-- behind it. Once the constraint holds, a flush applies both in order and runs their apply hooks once.
+-- The update is a desync content update, so only its constraint's desync check holds it back.
+-- The client applies its commits right away.
+constrainedUpdateWaits :: Assertion
+constrainedUpdateWaits = withSession $ \s -> do
+  wl_compositor <- bindToInterface @Wl_compositor s.registry
+  surface <- newObject wl_compositor Request_wl_compositor_create_surface
+  roundtrip
+  compositorSurface <- onCompositor s surface
+  ready <- newTVarIO False
+  applied <- newTVarIO (0 :: Int)
+  let constraint = Constraint{whenDesync = const (readTVar ready), whenSync = const (pure True)}
+  atomicModifyIORef' compositorSurface.pendingState $ \cu -> (cu{cuConstraints = [constraint], cuOnApply = [modifyTVar' applied (+ 1)]}, ())
+  sendMsg surface $ Request_wl_surface_set_buffer_scale 2
+  sendMsg surface Request_wl_surface_commit
+  sendMsg surface $ Request_wl_surface_set_buffer_scale 3
+  sendMsg surface Request_wl_surface_commit
+  scales s surface >>= liftIO . (@?= (3, 1))
+  length <$> readTVarIO compositorSurface.queue >>= liftIO . (@?= 2)
+  liftIO . asCompositor s $ do
+    env <- getConnectionEnv
+    atomically $ writeTVar ready True >> flushContentUpdates env compositorSurface
+  scales s surface >>= liftIO . (@?= (3, 3))
+  length <$> readTVarIO compositorSurface.queue >>= liftIO . (@?= 0)
+  readTVarIO applied >>= liftIO . (@?= 1)
+
+-- | The constraints of a synchronized subsurface's sync content update hold back its parent's update, as the two are
+-- applied together. A constraint can pass for sync content updates, as FIFO's must.
+syncedConstraintsHoldParent :: Assertion
+syncedConstraintsHoldParent = withSession $ \s -> do
+  (parent, child, _) <- withSubsurface s
+  compositorParent <- onCompositor s parent
+  compositorChild <- onCompositor s child
+  ready <- newTVarIO False
+  let constrainChild c = atomicModifyIORef' compositorChild.pendingState $ \cu -> (cu{cuConstraints = [c]}, ())
+  -- Passes for a sync content update, so the parent's update is applied right away.
+  constrainChild Constraint{whenDesync = const (readTVar ready), whenSync = const (pure True)}
+  sendMsg child $ Request_wl_surface_set_buffer_scale 2
+  sendMsg child Request_wl_surface_commit
+  sendMsg parent Request_wl_surface_commit
+  scales s child >>= liftIO . (@?= (2, 2))
+  -- Checked for a sync content update, so the parent's update waits for it.
+  constrainChild Constraint{whenDesync = const (readTVar ready), whenSync = const (readTVar ready)}
+  sendMsg child $ Request_wl_surface_set_buffer_scale 3
+  sendMsg child Request_wl_surface_commit
+  sendMsg parent $ Request_wl_surface_set_buffer_scale 2
+  sendMsg parent Request_wl_surface_commit
+  scales s child >>= liftIO . (@?= (3, 2))
+  scales s parent >>= liftIO . (@?= (2, 1))
+  liftIO . asCompositor s $ do
+    env <- getConnectionEnv
+    atomically $ writeTVar ready True >> flushContentUpdates env compositorParent
+  scales s child >>= liftIO . (@?= (3, 3))
+  scales s parent >>= liftIO . (@?= (2, 2))
+
+-- | A surface with a subsurface, synchronized as subsurfaces start out, made on the compositor too.
+withSubsurface :: Session -> Wayland Client (Wl_surface, Wl_surface, Wl_subsurface)
+withSubsurface s = do
+  wl_compositor <- bindToInterface @Wl_compositor s.registry
+  subcompositor <- bindToInterface @Wl_subcompositor s.registry
+  parent <- newObject wl_compositor Request_wl_compositor_create_surface
+  child <- newObject wl_compositor Request_wl_compositor_create_surface
+  subsurface <- newObject subcompositor $ \i -> Request_wl_subcompositor_get_subsurface i child.wlid parent.wlid
+  roundtrip
+  pure (parent, child, subsurface)
+
+-- | The compositor's object for a surface the client made.
+onCompositor :: Session -> Wl_surface -> Wayland Client Wl_surface
+onCompositor s surface = liftIO $ compositorObject s surface.wlid >>= maybe (assertFailure "the compositor has no wl_surface") pure
+
+-- | A surface's current state on the client and on the compositor, after a roundtrip.
+states :: Session -> Wl_surface -> Wayland Client (SurfaceState, SurfaceState)
+states s surface = do
+  roundtrip
+  client <- readTVarIO surface.state
+  compositor <- onCompositor s surface >>= readTVarIO . (.state)
+  pure (client, compositor)
 
 -- | The buffer scale of a surface's current state on the client and on the compositor, after a roundtrip.
 scales :: Session -> Wl_surface -> Wayland Client (Int, Int)

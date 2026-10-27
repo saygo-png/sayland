@@ -63,6 +63,8 @@ data Rectangle = Rectangle
 
 -- | Nothing or empty list means no change. In order to "reset" values, set them to the defaults - `Just Nothing` for the null object, normal transform, etc.
 -- The offset is relative to the previous buffer, so `Nothing` is the same as @(0, 0)@.
+--
+-- Other protocols add to a content update through `cuConstraints` and `cuOnApply`.
 data ContentUpdate = ContentUpdate
   { cuSurface :: Maybe (TObjectID Wl_surface)
   , cuBuffer :: Maybe (Maybe (TObjectID Wl_buffer))
@@ -78,12 +80,57 @@ data ContentUpdate = ContentUpdate
   , cuSubsurfaces :: Maybe SubsurfaceStack
   , cuFifoBarrier :: Bool
   , cuFifoWaitBarrier :: Bool
-  , cuSlaveCUs :: [ContentUpdate]
+  , cuConstraints :: [Constraint]
+  -- ^ Conditions which must be @True@ before the compositor applies the update.
+  , cuOnApply :: [STM ()]
+  -- ^ Extra STM actions to perform when applying the update.
+  , cuSyncUpdates :: Map (TObjectID Wl_surface) SyncContentUpdate
+  -- ^ Content updates of child surfaces this update depends on.
   }
-  deriving stock (Eq, Ord)
+
+-- | Content update committed while its surface was not effectively synchronized as defined by @wl_surface.commit@.
+-- It waits in its surface's queue until it can be applied.
+newtype DesyncContentUpdate = DesyncContentUpdate ContentUpdate
+  deriving newtype (Semigroup)
+
+-- | Content update committed while its surface was effectively synchronized as defined by @wl_surface.commit@.
+-- In other words, a child content update.
+-- It is applied together with the next update of its parent.
+newtype SyncContentUpdate = SyncContentUpdate ContentUpdate
+  deriving newtype (Semigroup)
+
+-- | Constraint that a content update must meet for the compositor to apply it.
+-- Since constraint behaviour can differ for desync and sync updates, it must deal with both.
+data Constraint = Constraint
+  { whenDesync :: DesyncContentUpdate -> STM Bool
+  -- ^ Checked for a t'DesyncContentUpdate'.
+  , whenSync :: SyncContentUpdate -> STM Bool
+  -- ^ Checked for a t'SyncContentUpdate'.
+  }
 
 instance Semigroup ContentUpdate where
-  (<>) = mergeContentUpdate
+  (<>) old new =
+    ContentUpdate
+      { cuSurface = new.cuSurface <|> old.cuSurface
+      , cuBuffer = new.cuBuffer <|> old.cuBuffer
+      , cuOffset = case (old.cuOffset, new.cuOffset) of
+          (Just (x, y), Just (x', y')) -> Just (x + x', y + y')
+          (a, b) -> b <|> a
+      , cuDamage = new.cuDamage <> old.cuDamage
+      , cuDamageBuffer = new.cuDamageBuffer <> old.cuDamageBuffer
+      , cuFrameCallbacks = new.cuFrameCallbacks <> old.cuFrameCallbacks
+      , cuOpaqueRegion = new.cuOpaqueRegion <|> old.cuOpaqueRegion
+      , cuInputRegion = new.cuInputRegion <|> old.cuInputRegion
+      , cuBufferScale = new.cuBufferScale <|> old.cuBufferScale
+      , cuBufferTransform = new.cuBufferTransform <|> old.cuBufferTransform
+      , cuBufferRelease = new.cuBufferRelease <|> old.cuBufferRelease
+      , cuSubsurfaces = new.cuSubsurfaces <|> old.cuSubsurfaces
+      , cuFifoBarrier = old.cuFifoBarrier || new.cuFifoBarrier
+      , cuFifoWaitBarrier = old.cuFifoWaitBarrier || new.cuFifoWaitBarrier
+      , cuConstraints = old.cuConstraints <> new.cuConstraints
+      , cuOnApply = old.cuOnApply <> new.cuOnApply
+      , cuSyncUpdates = Map.unionWith (<>) old.cuSyncUpdates new.cuSyncUpdates
+      }
 
 instance Monoid ContentUpdate where
   mempty =
@@ -102,40 +149,26 @@ instance Monoid ContentUpdate where
       , cuSubsurfaces = Nothing
       , cuFifoBarrier = False
       , cuFifoWaitBarrier = False
-      , cuSlaveCUs = []
+      , cuConstraints = []
+      , cuOnApply = []
+      , cuSyncUpdates = mempty
       }
 
--- | Combine two content updates of one surface, the second committed after the first, like the commits of a
--- synchronized subsurface waiting for its parent's. Offsets add up, damage and frame callbacks accumulate,
--- and any other state the second sets replaces the first's. The Semigroup instance uses this for `<>`.
-mergeContentUpdate :: ContentUpdate -> ContentUpdate -> ContentUpdate
-mergeContentUpdate old new =
-  ContentUpdate
-    { cuSurface = new.cuSurface <|> old.cuSurface
-    , cuBuffer = new.cuBuffer <|> old.cuBuffer
-    , cuOffset = case (old.cuOffset, new.cuOffset) of
-        (Just (x, y), Just (x', y')) -> Just (x + x', y + y')
-        (a, b) -> b <|> a
-    , cuDamage = new.cuDamage <> old.cuDamage
-    , cuDamageBuffer = new.cuDamageBuffer <> old.cuDamageBuffer
-    , cuFrameCallbacks = new.cuFrameCallbacks <> old.cuFrameCallbacks
-    , cuOpaqueRegion = new.cuOpaqueRegion <|> old.cuOpaqueRegion
-    , cuInputRegion = new.cuInputRegion <|> old.cuInputRegion
-    , cuBufferScale = new.cuBufferScale <|> old.cuBufferScale
-    , cuBufferTransform = new.cuBufferTransform <|> old.cuBufferTransform
-    , cuBufferRelease = new.cuBufferRelease <|> old.cuBufferRelease
-    , cuSubsurfaces = new.cuSubsurfaces <|> old.cuSubsurfaces
-    , cuFifoBarrier = old.cuFifoBarrier || new.cuFifoBarrier
-    , cuFifoWaitBarrier = old.cuFifoWaitBarrier || new.cuFifoWaitBarrier
-    , cuSlaveCUs = foldl' cacheContentUpdate old.cuSlaveCUs new.cuSlaveCUs
-    }
+-- | A content update that has been committed, as a sync or a desync content update.
+class CommittedUpdate u where
+  -- | The update's content.
+  contents :: u -> ContentUpdate
 
--- | Add a content update to a list of cached ones, merging it into the one of the same surface if there is one.
--- So the list holds at most one update per surface, however many times the surfaces commit.
-cacheContentUpdate :: [ContentUpdate] -> ContentUpdate -> [ContentUpdate]
-cacheContentUpdate cached cu = case break (\c -> c.cuSurface == cu.cuSurface) cached of
-  (before, c : after) -> before <> (mergeContentUpdate c cu : after)
-  (_, []) -> cached <> [cu]
+  -- | Check a constraint for this kind of update.
+  checkConstraint :: Constraint -> u -> STM Bool
+
+instance CommittedUpdate DesyncContentUpdate where
+  contents (DesyncContentUpdate cu) = cu
+  checkConstraint c = c.whenDesync
+
+instance CommittedUpdate SyncContentUpdate where
+  contents (SyncContentUpdate cu) = cu
+  checkConstraint c = c.whenSync
 
 -- | The role of a t'Wl_surface', as the value that gave it the role, like its @xdg_toplevel@.
 -- @SurfaceRole ()@ means the surface has no role.
@@ -306,7 +339,7 @@ data Wl_surface = Wl_surface
   , pendingState :: IORef ContentUpdate
   , role :: IORef SurfaceRole
   , state :: TVar SurfaceState
-  , queue :: TVar (Seq ContentUpdate)
+  , queue :: TVar (Seq DesyncContentUpdate)
   -- ^ Queue of content updates to be applied, oldest first.
   , outputs :: IORef [TObjectID Wl_output]
   }
@@ -421,27 +454,37 @@ synchronizedParent surface = do
         Nothing -> pure Nothing
         Just subsurface -> readIORef subsurface.synchronized >>= bool (pure Nothing) (getInterface subsurface.parent)
 
--- | Apply content updates waiting in a surface queue.
+-- | Apply content updates waiting in a surface queue if the constraints hold.
 flushContentUpdates :: ConnectionEnv p -> Wl_surface -> STM ()
 flushContentUpdates env surface =
   readTVar surface.queue >>= \case
     Seq.Empty -> pass
-    cu Seq.:<| rest -> do
-      writeTVar surface.queue rest
-      applyContentUpdate env surface cu
-      flushContentUpdates env surface
+    update@(DesyncContentUpdate cu) Seq.:<| rest -> do
+      ready <- updateReady update
+      when ready $ do
+        writeTVar surface.queue rest
+        applyContentUpdate env surface cu
+        flushContentUpdates env surface
+
+-- | Whether a committed update can be applied.
+-- Checks if its constraints hold and that the sync content updates it depends on can be applied too.
+updateReady :: (CommittedUpdate u) => u -> STM Bool
+updateReady update = do
+  own <- traverse (`checkConstraint` update) (contents update).cuConstraints
+  dependencies <- traverse updateReady (contents update).cuSyncUpdates
+  pure $ and own && and dependencies
 
 -- | Get the last committed subsurface stack.
 lastCommittedStack :: Wl_surface -> STM SubsurfaceStack
 lastCommittedStack surface = do
   current <- (.sSubsurfaces) <$> readTVar surface.state
   queued <- readTVar surface.queue
-  let allUpdates = (.cuSubsurfaces) <$> queued
+  let allUpdates = (\(DesyncContentUpdate cu) -> cu.cuSubsurfaces) <$> queued
   let latestUpdate = Seq.reverse allUpdates & asum
   fromMaybe current latestUpdate & pure
 
--- | Apply a committed content update to the current state of its surface, then the cached updates of the
--- synchronized subsurfaces that waited for it. All in one transaction, so the surface and its subsurfaces change together.
+-- | Apply a committed content update to the current state of its surface, then the sync content updates it depends on.
+-- All in one transaction, so the surface and its subsurfaces change together.
 applyContentUpdate :: ConnectionEnv p -> Wl_surface -> ContentUpdate -> STM ()
 applyContentUpdate env surface cu = do
   objects <- readTVar env.objects
@@ -462,8 +505,9 @@ applyContentUpdate env surface cu = do
       , sBufferRelease = if isJust cu.cuBuffer then cu.cuBufferRelease else cu.cuBufferRelease <|> s.sBufferRelease
       , sFifoBarrier = s.sFifoBarrier || cu.cuFifoBarrier
       }
-  for_ cu.cuSlaveCUs $ \slave ->
-    for_ slave.cuSurface $ getInterfaceSTM env >=> traverse_ (\subsurface -> applyContentUpdate env subsurface slave)
+  sequence_ cu.cuOnApply
+  for_ (Map.toList cu.cuSyncUpdates) $ \(childId, SyncContentUpdate child) ->
+    getInterfaceSTM env childId >>= traverse_ (\subsurface -> applyContentUpdate env subsurface child)
 
 -- Interface Implementations {{{
 -- Wl_display {{{
@@ -846,14 +890,14 @@ instance Object Wl_surface where
   onRequest surface msg@Request_wl_surface_commit{} = do
     cu <- liftIO $ atomicSwapIORef surface.pendingState mempty
     synchronizedParent surface >>= \case
-      -- Cached in the parent's pending state, to be applied with the parent's next commit.
-      Just parent -> atomicModifyIORef' parent.pendingState $ \s -> (s{cuSlaveCUs = cacheContentUpdate s.cuSlaveCUs cu{cuSurface = Just surface.wlid}}, ())
+      Just parent -> atomicModifyIORef' parent.pendingState $ \s ->
+        (s{cuSyncUpdates = Map.insertWith (flip (<>)) surface.wlid (SyncContentUpdate cu) s.cuSyncUpdates}, ())
       Nothing -> do
         env <- getConnectionEnv
         -- Because the compositor decides when an update is applied
         -- tracking a queue for the client doesn't make sense.
         onClient . atomically $ applyContentUpdate env surface cu
-        onServer . atomically $ modifyTVar' surface.queue (Seq.|> cu) >> flushContentUpdates env surface
+        onServer . atomically $ modifyTVar' surface.queue (Seq.|> DesyncContentUpdate cu) >> flushContentUpdates env surface
     forwardMessage surface msg
 
   onEvent surface msg@(Event_wl_surface_enter output) = do
@@ -1046,14 +1090,11 @@ instance Object Wl_subsurface where
     case parentObj' of
       Just parentObj -> do
         atomicWriteIORef parentObj.role $ SurfaceRole ()
-        atomically . modifyTVar' parentObj.state $ \state' ->
-          state'
-            { sSubsurfaces =
-                state'.sSubsurfaces
-                  { above = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.above
-                  , below = Seq.filter (/= subsurface.surface) state'.sSubsurfaces.below
-                  }
-            }
+        let remove stack = stack{above = Seq.filter (/= subsurface.surface) stack.above, below = Seq.filter (/= subsurface.surface) stack.below}
+        atomically $ do
+          modifyTVar' parentObj.state $ \s -> s{sSubsurfaces = remove s.sSubsurfaces}
+          -- An update still waiting in the queue would bring the subsurface back once applied.
+          modifyTVar' parentObj.queue . fmap $ \(DesyncContentUpdate cu) -> DesyncContentUpdate cu{cuSubsurfaces = remove <$> cu.cuSubsurfaces}
       Nothing -> pass
     forwardMessage subsurface msg
     dropObject subsurface.wlid
