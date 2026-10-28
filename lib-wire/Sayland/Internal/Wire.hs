@@ -25,6 +25,7 @@ import Data.Proxy
 import Data.Text (Text)
 import Data.Text qualified as T
 import Data.Text.Encoding (decodeUtf8', encodeUtf8)
+import GHC.Exts (IsString (fromString))
 import GHC.TypeLits
 import Language.Haskell.TH.Quote (QuasiQuoter (..))
 import Language.Haskell.TH.Syntax qualified as TH
@@ -81,7 +82,9 @@ newtype WlFixed = WlFixed Int32 deriving newtype (Show, Eq, Ord)
 -- | The non null t'Text' content of a `WlString`, encoded in UTF-8. Cannot contain NUL terminators.
 newtype WlText = WlText Text deriving newtype (Show, Eq, Ord, Semigroup, Monoid)
 
--- | Matches a t'WlText' by its text, as a `String`.
+instance IsString WlText where
+  fromString = wlTextLossy . T.pack
+
 pattern WlTextString :: String -> WlText
 pattern WlTextString string <- WlText (T.unpack -> string)
 
