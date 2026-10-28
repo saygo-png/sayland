@@ -190,6 +190,7 @@ test-suite sayland-tests
     Both.Wire
     ContentUpdate
     Integration
+    Utils
 
   build-depends:
     base,

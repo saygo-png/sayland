@@ -64,6 +64,18 @@
     rhs: newTVarIO x
 
 - warn:
+    lhs: "a >>= liftIO . (@?= b)"
+    rhs: "a >>=@?== b"
+
+- warn:
+    lhs: "liftIO . (@?= b)"
+    rhs: "(@?== b)"
+
+- warn:
+    lhs: "a >>= (@?== b)"
+    rhs: "a >>=@?== b"
+
+- warn:
     lhs: "void (tryTakeMVar x)"
     rhs: tryTakeMVar_ x
 

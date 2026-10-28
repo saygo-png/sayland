@@ -60,6 +60,16 @@ After defining interfaces, we load the rest of the protocol (mostly `Event_*` an
 $(loadProtocolFile wlFormatter "xml-protocols/fifo-v1.xml")
 ```
 
+A protocol can add state to `wl_surface` without core knowing about it.
+The fifo barrier belongs to the surface, so it is kept in the surface's extensions, one value per type:
+
+```hs
+newtype FifoBarrier = FifoBarrier (TVar Bool)
+
+fifoBarrier :: Wl_surface -> STM (TVar Bool)
+fifoBarrier surface = (\(FifoBarrier up) -> up) <$> surfaceExtension surface (FifoBarrier <$> newTVar False)
+```
+
 Implement an `Object` instance for all your interface data types:
 You can find more details on how to do this in the [implementing objects guide](./implementing_objects.md)
 
@@ -73,23 +83,38 @@ instance Object Wp_fifo_manager_v1 where
       Just _ -> do
         registerObject msg Wp_fifo_v1{wlid = fifoId, fifoSurface = surfaceId}
         forwardMessage manager msg
-      Nothing -> protocolErrorG Err_invalid_object $ "wp_fifo_manager_v1.get_fifo: surface `" <> fromString (show surfaceId) <> "` does not exist"
+      Nothing ->
+        let errTxt = wlTextLossy $ "wp_fifo_manager_v1.get_fifo: surface `" <> T.show surfaceId <> "` does not exist"
+         in protocolViolation Unrecoverable msg wlDisplayId Err_invalid_object errTxt
 
   onEvent _ = \case {}
+```
 
+A request that is part of the next content update adds to the surface's pending `ContentUpdate`.
+`cuOnApply` runs when the update is applied, and `cuConstraints` hold the update back on the compositor until they
+return `True`. A constraint says how it treats a desync and a sync content update:
+
+```hs
 instance Object Wp_fifo_v1 where
   onRequest fifo msg@Request_wp_fifo_v1_set_barrier = do
     getInterface fifo.fifoSurface >>= \case
       Just surface -> do
-        atomicModifyIORef' surface.pendingState $ \state -> (state{cuFifoBarrier = True}, ())
+        barrier <- atomically $ fifoBarrier surface
+        atomicModifyIORef' surface.pendingState $ \cu -> (cu{cuOnApply = cu.cuOnApply <> [writeTVar barrier True]}, ())
         forwardMessage fifo msg
-      Nothing -> protocolError fifo Enum_wp_fifo_v1_error_surface_destroyed "set_barrier: the associated surface no longer exists"
+      Nothing -> protocolViolation Recoverable msg fifo Enum_wp_fifo_v1_error_surface_destroyed "set_barrier: the associated surface no longer exists"
   onRequest fifo msg@Request_wp_fifo_v1_wait_barrier = do
     getInterface fifo.fifoSurface >>= \case
       Just surface -> do
-        atomicModifyIORef' surface.pendingState $ \state -> (state{cuFifoWaitBarrier = True}, ())
+        barrier <- atomically $ fifoBarrier surface
+        let waitForBarrier =
+              Constraint
+                { whenDesync = const $ not <$> readTVar barrier
+                , whenSync = const $ pure True
+                }
+        atomicModifyIORef' surface.pendingState $ \cu -> (cu{cuConstraints = cu.cuConstraints <> [waitForBarrier]}, ())
         forwardMessage fifo msg
-      Nothing -> protocolError fifo Enum_wp_fifo_v1_error_surface_destroyed "wait_barrier: the associated surface no longer exists"
+      Nothing -> protocolViolation Recoverable msg fifo Enum_wp_fifo_v1_error_surface_destroyed "wait_barrier: the associated surface no longer exists"
   onRequest fifo msg@Request_wp_fifo_v1_destroy = do
     forwardMessage fifo msg
     dropObject fifo.wlid

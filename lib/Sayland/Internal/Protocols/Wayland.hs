@@ -79,8 +79,6 @@ data ContentUpdate = ContentUpdate
   , cuBufferTransform :: Maybe Enum_wl_output_transform
   , cuBufferRelease :: Maybe (TObjectID Wl_callback)
   , cuSubsurfaces :: Maybe SubsurfaceStack
-  , cuFifoBarrier :: Bool
-  , cuFifoWaitBarrier :: Bool
   , cuConstraints :: [Constraint]
   -- ^ Conditions which must be @True@ before the compositor applies the update.
   , cuOnApply :: [STM ()]
@@ -126,8 +124,6 @@ instance Semigroup ContentUpdate where
       , cuBufferTransform = new.cuBufferTransform <|> old.cuBufferTransform
       , cuBufferRelease = new.cuBufferRelease <|> old.cuBufferRelease
       , cuSubsurfaces = new.cuSubsurfaces <|> old.cuSubsurfaces
-      , cuFifoBarrier = old.cuFifoBarrier || new.cuFifoBarrier
-      , cuFifoWaitBarrier = old.cuFifoWaitBarrier || new.cuFifoWaitBarrier
       , cuConstraints = old.cuConstraints <> new.cuConstraints
       , cuOnApply = old.cuOnApply <> new.cuOnApply
       , cuSyncUpdates = Map.unionWith (<>) old.cuSyncUpdates new.cuSyncUpdates
@@ -148,8 +144,6 @@ instance Monoid ContentUpdate where
       , cuBufferTransform = Nothing
       , cuBufferRelease = Nothing
       , cuSubsurfaces = Nothing
-      , cuFifoBarrier = False
-      , cuFifoWaitBarrier = False
       , cuConstraints = []
       , cuOnApply = []
       , cuSyncUpdates = mempty
@@ -332,7 +326,6 @@ data SurfaceState = SurfaceState
   , sSubsurfaces :: SubsurfaceStack
   , sBufferRelease :: Maybe (TObjectID Wl_callback)
   -- ^ The release callback of `sBuffer`, from @wl_surface.get_release@.
-  , sFifoBarrier :: Bool
   }
 
 data Wl_surface = Wl_surface
@@ -524,7 +517,6 @@ applyContentUpdate env surface cu = do
       , sBufferTransform = fromMaybe s.sBufferTransform cu.cuBufferTransform
       , sSubsurfaces = fromMaybe s.sSubsurfaces cu.cuSubsurfaces
       , sBufferRelease = if isJust cu.cuBuffer then cu.cuBufferRelease else cu.cuBufferRelease <|> s.sBufferRelease
-      , sFifoBarrier = s.sFifoBarrier || cu.cuFifoBarrier
       }
   sequence_ cu.cuOnApply
   for_ (Map.toList cu.cuSyncUpdates) $ \(childId, SyncContentUpdate child) ->
@@ -627,7 +619,6 @@ instance Object Wl_compositor where
             , sBufferTransform = Enum_wl_output_transform_normal
             , sSubsurfaces = SubsurfaceStack{above = Seq.empty, below = Seq.empty}
             , sBufferRelease = Nothing
-            , sFifoBarrier = False
             }
       pure Wl_surface{..}
     registerObject msg wl_surface

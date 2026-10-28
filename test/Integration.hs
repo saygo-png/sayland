@@ -20,6 +20,7 @@ import System.Random (randomIO)
 import System.Timeout (timeout)
 import Test.Tasty
 import Test.Tasty.HUnit
+import Utils
 
 tests :: TestTree
 tests =
@@ -42,13 +43,16 @@ tests =
     , testCase "a desynchronized subsurface's commits are applied right away" desyncedSubsurfaceApplies
     , testCase "an update waits on the compositor until its constraints hold" constrainedUpdateWaits
     , testCase "a synchronized subsurface's constraints hold back its parent's update" syncedConstraintsHoldParent
+    , testCase "a fifo barrier holds the updates that wait for it until the compositor clears it" fifoBarrierHolds
+    , testCase "a synchronized subsurface ignores wait_barrier" syncedSubsurfaceIgnoresFifo
+    , testCase "the compositor rejects a second fifo object for a surface" rejectsSecondFifo
     , testCase "withEventLoop returns what the client returns" eventLoopReturns
     , testCase "withEventLoop throws the event loop's error to the client" eventLoopThrows
     , testCase "untilDisconnected returns when the compositor hangs up" untilDisconnectedReturns
     ]
 
 table :: ProtocolTable
-table = waylandTable <> xdg_shellTable
+table = waylandTable <> xdg_shellTable <> fifo_v1Table
 
 -- | The client binds some globals. The objects it then creates exist on the compositor too.
 bindsGlobals :: Assertion
@@ -252,14 +256,14 @@ constrainedUpdateWaits = withSession $ \s -> do
   sendMsg surface Request_wl_surface_commit
   sendMsg surface $ Request_wl_surface_set_buffer_scale 3
   sendMsg surface Request_wl_surface_commit
-  scales s surface >>= liftIO . (@?= (3, 1))
-  length <$> readTVarIO compositorSurface.queue >>= liftIO . (@?= 2)
+  scales s surface >>=@?== (3, 1)
+  readTVarIO compositorSurface.queue >>= (liftIO . (@?= 2)) . length
   liftIO . asCompositor s $ do
     env <- getConnectionEnv
     atomically $ writeTVar ready True >> flushContentUpdates env compositorSurface
-  scales s surface >>= liftIO . (@?= (3, 3))
-  length <$> readTVarIO compositorSurface.queue >>= liftIO . (@?= 0)
-  readTVarIO applied >>= liftIO . (@?= 1)
+  scales s surface >>=@?== (3, 3)
+  readTVarIO compositorSurface.queue >>= (liftIO . (@?= 0)) . length
+  readTVarIO applied >>=@?== 1
 
 -- | The constraints of a synchronized subsurface's sync content update hold back its parent's update, as the two are
 -- applied together. A constraint can pass for sync content updates, as FIFO's must.
@@ -275,20 +279,91 @@ syncedConstraintsHoldParent = withSession $ \s -> do
   sendMsg child $ Request_wl_surface_set_buffer_scale 2
   sendMsg child Request_wl_surface_commit
   sendMsg parent Request_wl_surface_commit
-  scales s child >>= liftIO . (@?= (2, 2))
+  scales s child >>=@?== (2, 2)
   -- Checked for a sync content update, so the parent's update waits for it.
   constrainChild Constraint{whenDesync = const (readTVar ready), whenSync = const (readTVar ready)}
   sendMsg child $ Request_wl_surface_set_buffer_scale 3
   sendMsg child Request_wl_surface_commit
   sendMsg parent $ Request_wl_surface_set_buffer_scale 2
   sendMsg parent Request_wl_surface_commit
-  scales s child >>= liftIO . (@?= (3, 2))
-  scales s parent >>= liftIO . (@?= (2, 1))
+  scales s child >>=@?== (3, 2)
+  scales s parent >>=@?== (2, 1)
   liftIO . asCompositor s $ do
     env <- getConnectionEnv
     atomically $ writeTVar ready True >> flushContentUpdates env compositorParent
-  scales s child >>= liftIO . (@?= (3, 3))
-  scales s parent >>= liftIO . (@?= (2, 2))
+  scales s child >>=@?== (3, 3)
+  scales s parent >>=@?== (2, 2)
+
+-- | Each update waits for the barrier, then sets it.
+-- The barrier starts down, so the first is applied right away, and the compositor applies one more per clear.
+fifoBarrierHolds :: Assertion
+fifoBarrierHolds = withSession $ \s -> do
+  wl_compositor <- bindToInterface @Wl_compositor s.registry
+  surface <- newObject wl_compositor Request_wl_compositor_create_surface
+  fifo <- withFifo s surface
+  compositorSurface <- onCompositor s surface
+  let clearBarrier =
+        liftIO . asCompositor s $ getConnectionEnv >>= \env -> atomically (clearFifoBarrier env compositorSurface)
+
+  -- each update does what a fifo client usually does: wait for the previous frame's barrier, then raise its own
+  for_ [2, 3, 4] $ \scale -> do
+    sendMsg fifo Request_wp_fifo_v1_wait_barrier -- adds a constraint to the pending cuConstraints that waits while the barrier is up
+    sendMsg fifo Request_wp_fifo_v1_set_barrier -- adds `writeTVar barrier True` to the pending cuOnApply
+    sendMsg surface $ Request_wl_surface_set_buffer_scale scale
+    sendMsg surface Request_wl_surface_commit -- the surface isn't a subsurface, so its update is queued and flushed on the compositor
+
+  -- 2: the barrier was never raised, so its constraint passes. it is applied, and its cuOnApply raises the barrier.
+  -- 3: the barrier is up, so it waits in the queue.
+  -- 4: waits behind 3.
+
+  -- the client applies every commit right away, so only the compositor's scale shows the barrier at work.
+  scales s surface >>=@?== (4, 2)
+  clearBarrier -- 3's constraint passes and it is applied. in the same transaction its cuOnApply raises the barrier again, so 4 keeps waiting
+  scales s surface >>=@?== (4, 3)
+  clearBarrier -- 4 is applied and raises the barrier, with nothing left to wait for it
+  scales s surface >>=@?== (4, 4)
+
+-- | The child raises its barrier, then waits for it. The wait is ignored, as the child is synchronized.
+syncedSubsurfaceIgnoresFifo :: Assertion
+syncedSubsurfaceIgnoresFifo = withSession $ \s -> do
+  (parent, child, _) <- withSubsurface s
+  fifo <- withFifo s child
+  sendMsg fifo Request_wp_fifo_v1_set_barrier -- adds `writeTVar barrier True` to the child's pending cuOnApply
+  sendMsg child Request_wl_surface_commit -- the child is synchronized, so its update is cached in the parent's pending cuSyncUpdates, not applied
+  sendMsg parent Request_wl_surface_commit -- the parent's update is applied, and the child's with it. the child's cuOnApply runs and the barrier goes up.
+  roundtrip -- wait until the compositor has handled both commits
+  barrier <- onCompositor s child >>= atomically . (readTVar <=< fifoBarrier) -- read the child's barrier on the compositor
+  liftIO $ assertBool "the child's barrier is down but it should be up" barrier
+  sendMsg fifo Request_wp_fifo_v1_wait_barrier -- adds a constraint to the child's pending cuConstraints that waits while the barrier is up
+  sendMsg child $ Request_wl_surface_set_buffer_scale 3 -- Request a state update, compositor's scale only becomes 3 once this update is applied
+  sendMsg child Request_wl_surface_commit -- cached in the parent's pending cuSyncUpdates again, so its constraint is checked with whenSync
+  sendMsg parent Request_wl_surface_commit -- whenSync passes even though the barrier is up, so nothing holds the parent's update back and both are applied
+  scales s child >>=@?== (3, 3) -- the client applies right away; the compositor only has 3 if the barrier was ignored
+
+-- | A @get_fifo@ sent without for a surface that already has a fifo object ends the connection.
+rejectsSecondFifo :: Assertion
+rejectsSecondFifo = withSession $ \s -> do
+  wl_compositor <- bindToInterface @Wl_compositor s.registry
+  surface <- newObject wl_compositor Request_wl_compositor_create_surface
+  manager <- bindToInterface @Wp_fifo_manager_v1 s.registry
+  _ <- newObject manager $ \i -> Request_wp_fifo_manager_v1_get_fifo i surface.wlid
+  oid <- newObjectID
+  sendMessage (Request_wp_fifo_manager_v1_get_fifo (TObjectID $ FromClient oid) surface.wlid) manager.wlid
+  liftIO $ do
+    ended <- takeMVar s.clientLoopEnded
+    case fromException ended of
+      Just (e :: ProtocolError) -> do
+        e.object @?= Just (toObjectID manager.wlid)
+        e.code @?= errorCode Enum_wp_fifo_manager_v1_error_already_exists
+      Nothing -> assertFailure $ "the connection ended with something else: " <> displayException ended
+
+-- | A fifo object for a surface, made on the compositor too.
+withFifo :: Session -> Wl_surface -> Wayland Client Wp_fifo_v1
+withFifo s surface = do
+  manager <- bindToInterface @Wp_fifo_manager_v1 s.registry
+  fifo <- newObject manager $ \i -> Request_wp_fifo_manager_v1_get_fifo i surface.wlid
+  roundtrip
+  pure fifo
 
 -- | A surface with a subsurface, synchronized as subsurfaces start out, made on the compositor too.
 withSubsurface :: Session -> Wayland Client (Wl_surface, Wl_surface, Wl_subsurface)
