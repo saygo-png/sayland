@@ -152,9 +152,9 @@ commitAppliesState = withSession $ \s -> do
   wl_compositor <- bindToInterface @Wl_compositor s.registry
   surface <- newObject wl_compositor Request_wl_compositor_create_surface
   sendMsg surface $ Request_wl_surface_set_buffer_scale 2
-  scales s surface >>= liftIO . (@?= (1, 1))
+  scales s surface >>=@?== (1, 1)
   sendMsg surface Request_wl_surface_commit
-  scales s surface >>= liftIO . (@?= (2, 2))
+  scales s surface >>=@?== (2, 2)
 
 -- | Only one extension per type
 surfaceExtensions :: Assertion
@@ -181,13 +181,13 @@ syncedSubsurfaceWaits = withSession $ \s -> do
   sendMsg child Request_wl_surface_commit
   sendMsg child $ Request_wl_surface_set_buffer_scale 3
   sendMsg child Request_wl_surface_commit
-  scales s child >>= liftIO . (@?= (1, 1))
+  scales s child >>=@?== (1, 1)
   liftIO $ do
     Just compositorParent <- compositorObject s parent.wlid
     syncUpdates <- (.cuSyncUpdates) <$> readIORef compositorParent.pendingState
     length syncUpdates @?= 1
   sendMsg parent Request_wl_surface_commit
-  scales s child >>= liftIO . (@?= (3, 3))
+  scales s child >>=@?== (3, 3)
 
 -- | A synchronized subsurface's commits are merged in the order they were committed: the later one's state replaces
 -- the earlier one's, offsets add up and the damage of both is kept. Applying them one after the other instead would
@@ -225,9 +225,9 @@ nestedSyncedCommitsMerge = withSession $ \s -> do
     sendMsg inner $ Request_wl_surface_set_buffer_scale scale
     sendMsg inner Request_wl_surface_commit
     sendMsg middle Request_wl_surface_commit
-  scales s inner >>= liftIO . (@?= (1, 1))
+  scales s inner >>=@?== (1, 1)
   sendMsg root Request_wl_surface_commit
-  scales s inner >>= liftIO . (@?= (3, 3))
+  scales s inner >>=@?== (3, 3)
 
 -- | A desynchronized subsurface's commits are desync content updates: applied right away, not with its parent's commit.
 desyncedSubsurfaceApplies :: Assertion
@@ -236,7 +236,7 @@ desyncedSubsurfaceApplies = withSession $ \s -> do
   sendMsg subsurface Request_wl_subsurface_set_desync
   sendMsg child $ Request_wl_surface_set_buffer_scale 2
   sendMsg child Request_wl_surface_commit
-  scales s child >>= liftIO . (@?= (2, 2))
+  scales s child >>=@?== (2, 2)
 
 -- | An update whose constraint does not hold waits in the compositor's queue, and the update committed after it waits
 -- behind it. Once the constraint holds, a flush applies both in order and runs their apply hooks once.
@@ -257,12 +257,12 @@ constrainedUpdateWaits = withSession $ \s -> do
   sendMsg surface $ Request_wl_surface_set_buffer_scale 3
   sendMsg surface Request_wl_surface_commit
   scales s surface >>=@?== (3, 1)
-  readTVarIO compositorSurface.queue >>= (liftIO . (@?= 2)) . length
+  readTVarIO compositorSurface.queue >>= ((@?== 2)) . length
   liftIO . asCompositor s $ do
     env <- getConnectionEnv
     atomically $ writeTVar ready True >> flushContentUpdates env compositorSurface
   scales s surface >>=@?== (3, 3)
-  readTVarIO compositorSurface.queue >>= (liftIO . (@?= 0)) . length
+  readTVarIO compositorSurface.queue >>= ((@?== 0)) . length
   readTVarIO applied >>=@?== 1
 
 -- | The constraints of a synchronized subsurface's sync content update hold back its parent's update, as the two are

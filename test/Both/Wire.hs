@@ -106,25 +106,25 @@ prop_truncated putter getter x =
     (bytes, fds) = runWirePut (putter x)
 
 prop_header :: AnyObjectID -> Word16 -> [Word8] -> Property
-prop_header objectID opcode body =
-  runWireGet getHeader [] (encodeMessage objectID opcode payload)
-    === (Right (Just objectID, opcode, size), payload, [])
+prop_header objID opcode body =
+  runWireGet getHeader [] (encodeMessage objID opcode payload)
+    === (Right (Just objID, opcode, size), payload, [])
   where
     payload = BS.pack body
     size = headerSize + fromIntegral (BS.length payload)
 
 prop_message :: AnyObjectID -> Word16 -> Body -> Property
-prop_message objectID opcode (Body body) =
-  decodeMessage encodedMsg === Right (Just objectID, opcode, body, "")
+prop_message objID opcode (Body body) =
+  decodeMessage encodedMsg === Right (Just objID, opcode, body, "")
   where
-    encodedMsg = encodeMessage objectID opcode body
+    encodedMsg = encodeMessage objID opcode body
 
 -- | A message whose header has arrived but whose body has not fully arrived yet must not decode.
 -- The test keeps only the first @kept@ bytes of a message, anywhere from just the header to all but the last byte.
 prop_decodePartial :: AnyObjectID -> Word16 -> Property
-prop_decodePartial objectID opcode =
+prop_decodePartial objID opcode =
   forAllShrink (arbitrary `suchThat` hasBytes) (filter hasBytes . shrink) $ \(Body body) ->
-    let encodedMsg = encodeMessage objectID opcode body
+    let encodedMsg = encodeMessage objID opcode body
      in forAll (chooseInt (fromIntegral headerSize, BS.length encodedMsg - 1)) $ \kept ->
           decodeMessage (BS.take kept encodedMsg) === Left Incomplete
   where
@@ -136,19 +136,19 @@ prop_decodePartialHeader bytes = decodeMessage (BS.pack (take (fromIntegral head
 
 -- | A header claiming any size, unlike `encodeMessage` which derives it from the body.
 header :: AnyObjectID -> Word16 -> Word16 -> BS.ByteString
-header objectID opcode size = fst . runWirePut $ putHeader (objectID, opcode, size)
+header objID opcode size = fst . runWirePut $ putHeader (objID, opcode, size)
 
 -- | A size smaller than the header itself is malformed, whatever follows it.
 prop_decodeTooSmall :: AnyObjectID -> Word16 -> [Word8] -> Property
-prop_decodeTooSmall objectID opcode trailing =
+prop_decodeTooSmall objID opcode trailing =
   forAll (chooseEnum (0, headerSize - 1)) $ \size ->
-    decodeMessage (header objectID opcode size <> BS.pack trailing) === Left (InvalidSize $ SizeTooSmall size)
+    decodeMessage (header objID opcode size <> BS.pack trailing) === Left (InvalidSize $ SizeTooSmall size)
 
 -- | Arguments are all multiples of 4 bytes, so a size that isn't is malformed.
 prop_decodeUnaligned :: AnyObjectID -> Word16 -> Property
-prop_decodeUnaligned objectID opcode =
+prop_decodeUnaligned objID opcode =
   forAll (chooseEnum (headerSize, 256) `suchThat` \s -> s `mod` 4 /= 0) $ \size ->
-    decodeMessage (header objectID opcode size <> BS.replicate (fromIntegral size) 0) === Left (InvalidSize $ SizeUnaligned size)
+    decodeMessage (header objID opcode size <> BS.replicate (fromIntegral size) 0) === Left (InvalidSize $ SizeUnaligned size)
 
 -- | Messages arrive back to back in one stream, and come out one at a time, in order.
 prop_decodeStream :: [(AnyObjectID, Word16, Body)] -> Property
