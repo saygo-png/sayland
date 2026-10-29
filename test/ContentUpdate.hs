@@ -1,10 +1,11 @@
 -- | Description : Tests for merging content updates.
 module ContentUpdate (tests) where
 
-import Relude
 import Sayland
 import Test.Tasty
 import Test.Tasty.HUnit
+import TestPrelude
+import Utils
 
 tests :: TestTree
 tests =
@@ -14,7 +15,7 @@ tests =
     , testCase "state the later update does not set is kept" unsetKept
     , testCase "offsets add up" offsetsAdd
     , testCase "the damage of both updates is kept" damageKept
-    , testCase "apply hooks of both run, the earliest first" applyHooksInOrder
+    , testCase "apply hooks of both run, the earliest first" $ runOnce applyHooksInOrder
     ]
 
 -- | An update that changes nothing for setting fields
@@ -40,9 +41,9 @@ damageKept = sort ((.position) <$> merged.cuDamage) @?= [(1, 1), (2, 2)]
     merged = noChange{cuDamage = [damage 1]} <> noChange{cuDamage = [damage 2]}
     damage n = Rectangle{position = (n, n), size = (1, 1)}
 
-applyHooksInOrder :: Assertion
+applyHooksInOrder :: ConcIO ()
 applyHooksInOrder = do
   ran <- newTVarIO []
   let hook name = modifyTVar' ran (<> [name :: Text])
   atomically . sequenceA_ $ (noChange{cuOnApply = [hook "earlier"]} <> noChange{cuOnApply = [hook "later"]}).cuOnApply
-  readTVarIO ran >>= (@?= ["earlier", "later"])
+  readTVarIO ran >>=@?== ["earlier", "later"]

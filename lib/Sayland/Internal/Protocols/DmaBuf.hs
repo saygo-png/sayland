@@ -7,20 +7,21 @@
 -- | Description: Internals of Sayland.Protocols.DmaBuf
 module Sayland.Internal.Protocols.DmaBuf (module Sayland.Internal.Protocols.DmaBuf) where
 
-import Control.Exception (try)
+import Control.Exception (ErrorCall (..), SomeException)
 import Control.Monad
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Catch (try)
 import Data.Binary
+import Data.Binary.Get (getWord32host, getWord64host, runGet)
 import Data.Bits (Bits (shiftL), (.|.))
-import Foreign (Storable (peek), castPtr, nullPtr, plusPtr)
-import GHC.Exception
-import MMAP (mapShared, mkMmapFlags, mmap, protRead, protWrite)
+import Data.ByteString qualified as BS
+import Foreign (Ptr, plusPtr)
 import Sayland.Internal.Codegen
 import Sayland.Internal.Core
 import Sayland.Internal.Prelude
 import Sayland.Internal.Protocols.Wayland
+import Sayland.Kernel (Kernel)
+import Sayland.Kernel qualified as Kernel
 import Sayland.Wire
-import System.Posix (closeFd)
 
 $(loadProtocolFileEnums "xml-protocols/linux-dmabuf-v1.xml")
 
@@ -43,7 +44,7 @@ data DmabufBuffer = DmabufBuffer
   }
 
 instance BufferBackend DmabufBuffer where
-  releaseBuffer DmabufBuffer{dmabufs} = liftIO $ forM_ dmabufs $ \Dmabuf{dmabufFd = fd} -> closeFd fd
+  releaseBuffer DmabufBuffer{dmabufs} = getKernel >>= \kernel -> liftConc . forM_ dmabufs $ \Dmabuf{dmabufFd = fd} -> Kernel.closeFd kernel fd
 
 data Zwp_linux_buffer_params_v1 = Zwp_linux_buffer_params_v1 {wlid :: TObjectID Zwp_linux_buffer_params_v1, dmabufSet :: IORef [Dmabuf], paramsModifier :: IORef Word64, sampling_device :: IORef (Maybe WlArray)}
 
@@ -80,6 +81,10 @@ newFeedback wlid feedbackSurface = do
 -- }}}
 
 $(loadProtocolFile wlFormatter "xml-protocols/linux-dmabuf-v1.xml")
+
+-- | Read a number from mapped memory, in host byte order, like 'Foreign.Storable.peek'.
+peekWord :: Kernel -> Get a -> Int -> Ptr () -> ConcIO a
+peekWord kernel getter size ptr = runGet getter . BS.fromStrict <$> Kernel.peekBytes kernel ptr size
 
 -- Implementations {{{
 -- Zwp_linux_dmabuf_v1 {{{
@@ -152,24 +157,16 @@ instance Object Zwp_linux_dmabuf_feedback_v1 where
     atomicWriteIORef feedback.feedbackState fstate
     forwardMessage feedback msg
   onEvent feedback (Event_zwp_linux_dmabuf_feedback_v1_format_table fd size) = do
-    result <-
-      liftIO
-        $ try
-        $ mmap
-          nullPtr
-          (fromIntegral size)
-          (protRead <> protWrite)
-          (mkMmapFlags mapShared mempty)
-          fd
-          0
+    kernel <- getKernel
+    result <- liftConc . try $ Kernel.mmap kernel fd (fromIntegral size)
     ptr <- case result of
-      Left (e :: SomeException) -> error $ "mmap failed: " ++ show e
+      Left (e :: SomeException) -> throwIO . ErrorCall $ "mmap failed: " ++ show e
       Right ptr' -> pure ptr'
-    formatTable <- liftIO $ forM [0 .. fromIntegral size `div` 16] $ \n -> do
+    formatTable <- liftConc $ forM [0 .. fromIntegral size `div` 16] $ \n -> do
       let ptr' = ptr `plusPtr` (16 * n)
-      format :: Word32 <- peek $ castPtr ptr'
-      _ :: Word32 <- peek (ptr' `plusPtr` 32)
-      modifier :: Word64 <- peek (ptr' `plusPtr` 64)
+      format :: Word32 <- peekWord kernel getWord32host 4 ptr'
+      _ :: Word32 <- peekWord kernel getWord32host 4 (ptr' `plusPtr` 32)
+      modifier :: Word64 <- peekWord kernel getWord64host 8 (ptr' `plusPtr` 64)
       pure (format, modifier)
     atomicModifyIORef' feedback.pendingFeedbackState $ (,()) . (\x -> x{formatTable})
   onEvent feedback msg@(Event_zwp_linux_dmabuf_feedback_v1_main_device _) = do

@@ -3,10 +3,9 @@
 -- | Description : Everything that has to do with making and keeping connections.
 module Sayland.Connection (module Sayland.Connection) where
 
-import Control.Concurrent (forkFinally, killThread, myThreadId, threadDelay, throwTo)
-import Control.Exception (AsyncException (ThreadKilled), bracket, displayException, finally, fromException)
+import Control.Exception (AsyncException (ThreadKilled), displayException, fromException)
 import Control.Monad
-import Control.Monad.IO.Class
+import Control.Monad.Catch (bracket, finally)
 import Control.Monad.Reader
 import Data.Binary (Word16)
 import Data.ByteString qualified as BS
@@ -15,37 +14,36 @@ import Data.Data (cast)
 import Data.Map qualified as Map
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as T
-import Network.Socket
 import Sayland.Internal.Core
 import Sayland.Internal.Prelude
 import Sayland.Internal.Protocols.Wayland
+import Sayland.Kernel
 import Sayland.Log
 import Sayland.Object (sendMsg)
 import Sayland.Wire
-import System.Posix (removeLink)
 
 -- Listeners {{{
 
 -- | Listen for client connections and handle them with `handleIncomingClient`.
-listenForClients :: (MonadIO m) => ServerEnv -> m ()
+listenForClients :: (MonadConcIO m) => ServerEnv -> m ()
 listenForClients env = do
-  (sock, _) <- liftIO $ accept env.listenSocket
+  sock <- liftConc $ accept env.listenSocket
   handleIncomingClient env sock
   listenForClients env
 
 -- | Deal with an incoming client, creating its connection environment and updating the server state.
-handleIncomingClient :: (MonadIO m) => ServerEnv -> Socket -> m ()
+handleIncomingClient :: (MonadConcIO m) => ServerEnv -> Socket -> m ()
 handleIncomingClient env socket' = do
-  clientenv <- liftIO $ newConnectionEnv socket' env.interfaceTable env.eventHandlers env.onRecoverable env.serverLogger
+  clientenv <- liftConc $ newConnectionEnv socket' env.interfaceTable env.eventHandlers env.onRecoverable env.serverLogger
   serial' <- atomically $ do
     modifyTVar env.clientSerial (+ 1)
     readTVar env.clientSerial
   atomically . modifyTVar env.clients $ Map.insert serial' clientenv
   let logClient level = logWith env.serverLogger level (Just serial')
-  liftIO $ logClient LogDebug "connected"
+  liftConc $ logClient LogDebug "connected"
   void
-    . liftIO
-    . forkFinally (runReaderT (serveClient $ clientLoop socket') (ClientServerEnv env clientenv serial'))
+    . liftConc
+    . forkFinallyN ("server-client-" <> show serial') (runReaderT (serveClient $ clientLoop socket') (ClientServerEnv env clientenv serial'))
     $ \ended -> do
       close socket'
       atomically . modifyTVar env.clients $ Map.delete serial'
@@ -69,7 +67,7 @@ clientLoop = clientLoop' ""
     clientLoop' :: (KnownPerspective p) => BS.ByteString -> Socket -> Wayland p ()
     clientLoop' bytes' sock = do
       queue <- (.fdQueue) <$> getConnectionEnv
-      (bytes'', newFds) <- liftIO . peerGone $ recvChunk sock
+      (bytes'', newFds) <- liftConc . peerGone $ recvChunk sock
       -- Nothing to read from a stream socket means the peer closed it.
       when (BS.null bytes'') $ throwIO Disconnected
       atomically $ mapM_ (writeTQueue queue) newFds
@@ -113,14 +111,14 @@ dispatchWith handle oid opcode msg = do
 -- | Connect to the compositor (see `waylandSetup`) and run a client on that connection, with its event loop running
 -- in the background (see `withEventLoop`). The connection is closed once the client returns or throws.
 --
--- > main = withWaylandClient (waylandTable <> xdg_shellTable) $ do
+-- > program kernel = withWaylandClient kernel (waylandTable <> xdg_shellTable) $ do
 -- >   registry <- getWlDisplay >>= \display -> newObject display Request_wl_display_get_registry
 -- >   roundtrip
 -- >   compositor <- bindToInterface @Wl_compositor registry
 -- >   ...
 -- >   untilDisconnected
-withWaylandClient :: ProtocolTable -> Wayland Client a -> IO a
-withWaylandClient protocolTable client = bracket (waylandSetup protocolTable) waylandClose $ runReaderT (withEventLoop client)
+withWaylandClient :: Kernel -> ProtocolTable -> Wayland Client a -> ConcIO a
+withWaylandClient kernel protocolTable client = bracket (waylandSetup kernel protocolTable) waylandClose $ runReaderT (withEventLoop client)
 
 -- | Run a client with the connection's event loop running in another thread, which receives the compositor's
 -- events and runs their handlers. The client runs in the calling thread, which matters for bound threads.
@@ -131,84 +129,87 @@ withEventLoop :: Wayland Client a -> Wayland Client a
 withEventLoop client = do
   env <- ask
   conn <- getConnectionEnv
-  liftIO $ do
+  liftConc $ do
     caller <- myThreadId
     -- The loop only ends with an exception. Hand it to the client, unless the client returning stopped the loop.
     let handOver = \case
           Left e | fromException e /= Just ThreadKilled -> throwTo caller e
           _ -> pass
-    loopThread <- forkFinally (runReaderT (clientLoop conn.connectionSocket) env) handOver
+    loopThread <- forkFinallyN "client-loop" (runReaderT (clientLoop conn.connectionSocket) env) handOver
     runReaderT client env `finally` killThread loopThread
 
 -- | Block until the compositor hangs up, then return. Other ways the event loop can end are rethrown.
 -- Use at the end of a client started with `withWaylandClient` or `withEventLoop` that runs until the compositor goes away.
 -- A hangup before this is called is thrown at the client like any other error of the event loop.
+--
+-- Main sleeps in a loop here. dejafu would run that loop forever, so this waits on an t'MVar' nothing fills instead.
+-- If nothing ends the event loop either, dejafu reports a deadlock, as the client would wait forever.
 untilDisconnected :: Wayland Client ()
 untilDisconnected =
-  liftIO (forever $ threadDelay 1_000_000_000) `catchW` \case
+  liftConc (newEmptyMVar >>= takeMVar :: ConcIO ()) `catchW` \case
     Disconnected -> pass
     e -> throwIO e
 
 -- | Close a client's connection to the compositor.
-waylandClose :: WaylandEnv Client -> IO ()
+waylandClose :: WaylandEnv Client -> ConcIO ()
 waylandClose (ClientEnv conn) = close conn.connectionSocket
 
 -- }}}
 
 -- | Connect to the compositor in @WAYLAND_DISPLAY@, or the first socket found in @XDG_RUNTIME_DIR@.
-waylandSetup :: ProtocolTable -> IO (WaylandEnv Client)
-waylandSetup protocolTable =
-  getSocketPath openSocketName >>= \case
+waylandSetup :: Kernel -> ProtocolTable -> ConcIO (WaylandEnv Client)
+waylandSetup kernel protocolTable =
+  getSocketPath kernel (openSocketName kernel) >>= \case
     Just path -> do
-      env <- waylandConnect protocolTable path
+      env <- waylandConnect kernel protocolTable path
       runReaderT (logDebug $ "connected to " <> show path) env
       pure env
     Nothing -> throwIO $ NoSocket "couldn't find `$WAYLAND_DISPLAY`, nor any open socket."
 
 -- | Create a server listening on a free socket name in @XDG_RUNTIME_DIR@, like @wayland-0@.
 -- Accept its clients with `listenForClients`, and close it with `waylandServerClose`.
-waylandServerSetup :: ProtocolTable -> IO ServerEnv
-waylandServerSetup protocolTable =
-  getSocketPath availableSocketName >>= \case
+waylandServerSetup :: Kernel -> ProtocolTable -> ConcIO ServerEnv
+waylandServerSetup kernel protocolTable =
+  getSocketPath kernel (availableSocketName kernel) >>= \case
     Just path -> do
-      env <- waylandListen protocolTable path
+      env <- waylandListen kernel protocolTable path
       logWith env.serverLogger LogDebug Nothing $ "listening on " <> show path
       pure env
     Nothing -> throwIO $ NoSocket "couldn't find `$XDG_RUNTIME_DIR`, nor a free socket name in it."
 
 -- | Create a server listening on a new socket at the given path.
-waylandListen :: ProtocolTable -> FilePath -> IO ServerEnv
-waylandListen protocolTable socketPath = do
-  listenSocket <- socket AF_UNIX Stream defaultProtocol
-  bind listenSocket $ SockAddrUnix socketPath
+waylandListen :: Kernel -> ProtocolTable -> FilePath -> ConcIO ServerEnv
+waylandListen kernel protocolTable socketPath = do
+  listenSocket <- socket kernel
+  bind listenSocket socketPath
   listen listenSocket 5
   clients <- newTVarIO mempty
   clientSerial <- newTVarIO 0
   eventHandlers <- newIORef mempty
-  serverLogger <- defaultLogger Server
+  serverLogger <- defaultLogger kernel Server
   pure ServerEnv{interfaceTable = Map.fromList protocolTable, onRecoverable = Reject, ..}
 
 -- | Close a server's connections to its clients and its socket, and remove the socket's file.
-waylandServerClose :: ServerEnv -> IO ()
+waylandServerClose :: ServerEnv -> ConcIO ()
 waylandServerClose env = do
   readTVarIO env.clients >>= mapM_ (close . (.connectionSocket))
   close env.listenSocket
-  removeLink env.socketPath
+  removeLink (socketKernel env.listenSocket) env.socketPath
 
 -- | Connect to the compositor socket at the given path.
-waylandConnect :: ProtocolTable -> FilePath -> IO (WaylandEnv Client)
-waylandConnect protocolTable path = do
-  sock <- socket AF_UNIX Stream defaultProtocol
-  connect sock $ SockAddrUnix path
+waylandConnect :: Kernel -> ProtocolTable -> FilePath -> ConcIO (WaylandEnv Client)
+waylandConnect kernel protocolTable path = do
+  sock <- socket kernel
+  connect sock path
   eventHandlers <- newIORef mempty
-  ClientEnv <$> (newConnectionEnv sock (Map.fromList protocolTable) eventHandlers Reject =<< defaultLogger Client)
+  ClientEnv <$> (newConnectionEnv sock (Map.fromList protocolTable) eventHandlers Reject =<< defaultLogger kernel Client)
 
 -- | The create the initial state of a new connection.
 newConnectionEnv ::
-  forall p. (KnownPerspective p) => Socket -> Map.Map WlText InterfaceEntry -> IORef [EventHandler p] -> OnRecoverable -> Logger -> IO (ConnectionEnv p)
+  forall p. (KnownPerspective p) => Socket -> Map.Map WlText InterfaceEntry -> IORef [EventHandler p] -> OnRecoverable -> Logger -> ConcIO (ConnectionEnv p)
 newConnectionEnv connectionSocket interfaceTable eventHandlers onRecoverable logger = do
-  writeLock <- newMVar ()
-  counter <- newMVar (Just firstObjectID)
+  writeLock <- newMVarN "writeLock" ()
+  counter <- newMVarN "counter" (Just firstObjectID)
   nextPeerID <- newIORef $ case toAnyObjectID (firstObjectID @p) of
     FromClient _ -> 0xff000000 -- This is a client, the first ID a server allocates.
     FromServer _ -> 2 -- This is a server, the first ID a client allocates after wl_display.

@@ -8,7 +8,6 @@
 module Sayland.Internal.Protocols.ExtWorkspace (module Sayland.Internal.Protocols.ExtWorkspace) where
 
 import Control.Monad
-import Control.Monad.IO.Class
 import Data.Foldable
 import Data.Maybe
 import Sayland.Internal.Codegen
@@ -135,7 +134,7 @@ instance Object Ext_workspace_group_handle_v1 where
     for_ workspace $ atomically . removeFromGroup group
     forwardMessage group msg
   onEvent group msg@Event_ext_workspace_group_handle_v1_removed = do
-    workspaces <- liftIO $ readTVarIO group.groupWorkspaces
+    workspaces <- readTVarIO group.groupWorkspaces
     unless (null workspaces)
       $ protocolViolation Recoverable msg group Err_implementation [wl|ext_workspace_group_handle_v1.removed: group still has workspaces|]
     atomically $ removeAllWorkspaces group
@@ -174,7 +173,7 @@ instance Object Ext_workspace_handle_v1 where
   onEvent workspace msg@Event_ext_workspace_handle_v1_capabilities{} =
     forwardMessage workspace msg
   onEvent workspace msg@Event_ext_workspace_handle_v1_removed = do
-    groups <- liftIO $ readTVarIO workspace.workspaceGroups
+    groups <- readTVarIO workspace.workspaceGroups
     unless (null groups)
       $ protocolViolation Recoverable msg workspace Err_implementation [wl|ext_workspace_handle_v1.removed: workspace still belongs to a group|]
     atomically $ removeFromAllGroups workspace

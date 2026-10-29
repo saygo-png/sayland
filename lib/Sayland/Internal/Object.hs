@@ -4,9 +4,9 @@
 -- | Description : Internals of Sayland.Object.
 module Sayland.Internal.Object (module Sayland.Internal.Object) where
 
-import Control.Exception (Exception)
+import Control.Exception (ErrorCall (..), Exception)
 import Control.Monad
-import Control.Monad.Reader (ask, liftIO, runReaderT)
+import Control.Monad.Reader (ask, runReaderT)
 import Data.Data
 import Data.Map qualified as Map
 import Sayland.Internal.Core
@@ -32,7 +32,7 @@ withNewObjectID :: (IDRange p) => (ObjectID p -> Wayland p a) -> Wayland p a
 withNewObjectID send = do
   env <- getConnectionEnv
   waylandEnv <- ask
-  liftIO . modifyMVar env.counter $ \current -> do
+  liftConc . modifyMVar env.counter $ \current -> do
     oid <- maybe (throwIO ObjectIDsExhausted) pure current
     result <- runReaderT (send oid) waylandEnv
     pure (succObjectID oid, result)
@@ -45,7 +45,7 @@ newObject ::
 newObject parent mkMsg = do
   oid <- withNewObjectID $ \i -> let oid = TObjectID (toAnyObjectID i) in oid <$ sendMsg parent (mkMsg oid)
   getInterface oid
-    >>= maybe (error $ "sayland bug: handler did not register object " <> show (toObjectID oid)) pure
+    >>= maybe (throwIO . ErrorCall $ "sayland bug: handler did not register object " <> show (toObjectID oid)) pure
 
 -- | Send a message and apply a handler associated with it. The handler changes the state.
 -- If necessary raw messages without state changes can be sent using the internal `sendMessage`

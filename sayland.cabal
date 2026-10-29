@@ -58,7 +58,8 @@ library sayland-wire
   build-depends:
     binary,
     bytestring,
-    directory,
+    containers,
+    exceptions,
     filepath,
     mtl,
     template-haskell,
@@ -67,13 +68,16 @@ library sayland-wire
 
   -- Non-boot libraries.
   build-depends:
-    network
+    concurrency,
+    dejafu,
 
   hs-source-dirs: lib-wire
   -- cabal-gild: discover lib-wire
   exposed-modules:
+    Sayland.Internal.Conc
     Sayland.Internal.Connection
     Sayland.Internal.Wire
+    Sayland.Kernel
     Sayland.Wire
 
 library
@@ -83,17 +87,14 @@ library
     binary,
     bytestring,
     containers,
+    exceptions,
     mtl,
-    stm,
     template-haskell,
     text,
-    unix,
 
   -- Non-boot libraries.
   build-depends:
-    network,
     sayland-wire,
-    shared-memory,
     xml,
 
   hs-source-dirs: lib
@@ -143,42 +144,6 @@ executable unrollTH
     filepath,
     process,
 
-executable demo-basic-compositor
-  import: common-options, executable-options
-  hs-source-dirs: demos
-  main-is: BasicCompositor.hs
-  build-depends:
-    containers,
-    directory,
-    network,
-    relude,
-    sayland,
-
-executable demo-basic-window
-  import: common-options, executable-options
-  hs-source-dirs: demos
-  main-is: BasicWindow.hs
-  other-modules: DemoUtils
-  build-depends:
-    bytestring,
-    random,
-    relude,
-    sayland,
-    stm,
-    unix,
-
-executable demo-wallpaper-daemon
-  import: common-options, executable-options
-  hs-source-dirs: demos
-  main-is: WallpaperDaemon.hs
-  other-modules: DemoUtils
-  build-depends:
-    bytestring,
-    relude,
-    sayland,
-    stm,
-    unix,
-
 test-suite sayland-tests
   import: common-options, executable-options
   type: exitcode-stdio-1.0
@@ -189,7 +154,11 @@ test-suite sayland-tests
     Both.Protocol.Codegen
     Both.Wire
     ContentUpdate
+    Harness
     Integration
+    RaceTest
+    Races
+    TestPrelude
     Utils
 
   build-depends:
@@ -197,13 +166,12 @@ test-suite sayland-tests
     binary,
     bytestring,
     containers,
-    directory,
-    network,
+    dejafu,
+    exceptions,
     random,
     relude,
     sayland,
     sayland-wire,
-    stm,
     tasty,
     tasty-hunit,
     tasty-quickcheck,

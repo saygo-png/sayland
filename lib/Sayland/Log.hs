@@ -9,7 +9,7 @@ module Sayland.Log (
   logWith,
   defaultLogger,
   silentLogger,
-  handleLogger,
+  stderrLogger,
 ) where
 
 import Sayland.Internal.Core (defaultLogger)

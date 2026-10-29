@@ -11,8 +11,8 @@
 module Sayland.Internal.Protocols.Wayland (module Sayland.Internal.Protocols.Wayland) where
 
 import Control.Applicative ((<|>))
+import Control.Exception (ErrorCall (..))
 import Control.Monad
-import Control.Monad.IO.Class
 import Data.Bifunctor (bimap)
 import Data.Bool
 import Data.Dynamic (Dynamic, fromDynamic, toDyn)
@@ -27,16 +27,14 @@ import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
 import Data.Typeable
-import Foreign (Ptr, nullPtr)
-import GHC.IORef (atomicSwapIORef)
+import Foreign (Ptr)
 import GHC.TypeError
-import MMAP (mapShared, mkMmapFlags, mmap, munmap, protRead, protWrite)
 import Sayland.Internal.Codegen
 import Sayland.Internal.Core
 import Sayland.Internal.Object
 import Sayland.Internal.Prelude
+import Sayland.Kernel qualified as Kernel
 import Sayland.Wire
-import System.Posix (setFdSize)
 
 $(loadProtocolFileEnums "xml-protocols/wayland.xml")
 
@@ -183,13 +181,14 @@ data Wl_shm_pool = Wl_shm_pool {wlid :: TObjectID Wl_shm_pool, fd :: Fd, size ::
 data Wl_shm = Wl_shm {wlid :: TObjectID Wl_shm, formats :: IORef [Enum_wl_shm_format]}
 
 -- | Drop one reference to a shm pool, unmapping it once nothing (the pool object or its buffers) holds it.
-unmapShmPoolRef :: (MonadIO m) => Wl_shm_pool -> m ()
+unmapShmPoolRef :: Wl_shm_pool -> Wayland p ()
 unmapShmPoolRef pool = do
   refs <- atomicModifyIORef' pool.references $ \x -> (x - 1, x - 1)
   when (refs == 0) $ do
     ptr <- readIORef pool.ptr
     size <- readIORef pool.size
-    liftIO $ munmap ptr (fromIntegral size)
+    kernel <- getKernel
+    liftConc $ Kernel.munmap kernel ptr (fromIntegral size)
 
 -- | What holds the contents of a t'Wl_buffer', like shared memory or a dmabuf.
 class BufferBackend a where
@@ -435,9 +434,8 @@ dropObject (TObjectID i) = do
   onServer $ sendMessage (Event_wl_display_delete_id $ fromAnyObjectID i) wlDisplayId
 
 -- | @mmap@ a shm pool's fd, read/write and shared.
-mapShmPool :: (MonadIO m) => Fd -> Int32 -> m (Ptr ())
-mapShmPool fd size =
-  liftIO $ mmap nullPtr (fromIntegral size) (protRead <> protWrite) (mkMmapFlags mapShared mempty) fd 0
+mapShmPool :: Fd -> Int32 -> Wayland p (Ptr ())
+mapShmPool fd size = getKernel >>= \kernel -> liftConc $ Kernel.mmap kernel fd (fromIntegral size)
 
 -- | The parent of a surface with a synchronized subsurface role, whose commits wait for the parent's.
 synchronizedParent :: Wl_surface -> Wayland p (Maybe Wl_surface)
@@ -591,7 +589,7 @@ instance Object Wl_registry where
     entry <- Map.lookup iface env.interfaceTable & whenNothing $ do
       protocolViolation Unrecoverable msg wlDisplayId Err_invalid_method [wl|wl_registry: bind to an unsupported interface|]
 
-    registerSomeObject msg (FromClient newId) =<< liftIO (entry.construct $ FromClient newId)
+    registerSomeObject msg (FromClient newId) =<< liftConc (entry.construct $ FromClient newId)
     forwardMessage obj msg
 
 -- }}}
@@ -657,10 +655,11 @@ instance Object Wl_shm_pool where
     dropObject pool.wlid
   onRequest pool msg@(Request_wl_shm_pool_resize size) = do
     -- Only the client owns the backing file, so only it grows it.
-    onClient . liftIO . setFdSize pool.fd $ fromIntegral size
+    kernel <- getKernel
+    onClient . liftConc . Kernel.setFdSize kernel pool.fd $ fromIntegral size
     oldSize <- readIORef pool.size
     oldPtr <- readIORef pool.ptr
-    liftIO $ munmap oldPtr (fromIntegral oldSize)
+    liftConc $ Kernel.munmap kernel oldPtr (fromIntegral oldSize)
     newPtr <- mapShmPool pool.fd size
     atomicWriteIORef pool.ptr newPtr
     atomicWriteIORef pool.size size
@@ -770,8 +769,8 @@ instance Object Wl_data_device where
   onRequest device msg@(Request_wl_data_device_start_drag source origin icon grabSerial) = do
     let dnd = Dnd{source, origin, icon, grabSerial}
     onClient $ do
-      isEmpty <- liftIO $ isEmptyMVar device.dnd
-      unless isEmpty $ error "tried starting drag while during one"
+      isEmpty <- isEmptyMVar device.dnd
+      unless isEmpty . throwIO $ ErrorCall "tried starting drag while during one"
       putMVar device.dnd dnd
     onServer $ do
       tryTakeMVar_ device.dnd
@@ -810,7 +809,7 @@ instance Object Wl_data_device where
     tryTakeMVar_ device.dndClient
     forwardMessage device msg
   onEvent device msg@(Event_wl_data_device_motion _ x y) = do
-    liftIO $ modifyMVar_ device.dndClient $ \session -> pure session{dndPosition = (x, y)}
+    liftConc $ modifyMVar_ device.dndClient $ \session -> pure session{dndPosition = (x, y)}
     forwardMessage device msg
   onEvent device msg@Event_wl_data_device_drop = do
     tryTakeMVar_ device.dndClient
@@ -901,7 +900,7 @@ instance Object Wl_surface where
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuBufferRelease = Just release}, ())
     forwardMessage surface msg
   onRequest surface msg@Request_wl_surface_commit{} = do
-    cu <- liftIO $ atomicSwapIORef surface.pendingState mempty
+    cu <- atomicSwapIORef surface.pendingState mempty
     synchronizedParent surface >>= \case
       Just parent -> atomicModifyIORef' parent.pendingState $ \s ->
         (s{cuSyncUpdates = Map.insertWith (flip (<>)) surface.wlid (SyncContentUpdate cu) s.cuSyncUpdates}, ())
@@ -1197,7 +1196,7 @@ tryBindToInterface registry = do
     (name, advertisedVersion) : _ -> do
       let negotiatedVersion = min advertisedVersion $ getInterfaceVersion (Proxy @i)
       oid <- withNewObjectID $ \oid -> oid <$ sendMsg registry (Request_wl_registry_bind name (WlNewId targetIface negotiatedVersion oid))
-      Just <$> (getInterface (TObjectID $ FromClient oid) >>= maybe (error "sayland bug: bind did not register the global") pure)
+      Just <$> (getInterface (TObjectID $ FromClient oid) >>= maybe (throwIO $ ErrorCall "sayland bug: bind did not register the global") pure)
 
 -- }}}
 -- }}}

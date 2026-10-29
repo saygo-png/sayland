@@ -29,6 +29,7 @@ module Sayland.Core (
   toObjectID,
   protocolViolation,
   catchW,
+  getKernel,
   logDebug,
   logInfo,
   logWarn,

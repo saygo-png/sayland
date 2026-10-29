@@ -3,6 +3,42 @@
 Simple Wayland client and server library in Haskell. Allows you to act on events and send requests. +
 Currently it's a work in progress with many events and requests missing but it's enough to write a simple bar or compositor.
 
+== The dejafu branch
+
+This branch is a version of Sayland for finding race conditions with https://hackage.haskell.org/package/dejafu[dejafu].
+It is for testing only: it cannot talk to a real compositor or client, and `main` does not depend on dejafu.
+
+* The library runs in dejafu's `ConcIO` instead of `IO`, so dejafu's scheduler sees every thread, lock and transaction
+and can try the ways they interleave.
+link:lib-wire/Sayland/Internal/Conc.hs[`Sayland.Internal.Conc`] gives its `IORef`, `MVar`, `TVar` and `STM` the names main
+uses, and the custom Prelude exports them.
+* Sockets, file descriptors and shared memory are simulated by link:lib-wire/Sayland/Kernel.hs[`Sayland.Kernel`], with
+transactions, so dejafu can also interleave messages arriving with the threads that handle them.
+The kernel notices memory that is used after it was unmapped, which a real one would not.
+* `cabal test` runs main's tests, each once on the simulated kernel, and the race tests in
+link:test/Races.hs[`test/Races.hs`], which dejafu explores.
+
+=== Race tests
+
+A race test is a scenario: a setup, run once, then a concurrent part whose interleavings dejafu explores, up to two
+preemptions and with relaxed memory for `IORef`s. A test fails if any interleaving breaks what it checks, so *a failing
+race test is a race it found*. Each one's comment says what the race is.
+
+The failure shows the interleaving: how it ended, the order the threads ran in, and the Wayland messages each thread
+sent and received in it, like `WAYLAND_DEBUG=1` would. Set `RACE_TRACE=1` to also see every step of every thread.
+Run one test with `cabal run sayland-tests -- -p '<name>'`.
+
+=== Keeping up with main
+
+Merge main into this branch, then port what changed:
+
+* `IO` is `ConcIO`, `liftIO` is `liftConc` and `MonadIO` is `MonadConcIO`. The concurrency primitives come from the
+Prelude, not from `base` or `stm`.
+* System calls (sockets, `mmap`, `setFdSize`, `closeFd`, ...) go through `Sayland.Kernel`. Handlers get the kernel with
+`getKernel`.
+* `error` in the monad becomes `throwIO`: dejafu can only trace exceptions thrown in its monad.
+* New tests run in `ConcIO`: a test like main's with `runOnce`, a race test with `raceTest`.
+
 == Usage
 
 Don't. +
@@ -19,11 +55,7 @@ or build locally using `cabal run genHaddocks` and open `docs-html/index.html`.
 - https://github.com/saygo-png/Saywallpaper[saywallpaper] -- wallpaper daemon using the `wlr-layer-shell-unstable-v1` protocol.
 - https://github.com/saygo-png/saybar[saybar] -- bar using the `wlr-layer-shell-unstable-v1` protocol.
 
-You can also check out the demos, which run with `cabal run <name>`:
-
-- link:demos/BasicWindow.hs[Basic window client] -- `demo-basic-window`
-- link:demos/WallpaperDaemon.hs[Wallpaper daemon] -- `demo-wallpaper-daemon`
-- link:demos/BasicCompositor.hs[Basic compositor] -- `demo-basic-compositor`
+The demos are on main: they need a real compositor, so this branch does not have them.
 
 == Building
 

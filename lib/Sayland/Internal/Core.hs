@@ -7,9 +7,9 @@
 -- | Description : Internals of Sayland.Core.
 module Sayland.Internal.Core (module Sayland.Internal.Core) where
 
-import Control.Concurrent.STM
-import Control.Exception hiding (throwIO)
+import Control.Exception (Exception (..))
 import Control.Monad
+import Control.Monad.Catch (catch, catchJust)
 import Control.Monad.Reader
 import Data.Binary
 import Data.ByteString qualified as BS
@@ -20,9 +20,9 @@ import Data.Kind
 import Data.Map (Map)
 import Data.Typeable
 import GHC.Records (HasField)
-import Network.Socket (Socket)
 import Sayland.Internal.Log
 import Sayland.Internal.Prelude
+import Sayland.Kernel (Kernel, Socket, socketKernel)
 import Sayland.Wire
 import System.IO.Error (isResourceVanishedError)
 
@@ -44,7 +44,7 @@ instance {-# OVERLAPPABLE #-} (Interface o) => ToObjectID o where
   toObjectID o = toObjectID o.wlid
 
 -- | The Wayland monad. Allows easy access to the Wayland environment state without threading repetitive arguments.
-type Wayland p = ReaderT (WaylandEnv p) IO
+type Wayland p = ReaderT (WaylandEnv p) ConcIO
 
 -- | Type representing global names which are numbers.
 -- Created in order to prevent mixups between object ids and global names.
@@ -54,8 +54,8 @@ newtype GlobalName = GlobalName Word32
 -- | An interface a compositor advertises as a global, which clients bind with @wl_registry.bind@.
 class (Object i) => Global i where
   -- | Construct the object bound to this ID. The default suits interfaces whose only field is @wlid@.
-  global :: TObjectID i -> IO i
-  default global :: (Coercible (TObjectID i) i) => TObjectID i -> IO i
+  global :: TObjectID i -> ConcIO i
+  default global :: (Coercible (TObjectID i) i) => TObjectID i -> ConcIO i
   global = pure . coerce
 
 -- | Incoming message to Client/Server's object
@@ -195,7 +195,7 @@ runGetMessage opcode fds body = case runWireGet (getMessage opcode) fds body of
 -- | Everything needed to advertise and construct one interface.
 data InterfaceEntry = InterfaceEntry
   { version :: Word32
-  , construct :: AnyObjectID -> IO SomeObject
+  , construct :: AnyObjectID -> ConcIO SomeObject
   }
 
 -- | The interfaces of a protocol by name. Each protocol module generates one, like @waylandTable@.
@@ -327,7 +327,7 @@ getPerspective =
 catchW :: (Exception e) => Wayland p a -> (e -> Wayland p a) -> Wayland p a
 catchW act handler = do
   env <- ask
-  liftIO $ runReaderT act env `catch` \e -> runReaderT (handler e) env
+  liftConc $ runReaderT act env `catch` \e -> runReaderT (handler e) env
 
 -- | What `protocolViolation` does with a `Recoverable` violation. `Unrecoverable` ones are always rejected.
 data OnRecoverable
@@ -383,6 +383,10 @@ getConnectionEnv =
     ClientEnv env -> env
     ClientServerEnv _ env _ -> env
 
+-- | The kernel the connection's socket belongs to, for the system calls handlers make, like mapping a shm pool.
+getKernel :: Wayland p Kernel
+getKernel = socketKernel . (.connectionSocket) <$> getConnectionEnv
+
 -- | The logger, and the client this connection serves if this is the server.
 getLogger :: Wayland p (Logger, Maybe ClientID)
 getLogger =
@@ -405,17 +409,14 @@ logError = logAt LogError
 logMessage :: (Message m) => Direction -> AnyObjectID -> m -> Wayland p ()
 logMessage direction oid msg = do
   (logger, client) <- getLogger
-  when (LogDebug >= logger.minLevel) . liftIO . logger.writeMessage direction client $ showMessage oid msg
+  when (LogDebug >= logger.minLevel) . liftConc . logger.writeMessage direction client $ showMessage oid msg
 
--- | Log to stderr from `LogWarn` up, or from `LogDebug` up (every message included) when @WAYLAND_DEBUG@ names
--- the given side: @1@ for both, @client@ or @server@ for one.
---
--- Reads the environment, so it is NOT safe to call while another thread sets environment variables.
--- Blame C: <https://www.evanjones.ca/setenv-is-not-thread-safe.html>
-defaultLogger :: Perspective -> IO Logger
-defaultLogger = \case
-  Client -> defaultLoggerFor (.client)
-  Server -> defaultLoggerFor (.server)
+-- | Log to the kernel's stderr from `LogWarn` up, or from `LogDebug` up (every message included) when @WAYLAND_DEBUG@
+-- names the given side: @1@ for both, @client@ or @server@ for one.
+defaultLogger :: Kernel -> Perspective -> ConcIO Logger
+defaultLogger kernel = \case
+  Client -> defaultLoggerFor kernel (.client)
+  Server -> defaultLoggerFor kernel (.server)
 
 -- | Run something only on the server side. Used for implementing interfaces.
 onServer :: Wayland Server () -> Wayland p ()
@@ -436,8 +437,8 @@ sendMessage :: (Message m) => m -> TObjectID i -> Wayland p ()
 sendMessage e (TObjectID o) = do
   logMessage Sent o e
   env <- getConnectionEnv
-  liftIO . withMVar env.writeLock $ \_ -> peerGone $ sendRaw env.connectionSocket o (getOpcode e) (putMessage e)
+  liftConc . withMVar env.writeLock $ \_ -> peerGone $ sendRaw env.connectionSocket o (getOpcode e) (putMessage e)
 
 -- | Report the socket errors that mean the peer hung up (@EPIPE@, @ECONNRESET@) as `Disconnected`.
-peerGone :: IO a -> IO a
+peerGone :: ConcIO a -> ConcIO a
 peerGone act = catchJust (guard . isResourceVanishedError) act $ \_ -> throwIO Disconnected

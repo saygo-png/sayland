@@ -116,7 +116,7 @@ generateProtocolTable e formatter = do
               $ AppE (AppE (VarE '(<$>)) (ConE 'SomeObject))
               $ SigE
                 (AppE (VarE 'global) (AppE (ConE 'TObjectID) (VarE oid)))
-                (AppT (ConT ''IO) (ConT . mkName $ formatter x))
+                (AppT (ConT ''ConcIO) (ConT . mkName $ formatter x))
           ]
     proxy x = SigE (ConE 'Proxy) (AppT (ConT ''Proxy) (ConT . mkName $ formatter x))
 
