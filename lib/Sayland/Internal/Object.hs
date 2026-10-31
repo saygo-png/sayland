@@ -39,22 +39,33 @@ withNewObjectID send = do
 
 -- | Create an object and tell the peer about it.
 -- Used by users to create objects. Should not be used in handler implementations.
+--
+-- The object is looked up after its handler registered it and before the message goes out.
+-- The peer can only answer (and destroy the object, like a @wl_callback@) once the message reached it, so the object must still be there.
 newObject ::
   (Object parent, Object child, KnownPerspective p, IDRange p) =>
   parent -> (TObjectID child -> Outgoing p parent) -> Wayland p child
-newObject parent mkMsg = do
-  oid <- withNewObjectID $ \i -> let oid = TObjectID (toAnyObjectID i) in oid <$ sendMsg parent (mkMsg oid)
-  getInterface oid
-    >>= maybe (error $ "sayland bug: handler did not register object " <> show (toObjectID oid)) pure
+newObject parent mkMsg = withNewObjectID $ \i -> do
+  let oid = TObjectID (toAnyObjectID i)
+  outbox <- emitMsg parent (mkMsg oid)
+  child <-
+    getInterface oid
+      >>= maybe (error $ "sayland bug: handler did not register object " <> show (toObjectID oid)) pure
+  child <$ sendOutbox outbox
 
--- | Send a message and apply a handler associated with it. The handler changes the state.
+-- | Apply a handler associated with a message and then send it. If the message is malformed
+-- i.e the handler throws t`ProtocolError`, this will throw t`InvalidMessage` and the message will NOT be sent.
 -- If necessary raw messages without state changes can be sent using the internal `sendMessage`
 sendMsg :: (KnownPerspective p, Object i) => i -> Outgoing p i -> Wayland p ()
-sendMsg i m = applyOutgoing i m `catchW` \(e :: ProtocolError) -> throwIO $ InvalidMessage e
+sendMsg i m = emitMsg i m >>= sendOutbox
 
--- | Receive a message, applying state changes associated with it.
+-- | Apply the handler of a message this side sends and return the resulting t`Outbox`
+-- This function throws t`InvalidMessage`s if a handler throws t`ProtocolError`.
+emitMsg :: (KnownPerspective p, Object i) => i -> Outgoing p i -> Wayland p Outbox
+emitMsg i m = applyOutgoing i m `catchW` \(e :: ProtocolError) -> throwIO $ InvalidMessage e
+
 -- Alias of `applyIncoming` for name consistency.
-receiveMsg :: (Object i, KnownPerspective p) => i -> Incoming p i -> Wayland p ()
+receiveMsg :: (Object i, KnownPerspective p) => i -> Incoming p i -> Wayland p Outbox
 receiveMsg = applyIncoming
 
 -- | Get an Interface using its id.

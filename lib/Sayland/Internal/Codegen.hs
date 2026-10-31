@@ -16,7 +16,7 @@ import Data.Bool
 import Data.ByteString qualified as BS
 import Data.Char (isSpace, toUpper)
 import Data.Functor
-import Data.List
+import Data.List (intercalate)
 import Data.List qualified as L
 import Data.Maybe (catMaybes, fromJust, fromMaybe)
 import Data.Proxy
@@ -561,7 +561,7 @@ data ArgCodec = ArgCodec {argTy :: Type, putter :: Q Exp, getter :: Q Exp}
 
 -- | Which side sends the messages of a @Request@ or @Event@ prefix.
 senderOf :: String -> Perspective
-senderOf prefix = if "Request" `isPrefixOf` prefix then Client else Server
+senderOf prefix = if "Request" `L.isPrefixOf` prefix then Client else Server
 
 -- | The t'ArgCodec' of an @\<arg\>@ sent by the given side, of the interface with the given name.
 argCodec :: (String -> String) -> Perspective -> String -> Element -> ArgCodec
