@@ -14,6 +14,7 @@ import Control.Monad.Reader
 import Data.Binary
 import Data.ByteString qualified as BS
 import Data.Coerce
+import Data.Foldable (for_)
 import Data.Function
 import Data.Functor
 import Data.Kind
@@ -76,19 +77,19 @@ type family Outgoing p i where
 
 -- | An interface that can be used as an object. In other words, the implementation of an interface.
 class (Interface i) => Object i where
-  -- | Effect of a request on local state + sendMessage. Runs on the sender and the receiver.
-  onRequest :: i -> Request i -> Wayland p ()
+  -- | Effect of a request on local state. Returns the messages it wants to send in t`Outbox`. Runs on the sender and the receiver.
+  onRequest :: i -> Request i -> Wayland p Outbox
 
-  -- | Effect of an event on local state + sendMessage. Runs on the sender and the receiver.
-  onEvent :: i -> Event i -> Wayland p ()
+  -- | Effect of an event on local state. Returns the  messages it wants to send in t`Outbox`. Runs on the sender and the receiver.
+  onEvent :: i -> Event i -> Wayland p Outbox
 
 -- | Resolves which handler a message reaches, given the perspective it arrives from.
 class KnownPerspective (p :: Perspective) where
   -- | Route an incoming message to 'onEvent' on a client, 'onRequest' on a server.
-  applyIncoming :: (Object i) => i -> Incoming p i -> Wayland p ()
+  applyIncoming :: (Object i) => i -> Incoming p i -> Wayland p Outbox
 
   -- | Route an outgoing message to 'onRequest' on a client, 'onEvent' on a server.
-  applyOutgoing :: (Object i) => i -> Outgoing p i -> Wayland p ()
+  applyOutgoing :: (Object i) => i -> Outgoing p i -> Wayland p Outbox
 
   -- | Typeclass bs. Bring the 'Message' instance of the messages this side receives for @i@ into scope.
   withIncoming :: (Object i) => i -> ((Message (Incoming p i)) => Wayland p r) -> Wayland p r
@@ -137,6 +138,18 @@ class
 
   getInterfaceVersion :: Proxy a -> Word32
   getInterfaceName :: Proxy a -> WlText
+
+-- | The ordered messages a handler wants to send. FIFO ordering.
+-- What ran the handler ends up sending the messages (see `sendOutbox`).
+-- This is done to prevent messages being sent inside a handler, just to then have it report a violation after having already sent something.
+-- It also allows callers of handlers to respond to state changes before a peer, preventing races.
+-- The type is kept abstract in case a list structure here is inefficient. Handlers are a hot path since they run on all messages.
+newtype Outbox = Outbox [Queued]
+  deriving newtype (Semigroup, Monoid)
+
+-- | Some message to be sent to an object.
+data Queued where
+  Queued :: (Message m) => AnyObjectID -> m -> Queued
 
 -- | Existential type for holding different objects in one structure.
 data SomeObject where
@@ -309,12 +322,15 @@ stub obj msg = logWarn $ "unimplemented " <> showMessage (toObjectID obj.wlid) m
 stubDeprecated :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
 stubDeprecated obj msg = logInfo $ "unimplemented (deprecated): " <> showMessage (toObjectID obj.wlid) msg
 
--- | Like `sendMessage` but meant for use inside handlers.
--- It contains the logic determining if a message should be sent from the current perspective.
-forwardMessage :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p ()
+-- | Put a message in the outbox as the sender. Returns an empty t`Outbox` if called from a receiving side.
+forwardMessage :: (Message m, HasField "wlid" i (TObjectID i)) => i -> m -> Wayland p Outbox
 forwardMessage i m = do
   me <- getPerspective
-  when (sender m == me) $ sendMessage m i.wlid
+  pure $ if sender m == me then outgoingMessage m i.wlid else mempty
+
+-- | Put a message into an t'Outbox' no matter the side. If you want per side behaviour look at `forwardMessage`.
+outgoingMessage :: (Message m) => m -> TObjectID i -> Outbox
+outgoingMessage m (TObjectID o) = Outbox [Queued o m]
 
 -- | Which side this is.
 getPerspective :: Wayland p Perspective
@@ -417,26 +433,34 @@ defaultLogger = \case
   Client -> defaultLoggerFor (.client)
   Server -> defaultLoggerFor (.server)
 
--- | Run something only on the server side. Used for implementing interfaces.
-onServer :: Wayland Server () -> Wayland p ()
+-- | Run something only on the server side. Used for implementing interfaces. Gives `mempty` on the client.
+onServer :: (Monoid a) => Wayland Server a -> Wayland p a
 onServer k =
   ask >>= \case
     ClientServerEnv{} -> k
-    ClientEnv{} -> pass
+    ClientEnv{} -> pure mempty
 
--- | Run something only on the client side. Used for implementing interfaces.
-onClient :: Wayland Client () -> Wayland p ()
+-- | Run something only on the client side. Used for implementing interfaces. Gives `mempty` on the server.
+onClient :: (Monoid a) => Wayland Client a -> Wayland p a
 onClient k =
   ask >>= \case
-    ClientServerEnv{} -> pass
+    ClientServerEnv{} -> pure mempty
     ClientEnv{} -> k
 
--- | Send a raw message over the wire.
+-- | Send a raw message over the wire, without running its handler.
 sendMessage :: (Message m) => m -> TObjectID i -> Wayland p ()
-sendMessage e (TObjectID o) = do
-  logMessage Sent o e
+sendMessage e o = sendOutbox $ outgoingMessage e o
+
+-- | Send the messages of an t'Outbox' in order. Done under a write lock so messages do not mangle.
+-- Each is logged as it is sent, so the log shows them in the order they go over the wire.
+sendOutbox :: Outbox -> Wayland p ()
+sendOutbox (Outbox messages) = do
   env <- getConnectionEnv
-  liftIO . withMVar env.writeLock $ \_ -> peerGone $ sendRaw env.connectionSocket o (getOpcode e) (putMessage e)
+  (logger, client) <- getLogger
+  liftIO . withMVar env.writeLock $ \_ ->
+    for_ messages $ \(Queued o m) -> do
+      when (LogDebug >= logger.minLevel) . logger.writeMessage Sent client $ showMessage o m
+      peerGone $ sendRaw env.connectionSocket o (getOpcode m) (putMessage m)
 
 -- | Report the socket errors that mean the peer hung up (@EPIPE@, @ECONNRESET@) as `Disconnected`.
 peerGone :: IO a -> IO a

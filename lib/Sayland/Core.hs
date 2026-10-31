@@ -3,6 +3,7 @@ module Sayland.Core (
   Wayland,
   GlobalName (..),
   Object (..),
+  Outbox,
   TObjectID,
   Outgoing,
   Incoming,

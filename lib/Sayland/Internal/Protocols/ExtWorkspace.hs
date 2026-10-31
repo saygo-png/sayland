@@ -105,9 +105,8 @@ instance Object Ext_workspace_manager_v1 where
     forwardMessage manager msg
   onEvent manager msg@Event_ext_workspace_manager_v1_done =
     forwardMessage manager msg
-  onEvent manager msg@Event_ext_workspace_manager_v1_finished = do
-    forwardMessage manager msg
-    dropObject manager.wlid
+  onEvent manager msg@Event_ext_workspace_manager_v1_finished =
+    forwardAndDrop manager msg
 
 -- }}}
 
@@ -117,8 +116,7 @@ instance Object Ext_workspace_group_handle_v1 where
     forwardMessage group msg
   onRequest group msg@Request_ext_workspace_group_handle_v1_destroy = do
     atomically $ writeTVar group.alive False >> removeAllWorkspaces group
-    forwardMessage group msg
-    dropObject group.wlid
+    forwardAndDrop group msg
 
   onEvent group msg@Event_ext_workspace_group_handle_v1_capabilities{} =
     forwardMessage group msg
@@ -147,8 +145,7 @@ instance Object Ext_workspace_group_handle_v1 where
 instance Object Ext_workspace_handle_v1 where
   onRequest workspace msg@Request_ext_workspace_handle_v1_destroy = do
     atomically $ writeTVar workspace.alive False >> removeFromAllGroups workspace
-    forwardMessage workspace msg
-    dropObject workspace.wlid
+    forwardAndDrop workspace msg
   onRequest workspace msg@Request_ext_workspace_handle_v1_activate =
     forwardMessage workspace msg
   onRequest workspace msg@Request_ext_workspace_handle_v1_deactivate =

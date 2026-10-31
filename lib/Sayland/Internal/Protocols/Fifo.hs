@@ -49,9 +49,8 @@ $(loadProtocolFile wlFormatter "xml-protocols/fifo-v1.xml")
 -- Implementations {{{
 -- Wp_fifo_manager_v1 {{{
 instance Object Wp_fifo_manager_v1 where
-  onRequest manager msg@Request_wp_fifo_manager_v1_destroy = do
-    forwardMessage manager msg
-    dropObject manager.wlid
+  onRequest manager msg@Request_wp_fifo_manager_v1_destroy =
+    forwardAndDrop manager msg
   onRequest manager msg@(Request_wp_fifo_manager_v1_get_fifo fifoId surfaceId) = do
     getInterface surfaceId >>= \case
       Just _ -> do
@@ -77,7 +76,7 @@ instance Object Wp_fifo_v1 where
         barrier <- atomically $ fifoBarrier surface
         atomicModifyIORef' surface.pendingState $ \cu -> (cu{cuOnApply = cu.cuOnApply <> [writeTVar barrier True]}, ())
         forwardMessage fifo msg
-      Nothing -> protocolViolation Recoverable msg fifo Enum_wp_fifo_v1_error_surface_destroyed "set_barrier: the associated surface no longer exists"
+      Nothing -> mempty <$ protocolViolation Recoverable msg fifo Enum_wp_fifo_v1_error_surface_destroyed "set_barrier: the associated surface no longer exists"
   onRequest fifo msg@Request_wp_fifo_v1_wait_barrier = do
     getInterface fifo.fifoSurface >>= \case
       Just surface -> do
@@ -90,10 +89,9 @@ instance Object Wp_fifo_v1 where
                 }
         atomicModifyIORef' surface.pendingState $ \cu -> (cu{cuConstraints = cu.cuConstraints <> [waitForBarrier]}, ())
         forwardMessage fifo msg
-      Nothing -> protocolViolation Recoverable msg fifo Enum_wp_fifo_v1_error_surface_destroyed "wait_barrier: the associated surface no longer exists"
-  onRequest fifo msg@Request_wp_fifo_v1_destroy = do
-    forwardMessage fifo msg
-    dropObject fifo.wlid
+      Nothing -> mempty <$ protocolViolation Recoverable msg fifo Enum_wp_fifo_v1_error_surface_destroyed "wait_barrier: the associated surface no longer exists"
+  onRequest fifo msg@Request_wp_fifo_v1_destroy =
+    forwardAndDrop fifo msg
 
   onEvent _ = \case {}
 

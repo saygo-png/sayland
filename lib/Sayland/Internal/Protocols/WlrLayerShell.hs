@@ -30,9 +30,8 @@ instance Object Zwlr_layer_shell_v1 where
   onRequest shell msg@(Request_zwlr_layer_shell_v1_get_layer_surface layerSurfaceId _surfaceId _outputId _layer _namespace) = do
     registerObject msg Zwlr_layer_surface_v1{wlid = layerSurfaceId}
     forwardMessage shell msg
-  onRequest shell msg@Request_zwlr_layer_shell_v1_destroy = do
-    forwardMessage shell msg
-    dropObject shell.wlid
+  onRequest shell msg@Request_zwlr_layer_shell_v1_destroy =
+    forwardAndDrop shell msg
 
   onEvent _ = \case {}
 
@@ -40,9 +39,8 @@ instance Object Zwlr_layer_shell_v1 where
 
 -- TODO: Zwlr_layer_surface_v1 {{{
 instance Object Zwlr_layer_surface_v1 where
-  onRequest obj msg@Request_zwlr_layer_surface_v1_destroy = do
-    forwardMessage obj msg
-    dropObject obj.wlid
+  onRequest obj msg@Request_zwlr_layer_surface_v1_destroy =
+    forwardAndDrop obj msg
   onRequest obj msg = do
     stub obj msg
     forwardMessage obj msg

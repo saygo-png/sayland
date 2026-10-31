@@ -91,8 +91,9 @@ handleMessage oid' opcode msg = do
     Just (oid, SomeObject o) -> withIncoming o $ dispatchWith (applyIncoming o) oid opcode msg
     Nothing -> logWarn $ "ignored a message to unknown object " <> show oid'
 
--- | Parse a message for an object and run the given handler on it, then any registered t'EventHandler's.
-dispatchWith :: (Message m) => (m -> Wayland p ()) -> AnyObjectID -> Word16 -> BS.ByteString -> Wayland p ()
+-- | Parse a message for an object and run the given handler on it, send what the handler gives to send, then run any
+-- registered t'EventHandler's.
+dispatchWith :: (Message m) => (m -> Wayland p Outbox) -> AnyObjectID -> Word16 -> BS.ByteString -> Wayland p ()
 dispatchWith handle oid opcode msg = do
   env <- getConnectionEnv
   fds <- atomically $ flushTQueue env.fdQueue
@@ -102,7 +103,7 @@ dispatchWith handle oid opcode msg = do
     Right (message, leftover) -> do
       void . atomically $ traverse (unGetTQueue env.fdQueue) (reverse leftover)
       logMessage Received oid message
-      handle message
+      handle message >>= sendOutbox
       handlers <- readIORef env.eventHandlers
       forM_ handlers $ \(EventHandler f) -> forM_ (cast message) $ f oid
 

@@ -26,6 +26,7 @@ import Data.Maybe
 import Data.Sequence (Seq)
 import Data.Sequence qualified as Seq
 import Data.Text qualified as T
+import Data.Traversable (for)
 import Data.Typeable
 import Foreign (Ptr, nullPtr)
 import GHC.IORef (atomicSwapIORef)
@@ -427,12 +428,21 @@ checkPeerIDOrder msg oid = do
       . wlTextLossy
       $ "new object ID " <> T.show n <> " skips ahead of the next one the peer may use"
 
--- | Remove an object from the objects map. On a server this also sends @delete_id@.
-dropObject :: TObjectID a -> Wayland p ()
+-- | Remove an object from the objects map.
+-- On a server this also runs @delete_id@ and puts resulting message in an t`Outbox`.
+dropObject :: TObjectID a -> Wayland p Outbox
 dropObject (TObjectID i) = do
   env <- getConnectionEnv
   atomically . modifyTVar' env.objects $ Map.delete i
-  onServer $ sendMessage (Event_wl_display_delete_id $ fromAnyObjectID i) wlDisplayId
+  onServer . pure $ outgoingMessage (Event_wl_display_delete_id $ fromAnyObjectID i) wlDisplayId
+
+-- | `forwardMessage` followed by `dropObject`, the results put in an t`Outbox`.
+-- Most destructor handlers can be implemented in one line by just calling this.
+forwardAndDrop :: (Interface i, Message m) => i -> m -> Wayland p Outbox
+forwardAndDrop obj msg = do
+  forwarded <- forwardMessage obj msg
+  dropped <- dropObject obj.wlid
+  pure $ forwarded <> dropped
 
 -- | @mmap@ a shm pool's fd, read/write and shared.
 mapShmPool :: (MonadIO m) => Fd -> Int32 -> m (Ptr ())
@@ -532,22 +542,25 @@ instance Object Wl_display where
       Nothing -> protocolViolation Recoverable msg obj Err_invalid_object [wl|delete_id for the null object|]
     forwardMessage obj msg
   onEvent obj msg@(Event_wl_display_error objectId code message) = do
-    onClient . throwIO $ ProtocolError (Just objectId) code (Just message)
+    let err :: Wayland Client ()
+        err = throwIO $ ProtocolError (Just objectId) code (Just message)
+    onClient err
     forwardMessage obj msg
   onRequest obj msg@(Request_wl_display_sync callbackId) = do
     callbackObj <- Wl_callback callbackId <$> newEmptyMVar
     registerObject msg callbackObj
-    onServer $ sendMsg callbackObj (Event_wl_callback_done 0)
-    forwardMessage obj msg
+    done <- onServer . emitMsg callbackObj $ Event_wl_callback_done 0
+    forwarded <- forwardMessage obj msg
+    pure $ done <> forwarded
   onRequest obj msg@(Request_wl_display_get_registry registryId) = do
     let registryObj = Wl_registry registryId
     registerObject msg registryObj
-    onServer $ do
-      env <- getConnectionEnv
-      let entries = zip [0 ..] $ Map.toList env.interfaceTable
-      for_ entries $ \(name, (interface, entry)) ->
-        sendMsg registryObj (Event_wl_registry_global name interface entry.version)
-    forwardMessage obj msg
+    let advertise = do
+          env <- getConnectionEnv
+          let entries = zip [0 ..] $ Map.toList env.interfaceTable
+          mconcat <$> for entries (\(name, (interface, entry)) -> emitMsg registryObj (Event_wl_registry_global name interface entry.version))
+    forwarded <- forwardMessage obj msg
+    mconcat <$> sequence [onServer advertise, pure forwarded]
 
 -- }}}
 
@@ -555,8 +568,7 @@ instance Object Wl_display where
 instance Object Wl_callback where
   onEvent obj msg@(Event_wl_callback_done _) = do
     putMVar obj.done ()
-    forwardMessage obj msg
-    dropObject obj.wlid
+    forwardAndDrop obj msg
   onRequest _ = \case {}
 
 -- }}}
@@ -630,9 +642,8 @@ instance Object Wl_compositor where
       pure Wl_region{..}
     registerObject msg wl_regionObj
     forwardMessage obj msg
-  onRequest obj msg@Request_wl_compositor_release = do
-    forwardMessage obj msg
-    dropObject obj.wlid
+  onRequest obj msg@Request_wl_compositor_release =
+    forwardAndDrop obj msg
 
   onEvent _ = \case {}
 
@@ -652,9 +663,8 @@ instance Object Wl_shm_pool where
         }
     forwardMessage pool msg
   onRequest pool msg@Request_wl_shm_pool_destroy = do
-    forwardMessage pool msg
     unmapShmPoolRef pool
-    dropObject pool.wlid
+    forwardAndDrop pool msg
   onRequest pool msg@(Request_wl_shm_pool_resize size) = do
     -- Only the client owns the backing file, so only it grows it.
     onClient . liftIO . setFdSize pool.fd $ fromIntegral size
@@ -681,9 +691,8 @@ instance Object Wl_shm where
     references <- newIORef 1
     registerObject msg Wl_shm_pool{wlid = poolId, fd, size = sizeRef, ptr = ptrRef, references}
     forwardMessage shm msg
-  onRequest shm msg@Request_wl_shm_release = do
-    forwardMessage shm msg
-    dropObject shm.wlid
+  onRequest shm msg@Request_wl_shm_release =
+    forwardAndDrop shm msg
 
   onEvent shm msg@(Event_wl_shm_format format) = do
     atomicModifyIORef' shm.formats $ \fs -> (format : fs, ())
@@ -693,14 +702,13 @@ instance Object Wl_shm where
 
 -- Wl_buffer {{{
 instance Object Wl_buffer where
-  onRequest buffer msg@Request_wl_buffer_destroy = do
-    forwardMessage buffer msg
-    dropObject buffer.wlid
+  onRequest buffer msg@Request_wl_buffer_destroy =
+    forwardAndDrop buffer msg
 
   onEvent buffer@Wl_buffer{buffer = Buffer backend} msg@Event_wl_buffer_release = do
-    forwardMessage buffer msg
     -- Only the compositor owns the backend resources.
     onServer $ releaseBuffer backend
+    forwardMessage buffer msg
 
 -- }}}
 
@@ -711,9 +719,8 @@ instance Object Wl_data_offer where
     forwardMessage offer msg
   onRequest offer msg@Request_wl_data_offer_receive{} =
     forwardMessage offer msg
-  onRequest offer msg@Request_wl_data_offer_destroy = do
-    forwardMessage offer msg
-    dropObject offer.wlid
+  onRequest offer msg@Request_wl_data_offer_destroy =
+    forwardAndDrop offer msg
   onRequest offer msg@Request_wl_data_offer_finish =
     forwardMessage offer msg
   onRequest offer msg@(Request_wl_data_offer_set_actions dnd_actions preferred_action) = do
@@ -738,9 +745,8 @@ instance Object Wl_data_source where
   onRequest source msg@(Request_wl_data_source_offer mimetype) = do
     atomicModifyIORef' source.sourceOfferedMimetypes $ \ms -> (mimetype : ms, ())
     forwardMessage source msg
-  onRequest source msg@Request_wl_data_source_destroy = do
-    forwardMessage source msg
-    dropObject source.wlid
+  onRequest source msg@Request_wl_data_source_destroy =
+    forwardAndDrop source msg
   onRequest source msg@(Request_wl_data_source_set_actions dnd_actions) = do
     atomicWriteIORef source.sourceActions dnd_actions
     forwardMessage source msg
@@ -752,13 +758,15 @@ instance Object Wl_data_source where
     -- Handling the data from this is for user made EventHandlers.
     forwardMessage source msg
   onEvent source msg@Event_wl_data_source_cancelled = do
-    forwardMessage source msg
-    onClient $ sendMsg source Request_wl_data_source_destroy
+    forwarded <- forwardMessage source msg
+    destroy <- onClient $ emitMsg source Request_wl_data_source_destroy
+    pure $ forwarded <> destroy
   onEvent source msg@Event_wl_data_source_dnd_drop_performed =
     forwardMessage source msg
   onEvent source msg@Event_wl_data_source_dnd_finished = do
-    forwardMessage source msg
-    onClient $ sendMsg source Request_wl_data_source_destroy
+    forwarded <- forwardMessage source msg
+    destroy <- onClient $ emitMsg source Request_wl_data_source_destroy
+    pure $ forwarded <> destroy
   onEvent source msg@(Event_wl_data_source_action action) = do
     atomicWriteIORef source.sourceSelectedAction action
     forwardMessage source msg
@@ -789,9 +797,8 @@ instance Object Wl_data_device where
     tryTakeMVar_ device.selection
     putMVar device.selection Selection{source, eventSerial}
     forwardMessage device msg
-  onRequest device msg@Request_wl_data_device_release = do
-    forwardMessage device msg
-    dropObject device.wlid
+  onRequest device msg@Request_wl_data_device_release =
+    forwardAndDrop device msg
 
   onEvent device msg@(Event_wl_data_device_data_offer offerId) = do
     acceptedMimetypes <- newIORef []
@@ -840,9 +847,8 @@ instance Object Wl_data_device_manager where
     selectionClient <- newEmptyMVar
     registerObject msg Wl_data_device{wlid = deviceId, ..}
     forwardMessage mgr msg
-  onRequest mgr msg@Request_wl_data_device_manager_release = do
-    forwardMessage mgr msg
-    dropObject mgr.wlid
+  onRequest mgr msg@Request_wl_data_device_manager_release =
+    forwardAndDrop mgr msg
 
   onEvent _ = \case {}
 
@@ -862,9 +868,8 @@ instance (Unsatisfiable (Text "wl_shell_surface is deprecated and not implemente
 
 -- Wl_surface {{{
 instance Object Wl_surface where
-  onRequest surface msg@Request_wl_surface_destroy{} = do
-    forwardMessage surface msg
-    dropObject surface.wlid
+  onRequest surface msg@Request_wl_surface_destroy{} =
+    forwardAndDrop surface msg
   onRequest surface msg@(Request_wl_surface_attach bufferId x y) = do
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuBuffer = Just bufferId, cuOffset = Just (x, y)}, ())
     forwardMessage surface msg
@@ -936,9 +941,8 @@ instance Object Wl_seat where
   onRequest seat msg@(Request_wl_seat_get_touch wlid) = do
     registerObject msg Wl_touch{wlid}
     forwardMessage seat msg
-  onRequest seat msg@Request_wl_seat_release{} = do
-    forwardMessage seat msg
-    dropObject seat.wlid
+  onRequest seat msg@Request_wl_seat_release{} =
+    forwardAndDrop seat msg
 
   onEvent seat msg = do
     stub seat msg
@@ -951,9 +955,8 @@ instance Object Wl_pointer where
   onRequest obj msg@Request_wl_pointer_set_cursor{} = do
     stub obj msg
     forwardMessage obj msg
-  onRequest obj msg@Request_wl_pointer_release{} = do
-    forwardMessage obj msg
-    dropObject obj.wlid
+  onRequest obj msg@Request_wl_pointer_release{} =
+    forwardAndDrop obj msg
 
   onEvent obj msg = do
     case msg of
@@ -975,9 +978,8 @@ instance Object Wl_pointer where
 -- Wl_keyboard {{{
 
 instance Object Wl_keyboard where
-  onRequest obj msg@Request_wl_keyboard_release{} = do
-    forwardMessage obj msg
-    dropObject obj.wlid
+  onRequest obj msg@Request_wl_keyboard_release{} =
+    forwardAndDrop obj msg
 
   onEvent obj msg = do
     case msg of
@@ -993,9 +995,8 @@ instance Object Wl_keyboard where
 
 -- Wl_touch {{{
 instance Object Wl_touch where
-  onRequest obj msg@Request_wl_touch_release{} = do
-    forwardMessage obj msg
-    dropObject obj.wlid
+  onRequest obj msg@Request_wl_touch_release{} =
+    forwardAndDrop obj msg
 
   onEvent obj msg = do
     case msg of
@@ -1022,9 +1023,8 @@ instance Global Wl_output where
     pure Wl_output{..}
 
 instance Object Wl_output where
-  onRequest obj msg@Request_wl_output_release{} = do
-    forwardMessage obj msg
-    dropObject obj.wlid
+  onRequest obj msg@Request_wl_output_release{} =
+    forwardAndDrop obj msg
 
   onEvent obj msg@(Event_wl_output_geometry x y width height subpixel make model outputTransform) = do
     atomicModifyIORef' obj.outputUpdate $ \u -> (u{updateGeometry = Just OutputGeometry{outputPosition = (x, y), outputSize = (width, height), subpixel, make, model, outputTransform}}, ())
@@ -1054,9 +1054,8 @@ instance Object Wl_output where
 
 -- Wl_region {{{
 instance Object Wl_region where
-  onRequest obj msg@Request_wl_region_destroy{} = do
-    forwardMessage obj msg
-    dropObject obj.wlid
+  onRequest obj msg@Request_wl_region_destroy{} =
+    forwardAndDrop obj msg
   onRequest obj msg@(Request_wl_region_add x y w h) = do
     atomicModifyIORef' obj.included $ \rs -> (Rectangle{position = (x, y), size = (w, h)} : rs, ())
     forwardMessage obj msg
@@ -1070,9 +1069,8 @@ instance Object Wl_region where
 
 -- Wl_subcompositor {{{
 instance Object Wl_subcompositor where
-  onRequest subcompositor msg@Request_wl_subcompositor_destroy = do
-    forwardMessage subcompositor msg
-    dropObject subcompositor.wlid
+  onRequest subcompositor msg@Request_wl_subcompositor_destroy =
+    forwardAndDrop subcompositor msg
   onRequest subcompositor msg@(Request_wl_subcompositor_get_subsurface subsurfaceId surfaceId parentId) = do
     surface <-
       getInterface surfaceId >>= \case
@@ -1109,8 +1107,7 @@ instance Object Wl_subsurface where
           -- An update still waiting in the queue would bring the subsurface back once applied.
           modifyTVar' parentObj.queue . fmap $ \(DesyncContentUpdate cu) -> DesyncContentUpdate cu{cuSubsurfaces = remove <$> cu.cuSubsurfaces}
       Nothing -> pass
-    forwardMessage subsurface msg
-    dropObject subsurface.wlid
+    forwardAndDrop subsurface msg
   onRequest subsurface msg@(Request_wl_subsurface_set_position x y) = do
     atomicWriteIORef subsurface.position (x, y)
     forwardMessage subsurface msg
@@ -1157,12 +1154,12 @@ instance Object Wl_subsurface where
 
 -- Wl_fixes {{{
 instance Object Wl_fixes where
-  onRequest fixes msg@Request_wl_fixes_destroy{} = do
-    forwardMessage fixes msg
-    dropObject fixes.wlid
+  onRequest fixes msg@Request_wl_fixes_destroy{} =
+    forwardAndDrop fixes msg
   onRequest fixes msg@(Request_wl_fixes_destroy_registry registry) = do
-    forwardMessage fixes msg
-    dropObject registry
+    forwarded <- forwardMessage fixes msg
+    dropped <- dropObject registry -- registry, not fixes is dropped so `forwardAndDrop can't be used.
+    pure $ forwarded <> dropped
 
   onEvent _ = \case {}
 
@@ -1196,8 +1193,10 @@ tryBindToInterface registry = do
     [] -> pure Nothing
     (name, advertisedVersion) : _ -> do
       let negotiatedVersion = min advertisedVersion $ getInterfaceVersion (Proxy @i)
-      oid <- withNewObjectID $ \oid -> oid <$ sendMsg registry (Request_wl_registry_bind name (WlNewId targetIface negotiatedVersion oid))
-      Just <$> (getInterface (TObjectID $ FromClient oid) >>= maybe (error "sayland bug: bind did not register the global") pure)
+      fmap Just . withNewObjectID $ \oid -> do
+        outbox <- emitMsg registry (Request_wl_registry_bind name (WlNewId targetIface negotiatedVersion oid))
+        bound <- getInterface (TObjectID $ FromClient oid) >>= maybe (error "sayland bug: bind did not register the global") pure
+        bound <$ sendOutbox outbox
 
 -- }}}
 -- }}}

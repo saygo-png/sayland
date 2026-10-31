@@ -84,9 +84,8 @@ $(loadProtocolFile wlFormatter "xml-protocols/linux-dmabuf-v1.xml")
 -- Implementations {{{
 -- Zwp_linux_dmabuf_v1 {{{
 instance Object Zwp_linux_dmabuf_v1 where
-  onRequest dmabuf msg@Request_zwp_linux_dmabuf_v1_destroy = do
-    forwardMessage dmabuf msg
-    dropObject dmabuf.wlid
+  onRequest dmabuf msg@Request_zwp_linux_dmabuf_v1_destroy =
+    forwardAndDrop dmabuf msg
   onRequest dmabuf msg@(Request_zwp_linux_dmabuf_v1_create_params paramsId) = do
     dmabufSet <- newIORef []
     paramsModifier <- newIORef 0
@@ -110,9 +109,8 @@ instance Object Zwp_linux_dmabuf_v1 where
 
 -- Zwp_linux_buffer_params_v1 {{{
 instance Object Zwp_linux_buffer_params_v1 where
-  onRequest params msg@Request_zwp_linux_buffer_params_v1_destroy = do
-    forwardMessage params msg
-    dropObject params.wlid
+  onRequest params msg@Request_zwp_linux_buffer_params_v1_destroy =
+    forwardAndDrop params msg
   onRequest params msg@(Request_zwp_linux_buffer_params_v1_add dmabufFd dmabufPlaneIdx dmabufOffset dmabufStride modifier_hi modifier_lo) = do
     let dmabufModifier :: Word64 = shiftL (fromIntegral modifier_hi) 32 .|. fromIntegral modifier_lo
     modifier <- readIORef params.paramsModifier
@@ -143,9 +141,8 @@ instance Object Zwp_linux_buffer_params_v1 where
 
 -- Zwp_linux_dmabuf_feedback_v1 {{{
 instance Object Zwp_linux_dmabuf_feedback_v1 where
-  onRequest feedback msg@Request_zwp_linux_dmabuf_feedback_v1_destroy = do
-    dropObject feedback.wlid
-    forwardMessage feedback msg
+  onRequest feedback msg@Request_zwp_linux_dmabuf_feedback_v1_destroy =
+    forwardAndDrop feedback msg
 
   onEvent feedback msg@Event_zwp_linux_dmabuf_feedback_v1_done = do
     fstate <- readIORef feedback.pendingFeedbackState
@@ -171,7 +168,7 @@ instance Object Zwp_linux_dmabuf_feedback_v1 where
       _ :: Word32 <- peek (ptr' `plusPtr` 32)
       modifier :: Word64 <- peek (ptr' `plusPtr` 64)
       pure (format, modifier)
-    atomicModifyIORef' feedback.pendingFeedbackState $ (,()) . (\x -> x{formatTable})
+    atomicModifyIORef' feedback.pendingFeedbackState $ (,mempty) . (\x -> x{formatTable})
   onEvent feedback msg@(Event_zwp_linux_dmabuf_feedback_v1_main_device _) = do
     stubDeprecated feedback msg -- deprecated since v6
     forwardMessage feedback msg
