@@ -69,9 +69,8 @@ $(loadProtocolFile wlFormatter "xml-protocols/xdg-shell.xml")
 -- Xdg_wm_base {{{
 
 instance Object Xdg_wm_base where
-  onRequest wm_base msg@Request_xdg_wm_base_destroy = do
-    forwardMessage wm_base msg
-    dropObject wm_base.wlid
+  onRequest wm_base msg@Request_xdg_wm_base_destroy =
+    forwardAndDrop wm_base msg
   onRequest wm_base msg@(Request_xdg_wm_base_create_positioner positionerId) = do
     state <- newIORef $ PositionerState Nothing Nothing Nothing Nothing Nothing Nothing Nothing False Nothing
     registerObject msg Xdg_positioner{wlid = positionerId, state}
@@ -88,17 +87,17 @@ instance Object Xdg_wm_base where
     forwardMessage wm_base msg
 
   onEvent wm_base msg@(Event_xdg_wm_base_ping serial) = do
-    forwardMessage wm_base msg
-    onClient $ sendMsg wm_base (Request_xdg_wm_base_pong serial)
+    forwarded <- forwardMessage wm_base msg
+    pong <- onClient . emitMsg wm_base $ Request_xdg_wm_base_pong serial
+    pure $ forwarded <> pong
 
 -- }}}
 
 -- Xdg_positioner {{{
 
 instance Object Xdg_positioner where
-  onRequest positioner msg@Request_xdg_positioner_destroy = do
-    forwardMessage positioner msg
-    dropObject positioner.wlid
+  onRequest positioner msg@Request_xdg_positioner_destroy =
+    forwardAndDrop positioner msg
   onRequest positioner msg = do
     let set f = atomicModifyIORef' positioner.state $ \s -> (f s, ())
         invalidInput = protocolViolation Unrecoverable msg positioner Enum_xdg_positioner_error_invalid_input
@@ -133,11 +132,10 @@ instance Object Xdg_surface where
         Just (XDGPopup popup) -> isJust <$> getInterface popup.wlid
     when roleAlive
       $ protocolViolation Unrecoverable msg xdg_surface Enum_xdg_surface_error_defunct_role_object [wl|destroyed before its role object|]
-    forwardMessage xdg_surface msg
-    dropObject xdg_surface.wlid
     getInterface xdg_surface.wl_surface >>= \case
       Just surfaceObj -> atomicWriteIORef surfaceObj.role $ SurfaceRole ()
       Nothing -> pass
+    forwardAndDrop xdg_surface msg
   onRequest xdg_surface msg@(Request_xdg_surface_get_toplevel toplevelId) = do
     surfaceObj <- getInterface xdg_surface.wl_surface >>= maybe (protocolViolation Unrecoverable msg wlDisplayId Err_invalid_object [wl|xdg_surface: wl_surface no longer exists|]) pure
     SurfaceRole role <- readIORef surfaceObj.role
@@ -167,17 +165,17 @@ instance Object Xdg_surface where
     forwardMessage xdg_surface msg
 
   onEvent xdg_surface msg@(Event_xdg_surface_configure serial) = do
-    forwardMessage xdg_surface msg
-    onClient $ sendMsg xdg_surface (Request_xdg_surface_ack_configure serial)
+    forwarded <- forwardMessage xdg_surface msg
+    ack <- onClient . emitMsg xdg_surface $ Request_xdg_surface_ack_configure serial
+    pure $ forwarded <> ack
 
 -- }}}
 
 -- Xdg_toplevel {{{
 
 instance Object Xdg_toplevel where
-  onRequest toplevel msg@Request_xdg_toplevel_destroy = do
-    forwardMessage toplevel msg
-    dropObject toplevel.wlid
+  onRequest toplevel msg@Request_xdg_toplevel_destroy =
+    forwardAndDrop toplevel msg
   onRequest toplevel msg = do
     case msg of
       -- A null parent (id 0) unsets it.
@@ -196,9 +194,8 @@ instance Object Xdg_toplevel where
 -- Xdg_popup {{{
 
 instance Object Xdg_popup where
-  onRequest popup msg@Request_xdg_popup_destroy = do
-    forwardMessage popup msg
-    dropObject popup.wlid
+  onRequest popup msg@Request_xdg_popup_destroy =
+    forwardAndDrop popup msg
   onRequest popup msg = do
     stub popup msg
     forwardMessage popup msg

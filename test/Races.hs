@@ -105,9 +105,9 @@ connectionAlive s = connectionEnded s >>= traverse_ (\e -> failTest $ "the conne
 
 -- Requests and objects {{{
 
--- | `roundtrip` sends @wl_display.sync@ with `newObject`, which looks the new @wl_callback@ up after sending the request.
--- If the event loop handles the compositor's @done@ before that, it has already dropped the callback, and `newObject`
--- throws "handler did not register object". Any `newObject` whose object the peer can destroy right away has this race.
+-- | `roundtrip` sends @wl_display.sync@ with `newObject`. The compositor can reply, and the event loop handle @done@ and
+-- drop the @wl_callback@, as soon as the request is sent. `newObject` looks the callback up before it sends the
+-- request its handler put in the outbox, so it never finds it gone.
 roundtripReturns :: Scenario ()
 roundtripReturns = scenario session $ \s -> asClient s roundtrip
 
@@ -242,8 +242,8 @@ eventHandlersKept = scenario session $ \s -> do
   concurrently add [("user-2", add)]
   before >>=@?== count + 2
 
--- | `sendMessage` logs a message before it takes the write lock to send it. So with @WAYLAND_DEBUG@ on, two threads
--- sending at once can log their messages in the opposite order to the one they go over the wire in.
+-- | `sendOutbox` logs each message under the write lock, as it sends it. So with @WAYLAND_DEBUG@ on, two threads
+-- sending at once log their messages in the order they go over the wire in.
 logInWireOrder :: Scenario ()
 logInWireOrder = scenario setup $ \(s, client, sentLog, received, surface1, surface2) -> do
   let scale surface = usingReaderT client . sendMsg surface $ Request_wl_surface_set_buffer_scale 2
