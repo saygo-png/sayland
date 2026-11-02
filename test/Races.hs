@@ -47,7 +47,9 @@ tests =
         [ raceTest "a client that finished keeps its result when the compositor hangs up at the same time" successful finishedClientKeepsResult
         , raceTest "closing the compositor closes the connection of a client it is accepting" successful serverCloseClosesAccepted
         , raceTest "sending to a client that disconnects fails with Disconnected" successful sendToDisconnected
-        , -- Too many steps to explore systematically, so it tries random interleavings, the same ones on each run.
+        , raceTest "the event loop reads events that need no reply while another thread holds the write lock" successful readWhileWriteLockHeld
+        , -- Systematic exploration finds this deadlock too, but takes over half an hour, so it tries random interleavings,
+          -- the same ones on each run.
           raceTestWith (randomInterleavings 1000 defaultRaceSettings) "full socket buffers in both directions do not deadlock the connection" successful fullBuffersDoNotDeadlock
         , raceTest "clients connecting at once get their own connections, which are dropped when they leave" successful clientsConnectAtOnce
         ]
@@ -332,6 +334,23 @@ sendToDisconnected = scenario setup $ \(s, compositor, compositorRegistry) -> do
       s <- session logs
       compositor <- compositorEnv s
       (s,compositor,) <$> compositorSide s s.registry
+
+-- | Handling a message takes the write lock to send what its handler gives. A thread can hold the lock while the event
+-- loop handles an event that needs no reply, as here, where the client holds it while it waits for the compositor to
+-- report a malformed request. If the loop takes the lock even when there is nothing to send, it waits for that thread,
+-- and never reads what the thread waits for.
+--
+-- The `roundtrip` is in the explored part, so the loop can still be handling its @wl_callback.done@ when the client
+-- takes the lock.
+readWhileWriteLockHeld :: Scenario ()
+readWhileWriteLockHeld = scenario session $ \s -> do
+  let ClientEnv conn = s.client
+  asClient s roundtrip
+  takeMVar conn.writeLock
+  -- wl_display.sync, with the null object for its callback.
+  sendRaw conn.connectionSocket (toObjectID s.display.wlid) 0 (putWlUInt 0)
+  expectProtocolError s Err_invalid_method
+  putMVar conn.writeLock ()
 
 -- | The event loop sends some requests itself, like @xdg_wm_base.pong@. Sending blocks while the socket's buffer is full,
 -- so the loop can block on a pong while a client thread holds the write lock, blocked on a request the compositor does

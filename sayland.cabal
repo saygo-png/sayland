@@ -158,6 +158,7 @@ test-suite sayland-tests
     Integration
     RaceTest
     Races
+    Systematic
     TestPrelude
     Utils
 

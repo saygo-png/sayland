@@ -24,8 +24,15 @@ A race test is a scenario: a setup, run once, then a concurrent part whose inter
 preemptions and with relaxed memory for `IORef`s. A test fails if any interleaving breaks what it checks, so *a failing
 race test is a race it found*. Each one's comment says what the race is.
 
-The failure shows the interleaving: how it ended, the order the threads ran in, and the Wayland messages each thread
-sent and received in it, like `WAYLAND_DEBUG=1` would. Set `RACE_TRACE=1` to also see every step of every thread.
+The exploration is dejafu's, with one fix, in link:test/Systematic.hs[`test/Systematic.hs`]. dejafu takes every
+transaction to race with every other when it picks which interleavings to try, but uses the `TVar`s they touched when
+it puts threads to sleep. When the two disagree, it can abort an interleaving as one it already covered, and it drops
+the races it found in it, so it never tries the one that matters. The fix keeps them. Without it, dejafu missed three of
+the races here.
+
+The failure shows the interleaving: how it ended, then each run of a thread in it, why the run ended (preempted, blocked,
+...), and what the thread logged during it with `WAYLAND_DEBUG=1`: the messages it sent and received. Set `RACE_TRACE=1`
+to also see every step of every thread.
 Run one test with `cabal run sayland-tests -- -p '<name>'`.
 
 === Keeping up with main
@@ -38,6 +45,9 @@ Prelude, not from `base` or `stm`.
 `getKernel`.
 * `error` in the monad becomes `throwIO`: dejafu can only trace exceptions thrown in its monad.
 * New tests run in `ConcIO`: a test like main's with `runOnce`, a race test with `raceTest`.
+
+When updating dejafu, check whether its `runSCTWithSettings` still drops the backtracking points of aborted
+executions (`schedIgnore`). If it doesn't, `test/Systematic.hs` can go. If its internals changed, update the copy.
 
 == Usage
 

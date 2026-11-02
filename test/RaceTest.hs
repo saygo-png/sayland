@@ -1,8 +1,8 @@
 -- | Description : Tasty tests that explore the interleavings of a scenario with dejafu, and explain the ones that fail.
 --
--- A failing interleaving is replayed with @WAYLAND_DEBUG=1@, so the failure shows the messages sent and received in it
--- and which thread handled each, along with the order the threads ran in. With @RACE_TRACE@ set, it also shows every
--- step each thread took.
+-- A failing interleaving is replayed with @WAYLAND_DEBUG=1@, so the failure shows each run of a thread in it, why the
+-- run ended (preempted, blocked, ...), and the messages the thread sent and received during the run. With @RACE_TRACE@
+-- set, it also shows every step each thread took.
 module RaceTest (
   Scenario,
   scenario,
@@ -19,9 +19,9 @@ import Data.List qualified as List
 import Data.List.NonEmpty qualified as NE
 import Sayland.Kernel (KernelConfig (..))
 import System.Random (mkStdGen)
+import Systematic (runSCTWithSettings)
 import Test.DejaFu (ProPredicate (..), Result (..), Settings, lsimplify, set, systematically, withSetup)
 import Test.DejaFu.Conc (Scheduler (..), runConcurrent, showCondition)
-import Test.DejaFu.SCT (runSCTWithSettings)
 import Test.DejaFu.Settings (MemType, defaultBounds, defaultMemType, fromWayAndMemType, ldiscard, lmemtype, lway, randomly)
 import Test.DejaFu.Settings qualified as Settings
 import Test.DejaFu.Types (Condition, Decision (..), Id (..), Lookahead (..), ThreadAction (..), ThreadId (..), Trace, initialThread)
@@ -59,6 +59,7 @@ scenario :: (Logs -> ConcIO x) -> (x -> ConcIO a) -> Scenario a
 scenario = Scenario
 
 -- | Systematic exploration, bounded by preemptions and fairness as dejafu does by default, under total store order.
+-- It runs with "Systematic"'s fix, so it does not lose races to sleep sets.
 -- Failing traces are simplified, so the explanation shows as few preemptions as dejafu can find.
 defaultRaceSettings :: Settings IO a
 defaultRaceSettings = set lsimplify True $ fromWayAndMemType (systematically defaultBounds) defaultMemType
@@ -97,7 +98,8 @@ instance IsTest RaceTest where
           <> [explanation]
           <> ["(" <> show (length more) <> " more failing interleavings not shown)" | not (null more)]
 
--- | Explain a failing interleaving: how it ended, the order the threads ran in, and the messages it logs.
+-- | Explain a failing interleaving: how it ended, and each run of a thread in it, with the messages it sent, received
+-- and logged, and why the run ended.
 explain :: (Show b) => MemType -> Scenario a -> (Either Condition b, Trace) -> IO String
 explain memtype (Scenario setup act) (outcome, interleaving) = do
   started <- IO.newIORef False
@@ -108,23 +110,19 @@ explain memtype (Scenario setup act) (outcome, interleaving) = do
           { configure = \config -> config{environment = config.environment <> [("WAYLAND_DEBUG", "1")], stderr = sink}
           , mainStarts = liftIO $ IO.writeIORef started True
           }
-  (_, replayed, _) <- runConcurrent replay memtype (Replay (ranThreads interleaving) [] Nothing) $ withSetup (setup logs) (\x -> logs.mainStarts >> act x)
+  (_, replayed, _) <- runConcurrent replay memtype (Replay (ranThreads interleaving) 0 [] Nothing) $ withSetup (setup logs) (\x -> logs.mainStarts >> act x)
   messages <- reverse <$> IO.readIORef written
-  -- The first thread that did IO marked the start.
-  let attributed = zip (drop 1 $ reverse replayed.writers) messages
-      width = List.maximum (0 : (length . threadName . fst <$> attributed))
-      line (thread, message) = "  " <> padRight width (threadName thread) <> "  " <> stripNewline message
+  -- The first step that did IO marked the start, the others each wrote a line.
+  let logLines = zip (drop 1 . reverse $ fst <$> replayed.writers) messages
   everyStep <- isJust <$> lookupEnv "RACE_TRACE"
   pure
     . List.unlines
-    $ ["ended with: " <> either showCondition show outcome, "threads ran: " <> describeRuns interleaving, "messages:"]
-    <> (line <$> attributed)
+    $ ["ended with: " <> either showCondition show outcome, "interleaving:"]
+    <> describeRuns interleaving logLines
     <> (if everyStep then "steps:" : (step <$> zip (ranThreads interleaving) interleaving) else [])
     <> foldMap (\how -> ["(the replay of the interleaving went its own way: " <> how <> ")"]) replayed.diverged
   where
-    padRight n text = text <> replicate (n - length text) ' '
     step (thread, (_, _, action)) = "  " <> threadName thread <> ": " <> show action
-    stripNewline = reverse . dropWhile (== '\n') . reverse
 
 -- | The thread that ran each step of a trace.
 ranThreads :: Trace -> [ThreadId]
@@ -139,36 +137,51 @@ ranThreads = go initialThread
               Continue -> previous
          in thread : go thread rest
 
--- | Where a replay is: the threads still to run, in order, the threads that did IO, newest first, and where the replay
--- went its own way, if it did.
-data Replay = Replay {queue :: [ThreadId], writers :: [ThreadId], diverged :: Maybe String}
+-- | Where a replay is: the threads still to run, in order, how many steps ran, the steps that did IO with their thread,
+-- newest first, and where the replay went its own way, if it did.
+data Replay = Replay {queue :: [ThreadId], ran :: Int, writers :: [(Int, ThreadId)], diverged :: Maybe String}
 
--- | Run the threads in the order of a trace, recording which thread did each IO: wrote each log line.
+-- | Run the threads in the order of a trace, recording the steps that did IO: wrote a log line.
 replay :: Scheduler Replay
 replay = Scheduler $ \_ runnable _ r -> case r.queue of
   next : rest -> case List.lookup next (NE.toList runnable) of
-    Just lookahead -> (Just next, r{queue = rest, writers = [next | lookahead == WillLiftIO] <> r.writers})
+    Just lookahead -> (Just next, r{queue = rest, ran = r.ran + 1, writers = [(r.ran, next) | lookahead == WillLiftIO] <> r.writers})
     Nothing ->
       let lost = show (length rest) <> " steps before the end, " <> threadName next <> " cannot run. Runnable: "
        in (Nothing, r{diverged = Just $ lost <> intercalate ", " (threadName . fst <$> NE.toList runnable)})
   [] -> (Nothing, r)
 
--- | The runs of threads in a trace, like @main (12 steps), preempted by client-loop (3 steps)@.
-describeRuns :: Trace -> String
-describeRuns interleaving = intercalate ", " $ describe <$> NE.groupBy ((==) `on` fst) (zip (ranThreads interleaving) interleaving)
+-- | Each run of a thread in a trace, with why it ended, and the lines it logged under it, given with their step:
+--
+-- > -- main runs 45 steps, until server-client-1 preempts it
+-- >      -> wl_display#1.sync { callback: FromClient 4 }
+describeRuns :: Trace -> [(Int, String)] -> [String]
+describeRuns interleaving logLines = concat $ zipWith describe runs (drop 1 (Just <$> runs) <> [Nothing])
   where
-    describe steps@((thread, (decision, _, action)) :| _) =
-      prefix decision <> name thread action <> " (" <> show (length steps) <> plural (length steps) <> ")"
-    prefix :: Decision -> String
-    prefix = \case
-      SwitchTo _ -> "preempted by "
-      _ -> ""
-    name :: ThreadId -> ThreadAction -> String
-    name thread = \case
-      CommitIORef _ _ -> "memory commit"
-      _ -> threadName thread
-    plural :: Int -> String
-    plural n = if n == 1 then " step" else " steps"
+    runs = NE.groupBy ((==) `on` (.thread)) $ List.zipWith3 (\i t (d, _, a) -> Step i t d a) [0 ..] (ranThreads interleaving) interleaving
+    describe steps next =
+      let start = NE.head steps
+          count = length steps
+          inRun = [stripLevel line | (n, line) <- logLines, n >= start.index, n <= (NE.last steps).index]
+       in ("  -- " <> name start <> " runs " <> show count <> (if count == 1 then " step" else " steps") <> ending steps next)
+            : (("       " <>) <$> inRun)
+    ending steps = \case
+      Just next | SwitchTo t <- (NE.head next).decision -> ", until " <> threadName t <> " preempts it"
+      _ -> case show (NE.last steps).action of
+        action
+          | "Blocked" `List.isPrefixOf` action -> ", until it blocks"
+          | "Stop" `List.isPrefixOf` action -> ", until it ends"
+          | "Throw" `List.isPrefixOf` action -> ", until it throws"
+          | otherwise -> ""
+    name step = case step.action of
+      CommitIORef _ _ -> "a memory commit"
+      _ -> threadName step.thread
+    -- The messages are at DEBUG level, so only the other levels are worth showing.
+    stripLevel line = let bare = stripNewline line in maybe bare (dropWhile (== ' ')) $ List.stripPrefix "DEBUG" bare
+    stripNewline = reverse . dropWhile (== '\n') . reverse
+
+-- | A step of a trace: its index, the thread that took it, how it was scheduled and what it did.
+data Step = Step {index :: Int, thread :: ThreadId, decision :: Decision, action :: ThreadAction}
 
 -- | The name a thread was forked with, or its number.
 threadName :: ThreadId -> String
