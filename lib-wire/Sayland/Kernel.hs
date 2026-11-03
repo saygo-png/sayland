@@ -48,6 +48,7 @@ module Sayland.Kernel (
   fdSize,
   fdInode,
   pwrite,
+  dup,
   closeFd,
   openFds,
 
@@ -456,6 +457,10 @@ pwrite kernel fd offset bytes =
 -- | The number of the file a descriptor refers to, which no other file has. Like the inode @fstat@ gives.
 fdInode :: Kernel -> Fd -> ConcIO Int
 fdInode kernel fd = syscall $ fmap (.fileNumber) <$> lookupFd kernel "fstat" fd
+
+-- | Another file descriptor for the same file, like @dup@.
+dup :: Kernel -> Fd -> ConcIO Fd
+dup kernel fd = syscall $ lookupFd kernel "dup" fd >>= traverse (install kernel)
 
 -- | Close a file descriptor. The file stays as long as another descriptor or a mapping refers to it.
 closeFd :: Kernel -> Fd -> ConcIO ()

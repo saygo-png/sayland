@@ -6,7 +6,7 @@ import Data.Set qualified as Set
 import Data.Traversable (for)
 import Sayland
 import Sayland.Internal.Core (TObjectID (..))
-import Sayland.Kernel (Kernel, KernelConfig, newKernel)
+import Sayland.Kernel (Kernel, KernelConfig, connect, newKernel, socket)
 import TestPrelude
 import Utils
 
@@ -38,8 +38,19 @@ listeningWith change config protocols = do
 -- | Connect a client to the compositor, as `waylandSetup` finds it, and run its event loop in a thread named
 -- @client-loop@. Gets the registry and waits for its globals.
 connecting :: Kernel -> ServerEnv -> ProtocolTable -> ConcIO Session
-connecting kernel compositor protocols = do
-  client@(ClientEnv conn) <- waylandSetup kernel protocols
+connecting = connectingWith id
+
+-- | `connecting`, with a change to the logger the client's connection logs to. A connection keeps the logger it was
+-- made with: its writer thread logs the messages it sends to it.
+connectingWith :: (Logger -> Logger) -> Kernel -> ServerEnv -> ProtocolTable -> ConcIO Session
+connectingWith change kernel compositor protocols = do
+  path <- getSocketPath kernel (openSocketName kernel) >>= maybe (failTest "no compositor socket") pure
+  sock <- socket kernel
+  connect sock path
+  eventHandlers <- newIORef mempty
+  logger <- change <$> defaultLogger kernel Client
+  conn <- newConnectionEnv sock (Map.fromList protocols) eventHandlers Reject logger
+  let client = ClientEnv conn
   clientLoopEnded <- newEmptyMVar
   callbacksDone <- watchCallbacks conn
   void . forkFinallyN "client-loop" (runReaderT (clientLoop conn.connectionSocket) client) $ either (void . tryPutMVar clientLoopEnded) pure

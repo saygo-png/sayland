@@ -13,6 +13,7 @@ module Races (tests) where
 import Control.Exception (ErrorCall (..), IOException)
 import Control.Monad.Catch (throwM, try)
 import Data.ByteString qualified as BS
+import Data.List (isInfixOf)
 import Data.Map qualified as Map
 import Data.Typeable (cast)
 import Foreign (plusPtr)
@@ -47,9 +48,8 @@ tests =
         [ raceTest "a client that finished keeps its result when the compositor hangs up at the same time" successful finishedClientKeepsResult
         , raceTest "closing the compositor closes the connection of a client it is accepting" successful serverCloseClosesAccepted
         , raceTest "sending to a client that disconnects fails with Disconnected" successful sendToDisconnected
-        , raceTest "the event loop reads events that need no reply while another thread holds the write lock" successful readWhileWriteLockHeld
-        , -- Systematic exploration finds this deadlock too, but takes over half an hour, so it tries random interleavings,
-          -- the same ones on each run.
+        , -- Too many interleavings to explore systematically: finding the deadlock this checks for took over half an
+          -- hour. It tries random interleavings instead, the same ones on each run.
           raceTestWith (randomInterleavings 1000 defaultRaceSettings) "full socket buffers in both directions do not deadlock the connection" successful fullBuffersDoNotDeadlock
         , raceTest "clients connecting at once get their own connections, which are dropped when they leave" successful clientsConnectAtOnce
         ]
@@ -144,8 +144,8 @@ compositorIDsInOrder = scenario setup $ \(s, compositor, device) -> do
       compositor <- compositorEnv s
       (s,compositor,) <$> compositorSide s device
 
--- | Each request carries its fd in the same send, under the write lock, so the compositor matches them up whatever
--- the order the requests go in.
+-- | Each request is queued with its fd, and the writer thread sends the two together, so the compositor matches them
+-- up whatever the order the requests go in.
 fdsArriveWithRequests :: Scenario ()
 fdsArriveWithRequests = scenario setup $ \(s, shm, small, big) -> do
   let pool size fd = asClient s . newObject shm $ \i -> Request_wl_shm_create_pool i fd size
@@ -244,27 +244,27 @@ eventHandlersKept = scenario session $ \s -> do
   concurrently add [("user-2", add)]
   before >>=@?== count + 2
 
--- | `sendOutbox` logs each message under the write lock, as it sends it. So with @WAYLAND_DEBUG@ on, two threads
--- sending at once log their messages in the order they go over the wire in.
+-- | The writer thread, the only thread that sends, logs each message as it sends it. So with @WAYLAND_DEBUG@ on, two
+-- threads sending at once log their messages in the order they go over the wire in.
 logInWireOrder :: Scenario ()
 logInWireOrder = scenario setup $ \(s, client, sentLog, received, surface1, surface2) -> do
   let scale surface = usingReaderT client . sendMsg surface $ Request_wl_surface_set_buffer_scale 2
   concurrently (scale surface1) [("user-2", scale surface2)]
   settle s
-  inLog <- reverse <$> readTVarIO sentLog
+  inLog <- filter ("set_buffer_scale" `isInfixOf`) . reverse <$> readTVarIO sentLog
   wire <- reverse <$> readTVarIO received
   -- A logged message reads like @wl_surface#5.set_buffer_scale { scale: 2 }@.
   let objectIn line = takeWhile (/= '.') . drop 1 $ dropWhile (/= '#') line
   (objectIn <$> inLog) @?== (show . fromAnyObjectID <$> wire)
   where
     setup logs = do
-      s <- session logs
       sent <- newTVarIO []
       received <- newTVarIO []
       -- The client's log, as WAYLAND_DEBUG=client shows it.
-      let ClientEnv conn = s.client
-          logger = Logger{minLevel = LogDebug, write = \_ _ _ -> pass, writeMessage = \_ _ text -> atomically $ modifyTVar' sent (text :)}
-          recordScale oid = \case
+      let logger = Logger{minLevel = LogDebug, write = \_ _ _ -> pass, writeMessage = \_ _ text -> atomically $ modifyTVar' sent (text :)}
+      (kernel, compositor) <- listening (logged logs defaultKernelConfig) table
+      s <- connectingWith (const logger) kernel compositor table
+      let recordScale oid = \case
             Request_wl_surface_set_buffer_scale _ -> atomically $ modifyTVar' received (oid :)
             _ -> pass
       atomicModifyIORef' s.compositor.eventHandlers $ \handlers -> (EventHandler recordScale : handlers, ())
@@ -272,7 +272,7 @@ logInWireOrder = scenario setup $ \(s, client, sentLog, received, surface1, surf
         wl_compositor <- bindToInterface @Wl_compositor s.registry
         (,) <$> newObject wl_compositor Request_wl_compositor_create_surface <*> newObject wl_compositor Request_wl_compositor_create_surface
       settle s
-      pure (s, ClientEnv conn{logger}, sent, received, surface1, surface2)
+      pure (s, s.client, sent, received, surface1, surface2)
 
 -- }}}
 
@@ -335,27 +335,10 @@ sendToDisconnected = scenario setup $ \(s, compositor, compositorRegistry) -> do
       compositor <- compositorEnv s
       (s,compositor,) <$> compositorSide s s.registry
 
--- | Handling a message takes the write lock to send what its handler gives. A thread can hold the lock while the event
--- loop handles an event that needs no reply, as here, where the client holds it while it waits for the compositor to
--- report a malformed request. If the loop takes the lock even when there is nothing to send, it waits for that thread,
--- and never reads what the thread waits for.
---
--- The `roundtrip` is in the explored part, so the loop can still be handling its @wl_callback.done@ when the client
--- takes the lock.
-readWhileWriteLockHeld :: Scenario ()
-readWhileWriteLockHeld = scenario session $ \s -> do
-  let ClientEnv conn = s.client
-  asClient s roundtrip
-  takeMVar conn.writeLock
-  -- wl_display.sync, with the null object for its callback.
-  sendRaw conn.connectionSocket (toObjectID s.display.wlid) 0 (putWlUInt 0)
-  expectProtocolError s Err_invalid_method
-  putMVar conn.writeLock ()
-
--- | The event loop sends some requests itself, like @xdg_wm_base.pong@. Sending blocks while the socket's buffer is full,
--- so the loop can block on a pong while a client thread holds the write lock, blocked on a request the compositor does
--- not read, as the compositor's thread is blocked sending an event the client does not read. Each side waits on the
--- other. libwayland never blocks on a full buffer: it queues what it sends and flushes later.
+-- | The event loop sends some requests itself, like @xdg_wm_base.pong@. Sending blocks while the socket's buffer is full.
+-- If the loop wrote the pong itself, it could wait for room while the compositor waits for the client to read the
+-- events it is blocked sending: each side would wait on the other. The loop only queues the pong, and the writer
+-- thread alone waits on the socket, so the loop keeps reading.
 --
 -- Here the buffers hold one message, so a few messages fill them. A real kernel's hold hundreds of kilobytes, which
 -- takes a flood of events and requests at once to fill.

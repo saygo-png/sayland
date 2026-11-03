@@ -15,10 +15,11 @@ import Prelude
 
 -- | Send one message to an object, along with any file descriptors the `WirePut` puts.
 sendRaw :: Socket -> AnyObjectID -> Word16 -> WirePut () -> ConcIO ()
-sendRaw sock oid opcode put = send sock msg fds
-  where
-    (body, fds) = runWirePut put
-    msg = encodeMessage oid opcode body
+sendRaw sock oid opcode put = uncurry (sendEncoded sock oid opcode) (runWirePut put)
+
+-- | Send one message to an object, given its encoded arguments and the file descriptors to send along with them.
+sendEncoded :: Socket -> AnyObjectID -> Word16 -> BS.ByteString -> [Fd] -> ConcIO ()
+sendEncoded sock oid opcode body = send sock (encodeMessage oid opcode body)
 
 -- | Receive some bytes, and any file descriptors sent along with them.
 -- At most 8 bytes, like main's @recvMsg sock 8 4096@.

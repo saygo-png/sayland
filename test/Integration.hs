@@ -11,8 +11,8 @@ import Data.ByteString qualified as BS
 import Data.Map qualified as Map
 import Harness
 import Sayland
-import Sayland.Internal.Core (TObjectID (..), getConnectionEnv, sendMessage)
-import Sayland.Kernel (Kernel, ShutdownCmd (ShutdownBoth), close, defaultKernelConfig, memfd, newKernel, peekBytes, pwrite, setFdSize, shutdown)
+import Sayland.Internal.Core (TObjectID (..), closeConnection, getConnectionEnv, queueRawMessage, sendMessage)
+import Sayland.Kernel (Kernel, ShutdownCmd (ShutdownBoth), defaultKernelConfig, memfd, newKernel, peekBytes, pwrite, setFdSize, shutdown)
 import Test.Tasty
 import Test.Tasty.HUnit
 import TestPrelude
@@ -110,12 +110,9 @@ reportsViolation = withSession $ \s -> do
 -- | A message the compositor cannot decode ends the connection with a @wl_display.error@.
 reportsMalformed :: ConcIO ()
 reportsMalformed = withSession $ \s -> do
-  ClientEnv env <- ask
   -- wl_display.sync, with the null object for its callback.
-  takeMVar env.writeLock
-  liftConc $ sendRaw env.connectionSocket (toObjectID s.display.wlid) 0 (putWlUInt 0)
+  queueRawMessage (toObjectID s.display.wlid) 0 (putWlUInt 0)
   liftConc $ expectProtocolError s Err_invalid_method
-  putMVar env.writeLock ()
 
 -- | Like libwayland, the compositor ends the connection when a new ID skips the next one the client may use.
 rejectsSkippedID :: ConcIO ()
@@ -450,7 +447,7 @@ withSession test = withCompositor $ \kernel path compositor -> do
   ClientEnv client <- waylandConnect kernel table path
   clientLoopEnded <- newEmptyMVar
   callbacksDone <- watchCallbacks client
-  bracket (forkClientLoop client clientLoopEnded) (\t -> killThread t >> close client.connectionSocket) $ \_ ->
+  bracket (forkClientLoop client clientLoopEnded) (\t -> killThread t >> closeConnection client) $ \_ ->
     usingReaderT (ClientEnv client) $ do
       display <- getWlDisplay
       registry <- newObject display Request_wl_display_get_registry
