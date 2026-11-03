@@ -10,10 +10,10 @@ import Data.ByteString qualified as BS
 import Data.Map qualified as Map
 import Foreign (castPtr, peekArray)
 import GHC.IO.Handle (hFlush)
-import Network.Socket (ShutdownCmd (ShutdownBoth), close, shutdown)
+import Network.Socket (ShutdownCmd (ShutdownBoth), shutdown)
 import Relude hiding (hFlush)
 import Sayland
-import Sayland.Internal.Core (TObjectID (..), getConnectionEnv, sendMessage)
+import Sayland.Internal.Core (TObjectID (..), closeConnection, getConnectionEnv, queueRawMessage, sendMessage)
 import System.Directory (createDirectory, getTemporaryDirectory, removeDirectoryRecursive)
 import System.Posix (ShmOpenFlags (..), fdToHandle, ownerReadMode, ownerWriteMode, setFdSize, shmOpen, shmUnlink, unionFileModes)
 import System.Random (randomIO)
@@ -117,12 +117,9 @@ reportsViolation = withSession $ \s -> do
 -- | A message the compositor cannot decode ends the connection with a @wl_display.error@.
 reportsMalformed :: Assertion
 reportsMalformed = withSession $ \s -> do
-  ClientEnv env <- ask
   -- wl_display.sync, with the null object for its callback.
-  takeMVar env.writeLock
-  liftIO $ sendRaw env.connectionSocket (toObjectID s.display.wlid) 0 (putWlUInt 0)
+  queueRawMessage (toObjectID s.display.wlid) 0 (putWlUInt 0)
   liftIO $ expectProtocolError s Err_invalid_method
-  putMVar env.writeLock ()
 
 -- | Like libwayland, the compositor ends the connection when a new ID skips the next one the client may use.
 rejectsSkippedID :: Assertion
@@ -468,7 +465,7 @@ withSession :: (Session -> Wayland Client ()) -> Assertion
 withSession test = withCompositor $ \path compositor -> do
   ClientEnv client <- waylandConnect table path
   clientLoopEnded <- newEmptyMVar
-  bracket (forkClientLoop client clientLoopEnded) (\t -> killThread t >> close client.connectionSocket) $ \_ ->
+  bracket (forkClientLoop client clientLoopEnded) (\t -> killThread t >> closeConnection client) $ \_ ->
     usingReaderT (ClientEnv client) $ do
       display <- getWlDisplay
       registry <- newObject display Request_wl_display_get_registry

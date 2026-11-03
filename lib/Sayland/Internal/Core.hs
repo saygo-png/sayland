@@ -7,7 +7,7 @@
 -- | Description : Internals of Sayland.Core.
 module Sayland.Internal.Core (module Sayland.Internal.Core) where
 
-import Control.Concurrent.STM
+import Control.Concurrent (forkIO)
 import Control.Exception hiding (throwIO)
 import Control.Monad
 import Control.Monad.Reader
@@ -21,11 +21,12 @@ import Data.Kind
 import Data.Map (Map)
 import Data.Typeable
 import GHC.Records (HasField)
-import Network.Socket (Socket)
+import Network.Socket (Socket, close)
 import Sayland.Internal.Log
 import Sayland.Internal.Prelude
 import Sayland.Wire
 import System.IO.Error (isResourceVanishedError)
+import System.Posix.IO (closeFd, dup)
 
 -- | Type representing an `objectID` of a certain object.
 newtype TObjectID (a :: Type) = TObjectID AnyObjectID deriving newtype (Show, Eq, Ord)
@@ -151,6 +152,29 @@ newtype Outbox = Outbox [Queued]
 data Queued where
   Queued :: (Message m) => AnyObjectID -> m -> Queued
 
+-- | A message encoded for the wire, waiting in the send queue for the writer thread.
+data Encoded = Encoded
+  { target :: AnyObjectID
+  , opcode :: Word16
+  , body :: BS.ByteString
+  , fds :: [Fd]
+  -- ^ Duplicates of the message's file descriptors, so the sender can close its own once the message is queued.
+  -- The writer thread closes them once they are sent.
+  , shown :: String
+  -- ^ The message as the debug log shows it.
+  }
+
+-- | Whether the writer thread of a connection takes messages.
+data Sending
+  = -- | Nothing was queued yet, so there is no writer thread yet. Queuing the first message starts it.
+    Idle
+  | -- | It sends what is queued.
+    Open
+  | -- | It sends what is queued, then stops. Nothing more can be queued.
+    Closing
+  | -- | It stopped: the connection was closed, or a send failed. Nothing more can be queued.
+    Stopped
+
 -- | Existential type for holding different objects in one structure.
 data SomeObject where
   SomeObject :: (Object i) => i -> SomeObject
@@ -248,8 +272,10 @@ type role ConnectionEnv nominal
 data ConnectionEnv (p :: Perspective) = ConnectionEnv
   { connectionSocket :: Socket
   -- ^ The socket of this connection.
-  , writeLock :: MVar ()
-  -- ^ write lock used to avoid race conditions.
+  , sendQueue :: TQueue Encoded
+  -- ^ Messages waiting for the connection's writer thread, the only thread that writes to the socket. See `sendOutbox`.
+  , sending :: TVar Sending
+  -- ^ Whether the writer thread takes messages.
   , counter :: MVar (Maybe (ObjectID p))
   -- ^ The next `ObjectID` this side allocates. `Nothing` once its range is used up.
   , nextPeerID :: IORef Word32
@@ -451,17 +477,88 @@ onClient k =
 sendMessage :: (Message m) => m -> TObjectID i -> Wayland p ()
 sendMessage e o = sendOutbox $ outgoingMessage e o
 
--- | Send the messages of an t'Outbox' in order. Done under a write lock so messages do not mangle.
--- Each is logged as it is sent, so the log shows them in the order they go over the wire.
+-- | Queue the messages of an t'Outbox' for the connection's writer thread, which sends them in order.
+-- They are queued in one transaction, so no other thread's messages go in between them.
+--
+-- Throws `Disconnected` if the connection is closing, or a send failed because the peer hung up.
 sendOutbox :: Outbox -> Wayland p ()
-sendOutbox (Outbox []) = pass
-sendOutbox (Outbox messages) = do
+sendOutbox (Outbox messages) =
+  queueEncoded =<< liftIO (traverse (\(Queued o m) -> queueable o (getOpcode m) (putMessage m) (showMessage o m)) messages)
+
+-- | Queue bytes for an object without checking they make a message, for tests that send malformed ones.
+queueRawMessage :: AnyObjectID -> Word16 -> WirePut () -> Wayland p ()
+queueRawMessage o opcode putArgs =
+  queueEncoded . pure =<< liftIO (queueable o opcode putArgs ("raw message, opcode " <> show opcode <> " to " <> show o))
+
+-- | Encode a message for the send queue, duplicating its file descriptors.
+queueable :: AnyObjectID -> Word16 -> WirePut () -> String -> IO Encoded
+queueable target opcode putArgs shown = do
+  let (body, sent) = runWirePut putArgs
+  fds <- traverse dup sent
+  pure Encoded{target, opcode, body, fds, shown}
+
+-- | Queue encoded messages, unless the writer thread no longer takes them. The first messages start it.
+queueEncoded :: [Encoded] -> Wayland p ()
+queueEncoded [] = pass
+queueEncoded messages = do
   env <- getConnectionEnv
   (logger, client) <- getLogger
-  liftIO . withMVar env.writeLock $ \_ ->
-    for_ messages $ \(Queued o m) -> do
-      when (LogDebug >= logger.minLevel) . logger.writeMessage Sent client $ showMessage o m
-      peerGone $ sendRaw env.connectionSocket o (getOpcode m) (putMessage m)
+  let queue = for_ messages (writeTQueue env.sendQueue)
+  -- Masked, so the thread that queues the first messages starts the writer thread before anything can kill it.
+  liftIO $ mask $ \restore ->
+    join . atomically $
+      readTVar env.sending >>= \case
+        Idle -> do
+          writeTVar env.sending Open
+          queue
+          pure . void . forkIO . restore $ writeLoop logger client env
+        Open -> pass <$ queue
+        _ -> pure $ for_ messages discard >> throwIO Disconnected
+
+-- | Close the duplicated file descriptors of a message that was sent, or will not be.
+discard :: Encoded -> IO ()
+discard message = for_ message.fds closeFd
+
+-- | The writer thread of a connection, the only thread that writes to its socket. It sends what is queued, in order,
+-- logging each message as it goes out, so the log shows them in the order they go over the wire. It stops once the
+-- connection is closing and nothing is left to send, or when a send fails.
+writeLoop :: Logger -> Maybe ClientID -> ConnectionEnv p -> IO ()
+writeLoop logger client env = do
+  next <-
+    atomically $
+      (Just <$> readTQueue env.sendQueue) `orElse` do
+        readTVar env.sending >>= \case
+          Closing -> writeTVar env.sending Stopped $> Nothing
+          _ -> retry
+  for_ next $ \message -> do
+    sent <- try . (`finally` discard message) $ do
+      when (LogDebug >= logger.minLevel) . logger.writeMessage Sent client $ message.shown
+      peerGone $ sendEncoded env.connectionSocket message.target message.opcode message.body message.fds
+    case sent of
+      Right () -> writeLoop logger client env
+      Left (e :: SomeException) -> do
+        -- What was queued after the message that failed will not be sent either.
+        unsent <- atomically $ writeTVar env.sending Stopped >> flushTQueue env.sendQueue
+        for_ unsent discard
+        case fromException e of
+          Just Disconnected -> pass
+          _ -> logWith logger LogError client $ "sending failed: " <> displayException e
+
+-- | Close a connection: stop taking messages, wait for the writer thread to send what is queued, then close the socket.
+-- Threads sending afterwards get `Disconnected`. Closing a connection again does nothing.
+closeConnection :: ConnectionEnv p -> IO ()
+closeConnection env = do
+  atomically . modifyTVar' env.sending $ \case
+    Idle -> Stopped
+    Open -> Closing
+    other -> other
+
+  atomically $
+    readTVar env.sending >>= \case
+      Stopped -> pass
+      _ -> retry
+
+  close env.connectionSocket
 
 -- | Report the socket errors that mean the peer hung up (@EPIPE@, @ECONNRESET@) as `Disconnected`.
 peerGone :: IO a -> IO a

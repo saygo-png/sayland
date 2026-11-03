@@ -4,7 +4,7 @@
 module Sayland.Connection (module Sayland.Connection) where
 
 import Control.Concurrent (forkFinally, killThread, myThreadId, threadDelay, throwTo)
-import Control.Exception (AsyncException (ThreadKilled), bracket, displayException, finally, fromException)
+import Control.Exception (AsyncException (ThreadKilled), IOException, bracket, catch, displayException, finally, fromException)
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Reader
@@ -47,8 +47,8 @@ handleIncomingClient env socket' = do
     . liftIO
     . forkFinally (runReaderT (serveClient $ clientLoop socket') (ClientServerEnv env clientenv serial'))
     $ \ended -> do
-      close socket'
       atomically . modifyTVar env.clients $ Map.delete serial'
+      closeConnection clientenv
       case ended of
         Left e | Just Disconnected <- fromException e -> logClient LogDebug "disconnected"
         Left e -> logClient LogError $ "disconnected: " <> displayException e
@@ -151,8 +151,10 @@ untilDisconnected =
     e -> throwIO e
 
 -- | Close a client's connection to the compositor.
+-- This is smart in that it stops messages from being enqueued, and waits till the existing ones are sent
+-- before fully closing.
 waylandClose :: WaylandEnv Client -> IO ()
-waylandClose (ClientEnv conn) = close conn.connectionSocket
+waylandClose (ClientEnv conn) = closeConnection conn
 
 -- }}}
 
@@ -190,9 +192,13 @@ waylandListen protocolTable socketPath = do
   pure ServerEnv{interfaceTable = Map.fromList protocolTable, onRecoverable = Reject, ..}
 
 -- | Close a server's connections to its clients and its socket, and remove the socket's file.
+-- What was queued for the clients is dropped: shutting the sockets down first stops a writer thread waiting on a
+-- client that does not read.
 waylandServerClose :: ServerEnv -> IO ()
 waylandServerClose env = do
-  readTVarIO env.clients >>= mapM_ (close . (.connectionSocket))
+  clients <- readTVarIO env.clients
+  forM_ clients $ \conn -> shutdown conn.connectionSocket ShutdownBoth `catch` \(_ :: IOException) -> pass
+  forM_ clients closeConnection
   close env.listenSocket
   removeLink env.socketPath
 
@@ -204,11 +210,13 @@ waylandConnect protocolTable path = do
   eventHandlers <- newIORef mempty
   ClientEnv <$> (newConnectionEnv sock (Map.fromList protocolTable) eventHandlers Reject =<< defaultLogger Client)
 
--- | The create the initial state of a new connection.
+-- | Create the initial state of a new connection. Its writer thread (see `writeLoop`) starts once it first sends, and
+-- stops once the connection is closed with `closeConnection`.
 newConnectionEnv ::
   forall p. (KnownPerspective p) => Socket -> Map.Map WlText InterfaceEntry -> IORef [EventHandler p] -> OnRecoverable -> Logger -> IO (ConnectionEnv p)
 newConnectionEnv connectionSocket interfaceTable eventHandlers onRecoverable logger = do
-  writeLock <- newMVar ()
+  sendQueue <- atomically newTQueue
+  sending <- newTVarIO Idle
   counter <- newMVar (Just firstObjectID)
   nextPeerID <- newIORef $ case toAnyObjectID (firstObjectID @p) of
     FromClient _ -> 0xff000000 -- This is a client, the first ID a server allocates.

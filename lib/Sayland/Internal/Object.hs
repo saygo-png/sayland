@@ -25,7 +25,8 @@ data ObjectIDsExhausted = ObjectIDsExhausted
   deriving anyclass (Exception)
 
 -- | Allocate an `ObjectID` and send the message creating the object with it, Done as one step using a lock.
--- libwayland ends the connection of a peer whose new IDs arrive out of order, so allocating and sending must not interleave.
+-- libwayland ends the connection of a peer whose new IDs arrive out of order, so allocating and queuing the message must
+-- not interleave. The writer thread sends messages in the order they were queued.
 --
 -- If the message is rejected before it is sent (an t'InvalidMessage'), the ID is given back. A gap would make the next ID out of order.
 withNewObjectID :: (IDRange p) => (ObjectID p -> Wayland p a) -> Wayland p a
