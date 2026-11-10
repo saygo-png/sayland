@@ -49,6 +49,7 @@
         hooks.custom-treefmt = {
           enable = true;
           entry = "treefmt";
+          excludes = ["cabal.nix"];
           package = self.formatter.${system};
         };
       };
@@ -60,16 +61,17 @@
       ghcPackages = pkgs.haskell.packages.ghc912;
     in {
       default = pkgs.mkShell {
-        shellHook = ''
-          ${self.checks.${system}.pre-commit-check.shellHook}
-        '';
+        inputsFrom = [self.packages.${system}.sayland.env];
+        buildInputs = [pkgs.zlib];
         packages = [
           self.formatter.${system}
-          pkgs.zlib
           pkgs.cabal-install # Uses pkgs as Cabal don't care about ghc and its cached in nixpkgs.
           ghcPackages.ghc
           ghcPackages.haskell-language-server
         ];
+        shellHook = ''
+          ${self.checks.${system}.pre-commit-check.shellHook}
+        '';
       };
 
       # Minimum for building docs. For CI.

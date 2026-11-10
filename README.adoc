@@ -43,6 +43,10 @@ Run tests using `cabal test`.
 To run a single test use `cabal run sayland-tests -- -p <test-name>`.
 To see other test options use `cabal run sayland-tests -- --help`
 
+Whenever changing the Cabal file you must regenerate `cabal.nix`.
+This is a tradeoff for not doing IFD.
+You can do so with `nix run nixpkgs#cabal2nix -- . > cabal.nix`
+
 To generate docs use `cabal run genHaddocks -- [output directory]` (default `docs-html`). +
 This program builds both libraries into one site with `cabal haddock-project`, fixes links between them,
 and removes bogus warnings related to https://github.com/haskell/haddock/issues/1071.
