@@ -64,7 +64,7 @@ tests =
         "Data devices"
         [ raceTest "two client threads setting the selection at once do not hang" successful setSelectionAtOnce
         , raceTest "a second drag started at once fails instead of hanging" successful startDragAtOnce
-        , raceTest "a data source is destroyed once when cancelled while the client destroys it" successful cancelledSourceDestroyedOnce
+        , raceTest "a handed-over data source is destroyed once, by sayland, when cancelled" successful cancelledSourceDestroyedOnce
         ]
     , testGroup
         "Outputs"
@@ -383,16 +383,17 @@ clientsConnectAtOnce = scenario setup $ \(kernel, compositor) -> do
 
 -- Surfaces and buffers {{{
 
--- | The compositor completes a frame callback with @wl_callback.done@, whose handler puts into the callback's 'MVar'.
--- A compositor can only check the callback is still there before it sends, so two compositor threads completing
--- the callbacks of a surface (say, the frame clocks of two outputs it is on) can both send @done@, and the second
--- blocks forever on the full 'MVar'.
+-- | Two compositor threads can complete the frame callbacks of a surface at once, say the frame clocks of two outputs
+-- it is on. They take the callbacks with `takeFrameCallbacks`, in one transaction, so each callback goes to one of
+-- them, gets one @wl_callback.done@, and neither blocks.
 frameCallbackCompletedTwice :: Scenario ()
 frameCallbackCompletedTwice = scenario setup $ \(compositor, compositorSurface) -> do
+  sent <- newTVarIO (0 :: Int)
   let complete = flip runReaderT compositor $ do
-        callbacks <- (.sCallbacks) <$> readTVarIO compositorSurface.state
-        for_ callbacks $ getInterface >=> traverse_ (\callback -> sendMsg callback $ Event_wl_callback_done 0)
+        callbacks <- atomically $ takeFrameCallbacks compositorSurface
+        for_ callbacks $ getInterface >=> traverse_ (\callback -> sendMsg callback (Event_wl_callback_done 0) >> atomically (modifyTVar' sent (+ 1)))
   concurrently complete [("compositor-2", complete)]
+  readTVarIO sent >>=@?== 1
   where
     setup logs = do
       s <- session logs
@@ -547,18 +548,23 @@ startDragAtOnce = scenario withDataDevice $ \(s, device, source1, source2, surfa
           Right () -> pass
   concurrently (drag source1 1) [("user-2", drag source2 2)]
 
--- | On @wl_data_source.cancelled@ the event loop destroys the source. A client thread destroying it at the same time
--- sends a second destroy for an object the compositor already dropped, which libwayland's compositors end the
--- connection for (sayland's ignores it, with a warning).
+-- | Once the client hands a data source over with @set_selection@, sayland owns it: the event loop destroys it on
+-- @wl_data_source.cancelled@, and the client's own destroy is rejected whenever it comes, so it is never sent. A second
+-- destroy would be for an object the compositor already dropped, which libwayland's compositors end the connection for
+-- (sayland's ignores it, with a warning).
 cancelledSourceDestroyedOnce :: Scenario ()
 cancelledSourceDestroyedOnce = scenario setup $ \(s, compositor, source, compositorSource, warnings) -> do
-  concurrently
-    (asClient s $ sendMsg source Request_wl_data_source_destroy)
-    [("compositor", runReaderT (sendMsg compositorSource Event_wl_data_source_cancelled) compositor)]
+  rejected <- newTVarIO False
+  let destroy =
+        try (asClient s $ sendMsg source Request_wl_data_source_destroy) >>= \case
+          Left (_ :: InvalidMessage) -> atomically $ writeTVar rejected True
+          Right () -> pass
+  concurrently destroy [("compositor", runReaderT (sendMsg compositorSource Event_wl_data_source_cancelled) compositor)]
   -- The first settle waits for the event loop to handle the cancel, which comes before its done. The second for the
   -- compositor to handle the destroy the event loop sent then.
   settle s
   settle s
+  readTVarIO rejected >>=@?== True
   readTVarIO warnings >>=@?== []
   where
     setup logs = do
@@ -573,8 +579,12 @@ cancelledSourceDestroyedOnce = scenario setup $ \(s, compositor, source, composi
       (kernel, compositor) <- listeningWith (\c -> c{serverLogger = recordWarnings c.serverLogger}) (logged logs defaultKernelConfig) table
       s <- connecting kernel compositor table
       source <- asClient s $ do
+        seat <- bindToInterface @Wl_seat s.registry
         manager <- bindToInterface @Wl_data_device_manager s.registry
-        newObject manager Request_wl_data_device_manager_create_data_source
+        device <- newObject manager $ \i -> Request_wl_data_device_manager_get_data_device i seat.wlid
+        source <- newObject manager Request_wl_data_device_manager_create_data_source
+        sendMsg device $ Request_wl_data_device_set_selection (Just source.wlid) 1
+        pure source
       settle s
       env <- compositorEnv s
       (s,env,source,,warnings) <$> compositorSide s source

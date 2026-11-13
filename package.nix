@@ -1,10 +1,6 @@
 {niceHaskell, ...}:
-niceHaskell.mkPackage {
-  flags = niceHaskell.mkFlags {
-    doCheck = false;
-    doHaddock = false;
-  };
-  packageRoot = ./.;
-  cabalName = "sayland";
+niceHaskell.mkPackageNoIFD {
+  src = ./.;
+  cabal2nix = ./cabal.nix;
   compiler = "ghc912";
 }
