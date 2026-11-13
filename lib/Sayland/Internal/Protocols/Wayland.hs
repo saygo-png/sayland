@@ -175,7 +175,7 @@ newtype Wl_display = Wl_display {wlid :: TObjectID Wl_display}
 
 newtype Wl_registry = Wl_registry {wlid :: TObjectID Wl_registry}
 
-data Wl_callback = Wl_callback {wlid :: TObjectID Wl_callback, done :: MVar ()}
+data Wl_callback = Wl_callback {wlid :: TObjectID Wl_callback, done :: TVar Bool}
 
 newtype Wl_compositor = Wl_compositor {wlid :: TObjectID Wl_compositor}
 
@@ -239,6 +239,8 @@ data Wl_data_source = Wl_data_source
   , sourceActions :: IORef Enum_wl_data_device_manager_dnd_action
   , sourceSelectedAction :: IORef Enum_wl_data_device_manager_dnd_action
   , sourceTargetMimetype :: IORef (Maybe Mimetype)
+  , ownedByCompositor :: TVar Bool
+  -- ^ Whether the client handed the source to the compositor.
   }
 
 -- | Builder for an empty t'Enum_wl_data_device_manager_dnd_action'.
@@ -428,12 +430,13 @@ checkPeerIDOrder msg oid = do
       . wlTextLossy
       $ "new object ID " <> T.show n <> " skips ahead of the next one the peer may use"
 
--- | Remove an object from the objects map.
+-- | Remove an object from the objects map, for the message that destroys it.
 -- On a server this also runs @delete_id@ and puts resulting message in an t`Outbox`.
-dropObject :: TObjectID a -> Wayland p Outbox
-dropObject (TObjectID i) = do
+dropObject :: (Message m) => m -> TObjectID a -> Wayland p Outbox
+dropObject msg oid@(TObjectID i) = do
   env <- getConnectionEnv
-  atomically . modifyTVar' env.objects $ Map.delete i
+  removed <- atomically . stateTVar env.objects $ \objects -> (Map.member i objects, Map.delete i objects)
+  unless removed $ protocolViolation Unrecoverable msg oid Err_invalid_object [wl|object already destroyed|]
   onServer . pure $ outgoingMessage (Event_wl_display_delete_id $ fromAnyObjectID i) wlDisplayId
 
 -- | `forwardMessage` followed by `dropObject`, the results put in an t`Outbox`.
@@ -441,7 +444,7 @@ dropObject (TObjectID i) = do
 forwardAndDrop :: (Interface i, Message m) => i -> m -> Wayland p Outbox
 forwardAndDrop obj msg = do
   forwarded <- forwardMessage obj msg
-  dropped <- dropObject obj.wlid
+  dropped <- dropObject msg obj.wlid
   pure $ forwarded <> dropped
 
 -- | @mmap@ a shm pool's fd, read/write and shared.
@@ -507,6 +510,10 @@ lastCommittedStack surface = do
   let latestUpdate = Seq.reverse allUpdates & asum
   fromMaybe current latestUpdate & pure
 
+-- | Take the frame callbacks of a surface's state.
+takeFrameCallbacks :: Wl_surface -> STM [TObjectID Wl_callback]
+takeFrameCallbacks surface = stateTVar surface.state $ \s -> (s.sCallbacks, s{sCallbacks = []})
+
 -- | Apply a committed content update to the current state of its surface, then the sync content updates it depends on.
 -- All in one transaction, so the surface and its subsurfaces change together.
 applyContentUpdate :: ConnectionEnv p -> Wl_surface -> ContentUpdate -> STM ()
@@ -547,7 +554,7 @@ instance Object Wl_display where
     onClient err
     forwardMessage obj msg
   onRequest obj msg@(Request_wl_display_sync callbackId) = do
-    callbackObj <- Wl_callback callbackId <$> newEmptyMVar
+    callbackObj <- Wl_callback callbackId <$> newTVarIO False
     registerObject msg callbackObj
     done <- onServer . emitMsg callbackObj $ Event_wl_callback_done 0
     forwarded <- forwardMessage obj msg
@@ -567,8 +574,9 @@ instance Object Wl_display where
 -- Wl_callback {{{
 instance Object Wl_callback where
   onEvent obj msg@(Event_wl_callback_done _) = do
-    putMVar obj.done ()
-    forwardAndDrop obj msg
+    dropped <- dropObject msg obj.wlid
+    atomically $ writeTVar obj.done True
+    (<> dropped) <$> forwardMessage obj msg
   onRequest _ = \case {}
 
 -- }}}
@@ -741,11 +749,34 @@ instance Object Wl_data_offer where
 -- }}}
 
 -- Wl_data_source {{{
+
+-- | Hand a data source over to sayland, which destroys it once the compositor is done with it.
+handSourceOver :: Maybe (TObjectID Wl_data_source) -> Wayland Client ()
+handSourceOver = traverse_ $ getInterface >=> traverse_ (\source -> atomically $ writeTVar source.ownedByCompositor True)
+
+-- | Destroy a source the client handed over, now that the compositor is done with it (the given event). Sayland owns
+-- it, so this is the source's only destroy.
+destroyHandedOver :: (Message m) => m -> Wl_data_source -> Wayland Client Outbox
+destroyHandedOver msg source = do
+  handed <- readTVarIO source.ownedByCompositor
+  if handed
+    then (outgoingMessage Request_wl_data_source_destroy source.wlid <>) <$> dropObject msg source.wlid
+    else pure mempty
+
 instance Object Wl_data_source where
   onRequest source msg@(Request_wl_data_source_offer mimetype) = do
     atomicModifyIORef' source.sourceOfferedMimetypes $ \ms -> (mimetype : ms, ())
     forwardMessage source msg
-  onRequest source msg@Request_wl_data_source_destroy =
+  onRequest source msg@Request_wl_data_source_destroy = do
+    onClient $ do
+      handed <- readTVarIO source.ownedByCompositor
+      when handed $
+        protocolViolation
+          Unrecoverable
+          msg
+          source.wlid
+          Enum_wl_data_source_error_invalid_source
+          [wl|the source was handed over with set_selection or start_drag: sayland destroys it once it is cancelled|]
     forwardAndDrop source msg
   onRequest source msg@(Request_wl_data_source_set_actions dnd_actions) = do
     atomicWriteIORef source.sourceActions dnd_actions
@@ -759,13 +790,13 @@ instance Object Wl_data_source where
     forwardMessage source msg
   onEvent source msg@Event_wl_data_source_cancelled = do
     forwarded <- forwardMessage source msg
-    destroy <- onClient $ emitMsg source Request_wl_data_source_destroy
+    destroy <- onClient $ destroyHandedOver msg source
     pure $ forwarded <> destroy
   onEvent source msg@Event_wl_data_source_dnd_drop_performed =
     forwardMessage source msg
   onEvent source msg@Event_wl_data_source_dnd_finished = do
     forwarded <- forwardMessage source msg
-    destroy <- onClient $ emitMsg source Request_wl_data_source_destroy
+    destroy <- onClient $ destroyHandedOver msg source
     pure $ forwarded <> destroy
   onEvent source msg@(Event_wl_data_source_action action) = do
     atomicWriteIORef source.sourceSelectedAction action
@@ -781,6 +812,7 @@ instance Object Wl_data_device where
       isEmpty <- liftIO $ isEmptyMVar device.dnd
       unless isEmpty $ error "tried starting drag while during one"
       putMVar device.dnd dnd
+      handSourceOver source
     onServer $ do
       tryTakeMVar_ device.dnd
       maybe (pure Nothing) getInterface icon >>= \case
@@ -796,6 +828,7 @@ instance Object Wl_data_device where
   onRequest device msg@(Request_wl_data_device_set_selection source eventSerial) = do
     tryTakeMVar_ device.selection
     putMVar device.selection Selection{source, eventSerial}
+    onClient $ handSourceOver source
     forwardMessage device msg
   onRequest device msg@Request_wl_data_device_release =
     forwardAndDrop device msg
@@ -836,6 +869,7 @@ instance Object Wl_data_device_manager where
     sourceActions <- newIORef noDndAction
     sourceSelectedAction <- newIORef noDndAction
     sourceTargetMimetype <- newIORef Nothing
+    ownedByCompositor <- newTVarIO False
     registerObject msg Wl_data_source{wlid = sourceId, ..}
     forwardMessage mgr msg
   onRequest mgr msg@(Request_wl_data_device_manager_get_data_device deviceId seat) = do
@@ -878,7 +912,7 @@ instance Object Wl_surface where
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuDamage = Rectangle{position = (x, y), size = (w, h)} : s.cuDamage}, ())
     forwardMessage surface msg
   onRequest surface msg@(Request_wl_surface_frame cb) = do
-    done <- newEmptyMVar
+    done <- newTVarIO False
     registerObject msg Wl_callback{wlid = cb, done}
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuFrameCallbacks = cb : s.cuFrameCallbacks}, ())
     forwardMessage surface msg
@@ -901,7 +935,7 @@ instance Object Wl_surface where
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuOffset = Just (x, y)}, ())
     forwardMessage surface msg
   onRequest surface msg@(Request_wl_surface_get_release release) = do
-    done <- newEmptyMVar
+    done <- newTVarIO False
     registerObject msg Wl_callback{wlid = release, done}
     atomicModifyIORef' surface.pendingState $ \s -> (s{cuBufferRelease = Just release}, ())
     forwardMessage surface msg
@@ -1158,7 +1192,7 @@ instance Object Wl_fixes where
     forwardAndDrop fixes msg
   onRequest fixes msg@(Request_wl_fixes_destroy_registry registry) = do
     forwarded <- forwardMessage fixes msg
-    dropped <- dropObject registry -- registry, not fixes is dropped so `forwardAndDrop can't be used.
+    dropped <- dropObject msg registry -- registry, not fixes is dropped so `forwardAndDrop can't be used.
     pure $ forwarded <> dropped
 
   onEvent _ = \case {}
@@ -1170,7 +1204,9 @@ instance Object Wl_fixes where
 -- | Wait until the compositor has handled every request sent before this, like libwayland's @wl_display_roundtrip@.
 -- The event loop must be running in another thread, as it delivers the reply.
 roundtrip :: Wayland Client ()
-roundtrip = newObject (Wl_display wlDisplayId) Request_wl_display_sync >>= takeMVar . (.done)
+roundtrip = do
+  callback <- newObject (Wl_display wlDisplayId) Request_wl_display_sync
+  atomically $ readTVar callback.done >>= check
 
 -- | Bind the first advertised global of an interface. Throws t'MissingGlobal' if the global isn't advertised.
 -- **This function does not check if all global announcements have arrived**! You probably want to use `roundtrip` beforehand.
