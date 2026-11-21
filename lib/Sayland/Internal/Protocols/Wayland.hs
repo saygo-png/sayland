@@ -313,21 +313,21 @@ data SubsurfaceStack = SubsurfaceStack
 -- | The committed state of a t'Wl_surface'. Updated by every commit that is applied, which a compositor can
 -- react to from an t'EventHandler' for @wl_surface.commit@, as those run after the state is updated.
 data SurfaceState = SurfaceState
-  { sBuffer :: Maybe (TObjectID Wl_buffer)
-  , sBufferOffset :: (Int, Int)
+  { sBuffer :: !(Maybe (TObjectID Wl_buffer))
+  , sBufferOffset :: !(Int, Int)
   -- ^ Where the last applied commit put the buffer, relative to the previous buffer.
-  , sDamage :: [Rectangle]
+  , sDamage :: ![Rectangle]
   -- ^ The damage of the last applied commit, in surface coordinates.
-  , sDamageBuffer :: [Rectangle]
+  , sDamageBuffer :: ![Rectangle]
   -- ^ The damage of the last applied commit, in buffer coordinates.
-  , sCallbacks :: [TObjectID Wl_callback]
+  , sCallbacks :: ![TObjectID Wl_callback]
   -- ^ Frame callbacks that were committed and are not done yet.
-  , sOpaqueRegion :: Maybe (TObjectID Wl_region)
-  , sInputRegion :: Maybe (TObjectID Wl_region)
-  , sBufferScale :: Int
-  , sBufferTransform :: Enum_wl_output_transform
-  , sSubsurfaces :: SubsurfaceStack
-  , sBufferRelease :: Maybe (TObjectID Wl_callback)
+  , sOpaqueRegion :: !(Maybe (TObjectID Wl_region))
+  , sInputRegion :: !(Maybe (TObjectID Wl_region))
+  , sBufferScale :: !Int
+  , sBufferTransform :: !Enum_wl_output_transform
+  , sSubsurfaces :: !SubsurfaceStack
+  , sBufferRelease :: !(Maybe (TObjectID Wl_callback))
   -- ^ The release callback of `sBuffer`, from @wl_surface.get_release@.
   }
 
@@ -520,7 +520,9 @@ applyContentUpdate :: ConnectionEnv p -> Wl_surface -> ContentUpdate -> STM ()
 applyContentUpdate env surface cu = do
   objects <- readTVar env.objects
   -- A frame callback is dropped once it is done, so the ones still in the object map are not done yet.
-  let notDone = filter (\cb -> Map.member (toObjectID cb) objects)
+  let notDone cbs =
+        let kept = filter (\cb -> Map.member (toObjectID cb) objects) cbs
+         in length kept `seq` kept -- TODO: We shouldn't be using a List for this.
   modifyTVar' surface.state $ \s ->
     s
       { sBuffer = fromMaybe s.sBuffer cu.cuBuffer
